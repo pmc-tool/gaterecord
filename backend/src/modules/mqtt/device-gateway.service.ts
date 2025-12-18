@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MqttService } from './mqtt.service';
@@ -8,6 +8,7 @@ import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { AccessEvent, AccessMethod, AccessResult, AccessSubjectType } from '@database/entities/access-event.entity';
 import { GatewayService } from '../gateway/gateway.service';
+import { RfidRegistrationService } from '../rfid/rfid-registration.service';
 
 interface DeviceStatusPayload {
   deviceId: string;
@@ -47,6 +48,8 @@ export class DeviceGatewayService implements OnModuleInit {
   constructor(
     private mqttService: MqttService,
     private gatewayService: GatewayService,
+    @Inject(forwardRef(() => RfidRegistrationService))
+    private rfidRegistrationService: RfidRegistrationService,
     @InjectRepository(Gate)
     private gateRepository: Repository<Gate>,
     @InjectRepository(GateControllerEntity)
@@ -154,7 +157,10 @@ export class DeviceGatewayService implements OnModuleInit {
   }
 
   private async handleRfidScan(deviceId: string, payload: RfidEventPayload): Promise<void> {
-    this.logger.log(`RFID scan from ${deviceId}: ${payload.rfidUid} (${payload.type})`);
+    this.logger.log(`=== RFID SCAN RECEIVED ===`);
+    this.logger.log(`Device ID: ${deviceId}`);
+    this.logger.log(`RFID UID: ${payload.rfidUid}`);
+    this.logger.log(`Type: ${payload.type}`);
 
     const gate = await this.gateRepository.findOne({
       where: { hardwareId: deviceId },
@@ -166,14 +172,38 @@ export class DeviceGatewayService implements OnModuleInit {
       return;
     }
 
-    if (payload.type === 'vehicle') {
-      await this.processVehicleRfid(gate, payload.rfidUid);
-    } else {
-      await this.processHumanRfid(gate, payload.rfidUid);
+    this.logger.log(`Gate found: ${gate.id}, Tenant ID: ${gate.tenantId}`);
+
+    // Check if there's an active RFID registration session for this tenant
+    this.logger.log(`Checking for registration session for tenant: ${gate.tenantId}`);
+    const isRegistrationMode = await this.rfidRegistrationService.processRegistrationScan(
+      gate.tenantId,
+      payload.rfidUid,
+      payload.type,
+    );
+
+    if (isRegistrationMode) {
+      // Card was captured for registration, send feedback to device
+      this.logger.log(`RFID ${payload.rfidUid} captured for registration - SUCCESS!`);
+      await this.mqttService.sendDisplayMessage(deviceId, 'Card Registered', 'Success!');
+      await this.mqttService.sendFeedback(deviceId, 'SUCCESS', true);
+      return;
     }
+
+    this.logger.log(`No registration session - proceeding with normal access control`);
+
+    // Normal access control flow - check BOTH vehicles and RFID cards
+    // First try vehicle RFID
+    const vehicleGranted = await this.processVehicleRfid(gate, payload.rfidUid);
+    if (vehicleGranted) {
+      return;
+    }
+
+    // If not a vehicle, try human RFID card
+    await this.processHumanRfid(gate, payload.rfidUid);
   }
 
-  private async processVehicleRfid(gate: Gate, rfidUid: string): Promise<void> {
+  private async processVehicleRfid(gate: Gate, rfidUid: string): Promise<boolean> {
     const vehicle = await this.vehicleRepository.findOne({
       where: {
         tenantId: gate.tenantId,
@@ -184,17 +214,8 @@ export class DeviceGatewayService implements OnModuleInit {
     });
 
     if (!vehicle) {
-      // Access denied - unknown vehicle
-      await this.createAccessEvent(gate, {
-        method: AccessMethod.CAR_RFID,
-        subjectType: AccessSubjectType.UNKNOWN,
-        subjectIdentifier: rfidUid,
-        result: AccessResult.DENIED,
-        denialReason: 'Unknown vehicle RFID',
-      });
-
-      await this.sendAccessDenied(gate, 'Unknown Vehicle');
-      return;
+      // No vehicle found with this RFID - return false to try human RFID
+      return false;
     }
 
     // Check validity
@@ -211,7 +232,7 @@ export class DeviceGatewayService implements OnModuleInit {
       });
 
       await this.sendAccessDenied(gate, 'Not Yet Valid');
-      return;
+      return true; // Vehicle found, handled
     }
 
     if (vehicle.validUntil && vehicle.validUntil < now) {
@@ -226,7 +247,7 @@ export class DeviceGatewayService implements OnModuleInit {
       });
 
       await this.sendAccessDenied(gate, 'Access Expired');
-      return;
+      return true; // Vehicle found, handled
     }
 
     // Access granted!
@@ -244,6 +265,8 @@ export class DeviceGatewayService implements OnModuleInit {
       vehicle.owner.firstName,
       vehicle.licensePlate,
     );
+
+    return true; // Vehicle found, access granted
   }
 
   private async processHumanRfid(gate: Gate, rfidUid: string): Promise<void> {

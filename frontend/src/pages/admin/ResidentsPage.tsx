@@ -13,6 +13,8 @@ import {
   Popconfirm,
   Tooltip,
   Badge,
+  List,
+  Empty,
 } from 'antd';
 import {
   PlusOutlined,
@@ -21,9 +23,19 @@ import {
   ReloadOutlined,
   UserOutlined,
   CarOutlined,
+  CreditCardOutlined,
 } from '@ant-design/icons';
+import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
+
+interface RfidCard {
+  id: string;
+  uid: string;
+  label?: string;
+  status: string;
+  createdAt: string;
+}
 
 interface Resident {
   id: string;
@@ -36,7 +48,7 @@ interface Resident {
   tenantId: string;
   tenant?: { name: string };
   vehicles?: { id: string; licensePlate: string }[];
-  rfidCards?: { id: string; uid: string }[];
+  rfidCards?: RfidCard[];
 }
 
 export default function ResidentsPage() {
@@ -46,6 +58,15 @@ export default function ResidentsPage() {
   const [editingResident, setEditingResident] = useState<Resident | null>(null);
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
   const [form] = Form.useForm();
+
+  // RFID Registration state
+  const [rfidModalVisible, setRfidModalVisible] = useState(false);
+  const [rfidTargetResident, setRfidTargetResident] = useState<Resident | null>(null);
+
+  // RFID Cards list modal state
+  const [cardsModalVisible, setCardsModalVisible] = useState(false);
+  const [selectedResidentForCards, setSelectedResidentForCards] = useState<Resident | null>(null);
+  const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
 
   const fetchResidents = async () => {
     setLoading(true);
@@ -115,6 +136,56 @@ export default function ResidentsPage() {
     }
   };
 
+  // RFID Registration handlers
+  const handleRegisterRfid = (resident: Resident) => {
+    setRfidTargetResident(resident);
+    setRfidModalVisible(true);
+  };
+
+  const handleRfidRegistrationSuccess = (rfidUid: string) => {
+    message.success(`RFID card ${rfidUid} registered successfully!`);
+    setRfidModalVisible(false);
+    setRfidTargetResident(null);
+    fetchResidents();
+  };
+
+  // RFID Cards list handlers
+  const handleViewCards = (resident: Resident) => {
+    setSelectedResidentForCards(resident);
+    setCardsModalVisible(true);
+  };
+
+  const handleDeleteCard = async (cardId: string) => {
+    setDeletingCardId(cardId);
+    try {
+      await api.delete(`/rfid-cards/${cardId}`);
+      message.success('RFID card deleted successfully');
+      // Refresh residents to update the card count
+      await fetchResidents();
+      // Update the selected resident's cards
+      if (selectedResidentForCards) {
+        const updated = residents.find(r => r.id === selectedResidentForCards.id);
+        if (updated) {
+          setSelectedResidentForCards(updated);
+        }
+      }
+    } catch (error) {
+      message.error('Failed to delete RFID card');
+    } finally {
+      setDeletingCardId(null);
+    }
+  };
+
+  // Keep selected resident in sync after fetch
+  useEffect(() => {
+    if (selectedResidentForCards) {
+      const updated = residents.find(r => r.id === selectedResidentForCards.id);
+      if (updated) {
+        setSelectedResidentForCards(updated);
+      }
+    }
+  }, [residents, selectedResidentForCards]);
+
   const columns: ColumnsType<Resident> = [
     {
       title: 'Name',
@@ -164,7 +235,25 @@ export default function ResidentsPage() {
     {
       title: 'Access Cards',
       key: 'accessCards',
-      render: (_, record) => <Badge count={record.rfidCards?.length || 0} showZero />,
+      render: (_, record) => (
+        <Tooltip title="Click to view cards">
+          <Button
+            type="link"
+            size="small"
+            onClick={() => handleViewCards(record)}
+            style={{ padding: 0 }}
+          >
+            <Space>
+              <CreditCardOutlined />
+              <Badge
+                count={record.rfidCards?.length || 0}
+                showZero
+                style={{ backgroundColor: record.rfidCards?.length ? '#52c41a' : '#d9d9d9' }}
+              />
+            </Space>
+          </Button>
+        </Tooltip>
+      ),
     },
     {
       title: 'Status',
@@ -181,6 +270,15 @@ export default function ResidentsPage() {
       key: 'actions',
       render: (_, record) => (
         <Space>
+          <Tooltip title="Register RFID Card">
+            <Button
+              icon={<CreditCardOutlined />}
+              size="small"
+              type="primary"
+              ghost
+              onClick={() => handleRegisterRfid(record)}
+            />
+          </Tooltip>
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEdit(record)} />
           </Tooltip>
@@ -308,6 +406,136 @@ export default function ResidentsPage() {
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* RFID Registration Modal */}
+      <RfidRegistrationModal
+        open={rfidModalVisible}
+        onClose={() => {
+          setRfidModalVisible(false);
+          setRfidTargetResident(null);
+        }}
+        onSuccess={handleRfidRegistrationSuccess}
+        targetType="resident"
+        targetId={rfidTargetResident?.id}
+        targetName={
+          rfidTargetResident
+            ? `${rfidTargetResident.firstName} ${rfidTargetResident.lastName} (Unit ${rfidTargetResident.unit})`
+            : undefined
+        }
+        tenantId={rfidTargetResident?.tenantId}
+      />
+
+      {/* RFID Cards List Modal */}
+      <Modal
+        title={
+          <Space>
+            <CreditCardOutlined />
+            <span>
+              Access Cards - {selectedResidentForCards?.firstName} {selectedResidentForCards?.lastName}
+            </span>
+          </Space>
+        }
+        open={cardsModalVisible}
+        onCancel={() => {
+          setCardsModalVisible(false);
+          setSelectedResidentForCards(null);
+        }}
+        footer={
+          <Space>
+            <Button onClick={() => {
+              setCardsModalVisible(false);
+              setSelectedResidentForCards(null);
+            }}>
+              Close
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                if (selectedResidentForCards) {
+                  setRfidTargetResident(selectedResidentForCards);
+                  setRfidModalVisible(true);
+                }
+              }}
+            >
+              Add New Card
+            </Button>
+          </Space>
+        }
+        width={500}
+      >
+        {selectedResidentForCards?.rfidCards && selectedResidentForCards.rfidCards.length > 0 ? (
+          <List
+            dataSource={selectedResidentForCards.rfidCards}
+            renderItem={(card) => (
+              <List.Item
+                actions={[
+                  <Popconfirm
+                    key="delete"
+                    title="Delete this card?"
+                    description="This action cannot be undone."
+                    onConfirm={() => handleDeleteCard(card.id)}
+                    okText="Delete"
+                    cancelText="Cancel"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Button
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      loading={deletingCardId === card.id}
+                    >
+                      Delete
+                    </Button>
+                  </Popconfirm>
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={
+                    <div className="w-12 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded flex items-center justify-center">
+                      <CreditCardOutlined className="text-white" />
+                    </div>
+                  }
+                  title={
+                    <Space>
+                      <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">
+                        {card.uid}
+                      </code>
+                      <Tag color={card.status === 'active' ? 'success' : 'default'}>
+                        {card.status}
+                      </Tag>
+                    </Space>
+                  }
+                  description={
+                    <span className="text-gray-500 text-xs">
+                      {card.label || 'Access Card'}
+                      {card.createdAt && ` • Added ${new Date(card.createdAt).toLocaleDateString()}`}
+                    </span>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No access cards registered"
+          >
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                if (selectedResidentForCards) {
+                  setRfidTargetResident(selectedResidentForCards);
+                  setRfidModalVisible(true);
+                }
+              }}
+            >
+              Register First Card
+            </Button>
+          </Empty>
+        )}
       </Modal>
     </div>
   );

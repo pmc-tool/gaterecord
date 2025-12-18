@@ -1,13 +1,15 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { User, UserStatus } from '@database/entities/user.entity';
+import { User, UserStatus, UserRole } from '@database/entities/user.entity';
 import { RefreshToken } from '@database/entities/refresh-token.entity';
-import { LoginDto, LoginResponseDto } from './dto/login.dto';
+import { Tenant, TenantStatus } from '@database/entities/tenant.entity';
+import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
+import { LoginDto, LoginResponseDto, SignupDto } from './dto/login.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 
 @Injectable()
@@ -17,6 +19,10 @@ export class AuthService {
     private userRepository: Repository<User>,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
+    @InjectRepository(Tenant)
+    private tenantRepository: Repository<Tenant>,
+    @InjectRepository(SubscriptionPlan)
+    private subscriptionPlanRepository: Repository<SubscriptionPlan>,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
@@ -170,5 +176,99 @@ export class AuthService {
 
   async validatePassword(password: string, hash: string): Promise<boolean> {
     return bcrypt.compare(password, hash);
+  }
+
+  async signup(signupDto: SignupDto, userAgent?: string, ipAddress?: string): Promise<LoginResponseDto> {
+    // Check if email already exists
+    const existingUser = await this.userRepository.findOne({
+      where: { email: signupDto.email.toLowerCase() },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('Email already registered');
+    }
+
+    // Check if building name already exists
+    const existingTenant = await this.tenantRepository.findOne({
+      where: { name: signupDto.buildingName },
+    });
+
+    if (existingTenant) {
+      throw new ConflictException('Building name already registered');
+    }
+
+    // Find subscription plan
+    const plan = await this.subscriptionPlanRepository.findOne({
+      where: { name: signupDto.planName.toLowerCase() },
+    });
+
+    if (!plan) {
+      throw new BadRequestException('Invalid subscription plan');
+    }
+
+    // Generate slug from building name
+    const slug = signupDto.buildingName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+
+    // Create tenant (building)
+    const tenant = this.tenantRepository.create({
+      name: signupDto.buildingName,
+      slug: slug + '-' + Date.now().toString(36),
+      contactEmail: signupDto.email.toLowerCase(),
+      contactPhone: signupDto.phone,
+      address: signupDto.buildingAddress,
+      status: TenantStatus.TRIAL, // Start with trial, payment would make it ACTIVE
+      subscriptionPlanId: plan.id,
+      subscriptionExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14-day trial
+      settings: {
+        paymentInfo: signupDto.paymentInfo,
+        signupDate: new Date().toISOString(),
+      },
+    });
+
+    const savedTenant = await this.tenantRepository.save(tenant);
+
+    // Create user as building admin
+    const passwordHash = await bcrypt.hash(signupDto.password, 10);
+
+    const user = this.userRepository.create({
+      email: signupDto.email.toLowerCase(),
+      passwordHash,
+      firstName: signupDto.firstName,
+      lastName: signupDto.lastName,
+      phone: signupDto.phone,
+      role: UserRole.BUILDING_ADMIN,
+      status: UserStatus.ACTIVE,
+      tenantId: savedTenant.id,
+    });
+
+    const savedUser = await this.userRepository.save(user);
+
+    // Load tenant relation for token generation
+    savedUser.tenant = savedTenant;
+
+    // Generate tokens and auto-login
+    const tokens = await this.generateTokens(savedUser, userAgent, ipAddress);
+
+    return {
+      ...tokens,
+      user: {
+        id: savedUser.id,
+        email: savedUser.email,
+        firstName: savedUser.firstName,
+        lastName: savedUser.lastName,
+        role: savedUser.role,
+        tenantId: savedUser.tenantId,
+      },
+    };
+  }
+
+  async getSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return this.subscriptionPlanRepository.find({
+      where: { isActive: true },
+      order: { maxGates: 'ASC' },
+    });
   }
 }

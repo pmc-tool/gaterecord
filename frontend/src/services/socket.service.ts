@@ -47,7 +47,7 @@ class SocketService {
       return;
     }
 
-    this.socket = io(WS_URL, {
+    this.socket = io(`${WS_URL}/events`, {
       auth: { token },
       transports: ['websocket'],
     });
@@ -62,6 +62,10 @@ class SocketService {
 
     this.socket.on('error', (error) => {
       console.error('WebSocket error:', error);
+    });
+
+    this.socket.on('joined', (data) => {
+      console.log('=== SOCKET: Successfully joined room ===', data);
     });
 
     // Register internal event handlers
@@ -80,6 +84,17 @@ class SocketService {
     this.socket.on('simulator:feedback', (data: SimulatorFeedback) => {
       this.emit('simulator:feedback', data);
     });
+
+    // RFID registration events
+    this.socket.on('rfid:registration-scan', (data: unknown) => {
+      console.log('=== SOCKET: Received rfid:registration-scan ===', data);
+      this.emit('rfid:registration-scan', data);
+    });
+
+    this.socket.on('rfid:registration-error', (data: unknown) => {
+      console.log('=== SOCKET: Received rfid:registration-error ===', data);
+      this.emit('rfid:registration-error', data);
+    });
   }
 
   disconnect(): void {
@@ -96,6 +111,15 @@ class SocketService {
 
   leaveGate(gateId: string): void {
     this.socket?.emit('leave:gate', { gateId });
+  }
+
+  joinTenant(tenantId: string): void {
+    console.log('=== SOCKET: Joining tenant room ===', tenantId, 'connected:', this.socket?.connected);
+    this.socket?.emit('join:tenant', { tenantId });
+  }
+
+  leaveTenant(tenantId: string): void {
+    this.socket?.emit('leave:tenant', { tenantId });
   }
 
   triggerSimulator(gateId: string, event: string, data?: { rfidUid?: string; qrToken?: string }): void {

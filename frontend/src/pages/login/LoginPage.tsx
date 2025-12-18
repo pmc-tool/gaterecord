@@ -1,9 +1,41 @@
-import { useNavigate } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, Alert, Space } from 'antd';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { useNavigate, Link } from 'react-router-dom';
+import { Form, Input, Button, Card, Typography, Alert, Space, Table, Tag } from 'antd';
+import { UserOutlined, LockOutlined, LoginOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
+import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 
 const { Title, Text } = Typography;
+
+const demoCredentials = [
+  {
+    key: '1',
+    role: 'Super Admin',
+    email: 'admin@gatemanagement.com',
+    password: 'Admin123!',
+    color: 'red',
+  },
+  {
+    key: '2',
+    role: 'Building Admin',
+    email: 'admin@building1.com',
+    password: 'Building123!',
+    color: 'blue',
+  },
+  {
+    key: '3',
+    role: 'Security',
+    email: 'security@building1.com',
+    password: 'Security123!',
+    color: 'orange',
+  },
+  {
+    key: '4',
+    role: 'Resident',
+    email: 'john.doe@building1.com',
+    password: 'Resident123!',
+    color: 'green',
+  },
+];
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -19,84 +51,164 @@ export function LoginPage() {
     }
   };
 
+  const handleAutoFill = (email: string, password: string) => {
+    form.setFieldsValue({ email, password });
+  };
+
+  const columns = [
+    {
+      title: 'Role',
+      dataIndex: 'role',
+      key: 'role',
+      render: (role: string, record: typeof demoCredentials[0]) => (
+        <Tag color={record.color}>{role}</Tag>
+      ),
+    },
+    {
+      title: 'Email',
+      dataIndex: 'email',
+      key: 'email',
+      render: (email: string) => (
+        <span className="font-mono text-xs">{email}</span>
+      ),
+    },
+    {
+      title: 'Password',
+      dataIndex: 'password',
+      key: 'password',
+      render: (password: string) => (
+        <span className="font-mono text-xs">{password}</span>
+      ),
+    },
+    {
+      title: '',
+      key: 'action',
+      width: 80,
+      render: (_: unknown, record: typeof demoCredentials[0]) => (
+        <Button
+          type="primary"
+          size="small"
+          icon={<LoginOutlined />}
+          onClick={() => handleAutoFill(record.email, record.password)}
+        >
+          Use
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <Card className="w-full max-w-md shadow-lg">
-        <Space direction="vertical" size="large" className="w-full">
-          <div className="text-center">
-            <Title level={2} className="mb-2">
-              Gate Management
-            </Title>
-            <Text type="secondary">Sign in to your account</Text>
-          </div>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="w-full max-w-4xl flex flex-col lg:flex-row gap-6">
+        {/* Login Form */}
+        <Card className="flex-1 shadow-xl">
+          <Space direction="vertical" size="large" className="w-full">
+            <div className="text-center">
+              <Link to="/" className="inline-flex items-center gap-2 mb-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center">
+                  <ShieldCheckIcon className="w-7 h-7 text-white" />
+                </div>
+              </Link>
+              <Title level={2} className="mb-2">
+                Welcome Back
+              </Title>
+              <Text type="secondary">Sign in to GateRecord</Text>
+            </div>
 
-          {error && (
-            <Alert
-              message="Login Failed"
-              description={error}
-              type="error"
-              showIcon
-              closable
-              onClose={clearError}
-            />
-          )}
-
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={handleSubmit}
-            autoComplete="off"
-          >
-            <Form.Item
-              name="email"
-              rules={[
-                { required: true, message: 'Please enter your email' },
-                { type: 'email', message: 'Please enter a valid email' },
-              ]}
-            >
-              <Input
-                prefix={<UserOutlined />}
-                placeholder="Email"
-                size="large"
+            {error && (
+              <Alert
+                message="Login Failed"
+                description={error}
+                type="error"
+                showIcon
+                closable
+                onClose={clearError}
               />
-            </Form.Item>
+            )}
 
-            <Form.Item
-              name="password"
-              rules={[
-                { required: true, message: 'Please enter your password' },
-                { min: 8, message: 'Password must be at least 8 characters' },
-              ]}
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={handleSubmit}
+              autoComplete="off"
             >
-              <Input.Password
-                prefix={<LockOutlined />}
-                placeholder="Password"
-                size="large"
-              />
-            </Form.Item>
-
-            <Form.Item>
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={isLoading}
-                block
-                size="large"
+              <Form.Item
+                name="email"
+                rules={[
+                  { required: true, message: 'Please enter your email' },
+                  { type: 'email', message: 'Please enter a valid email' },
+                ]}
               >
-                Sign In
-              </Button>
-            </Form.Item>
-          </Form>
+                <Input
+                  prefix={<UserOutlined />}
+                  placeholder="Email"
+                  size="large"
+                />
+              </Form.Item>
 
-          <div className="text-center text-sm text-gray-500">
-            <Text type="secondary">
-              Demo credentials:
+              <Form.Item
+                name="password"
+                rules={[
+                  { required: true, message: 'Please enter your password' },
+                  { min: 8, message: 'Password must be at least 8 characters' },
+                ]}
+              >
+                <Input.Password
+                  prefix={<LockOutlined />}
+                  placeholder="Password"
+                  size="large"
+                />
+              </Form.Item>
+
+              <Form.Item>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  loading={isLoading}
+                  block
+                  size="large"
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 border-none"
+                >
+                  Sign In
+                </Button>
+              </Form.Item>
+            </Form>
+
+            <div className="text-center">
+              <Link to="/" className="text-blue-600 hover:text-blue-700">
+                ← Back to Home
+              </Link>
+            </div>
+          </Space>
+        </Card>
+
+        {/* Demo Credentials Table */}
+        <Card
+          className="flex-1 shadow-xl"
+          title={
+            <div className="flex items-center gap-2">
+              <span className="text-lg">Demo Credentials</span>
+              <Tag color="blue">Click to auto-fill</Tag>
+            </div>
+          }
+        >
+          <Table
+            dataSource={demoCredentials}
+            columns={columns}
+            pagination={false}
+            size="small"
+            rowClassName="cursor-pointer hover:bg-blue-50"
+            onRow={(record) => ({
+              onClick: () => handleAutoFill(record.email, record.password),
+            })}
+          />
+          <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+            <Text type="secondary" className="text-xs">
+              💡 <strong>Tip:</strong> Click any row or the "Use" button to auto-fill credentials
             </Text>
-            <br />
-            <Text code>admin@gatemanagement.com / Admin123!</Text>
           </div>
-        </Space>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

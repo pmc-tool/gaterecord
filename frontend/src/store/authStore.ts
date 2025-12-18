@@ -13,6 +13,7 @@ interface AuthStore {
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   clearError: () => void;
+  setAuth: (user: User, tokens: AuthTokens) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -83,4 +84,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  setAuth: (user: User, tokens: AuthTokens) => {
+    authService.saveTokens(tokens);
+    authService.saveUser(user);
+    set({
+      user,
+      tokens,
+      isAuthenticated: true,
+    });
+  },
 }));

@@ -19,7 +19,9 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   CarOutlined,
+  CreditCardOutlined,
 } from '@ant-design/icons';
+import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
 
@@ -58,6 +60,10 @@ export default function VehiclesPage() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [form] = Form.useForm();
+
+  // RFID Registration state
+  const [rfidModalVisible, setRfidModalVisible] = useState(false);
+  const [rfidTargetVehicle, setRfidTargetVehicle] = useState<Vehicle | null>(null);
 
   const fetchVehicles = async () => {
     setLoading(true);
@@ -123,7 +129,9 @@ export default function VehiclesPage() {
   const handleSubmit = async (values: Record<string, unknown>) => {
     try {
       if (editingVehicle) {
-        await api.patch(`/vehicles/${editingVehicle.id}`, values);
+        // Remove tenantId from update payload
+        const { tenantId, ...updateValues } = values;
+        await api.patch(`/vehicles/${editingVehicle.id}`, updateValues);
         message.success('Vehicle updated successfully');
       } else {
         await api.post('/vehicles', values);
@@ -144,6 +152,19 @@ export default function VehiclesPage() {
       uid += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     form.setFieldValue('rfidUid', uid);
+  };
+
+  // RFID Registration handlers
+  const handleRegisterRfid = (vehicle: Vehicle) => {
+    setRfidTargetVehicle(vehicle);
+    setRfidModalVisible(true);
+  };
+
+  const handleRfidRegistrationSuccess = (rfidUid: string) => {
+    message.success(`RFID card ${rfidUid} registered successfully!`);
+    setRfidModalVisible(false);
+    setRfidTargetVehicle(null);
+    fetchVehicles();
   };
 
   const columns: ColumnsType<Vehicle> = [
@@ -179,8 +200,24 @@ export default function VehiclesPage() {
       title: 'RFID UID',
       dataIndex: 'rfidUid',
       key: 'rfidUid',
-      render: (uid: string) => (
-        <code className="text-xs bg-gray-100 px-2 py-1 rounded">{uid}</code>
+      render: (uid: string, record) => (
+        <Space>
+          {uid ? (
+            <>
+              <code className="text-xs bg-gray-100 px-2 py-1 rounded">{uid}</code>
+              <Tooltip title="Re-register RFID Card">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CreditCardOutlined />}
+                  onClick={() => handleRegisterRfid(record)}
+                />
+              </Tooltip>
+            </>
+          ) : (
+            <Tag color="warning">No Card</Tag>
+          )}
+        </Space>
       ),
     },
     {
@@ -215,6 +252,15 @@ export default function VehiclesPage() {
       key: 'actions',
       render: (_, record) => (
         <Space>
+          <Tooltip title="Register RFID Card">
+            <Button
+              icon={<CreditCardOutlined />}
+              size="small"
+              type="primary"
+              ghost
+              onClick={() => handleRegisterRfid(record)}
+            />
+          </Tooltip>
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEdit(record)} />
           </Tooltip>
@@ -302,19 +348,21 @@ export default function VehiclesPage() {
             />
           </Form.Item>
 
-          <Form.Item
-            name="tenantId"
-            label="Building"
-            rules={[{ required: true, message: 'Please select building' }]}
-          >
-            <Select placeholder="Select building">
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {!editingVehicle && (
+            <Form.Item
+              name="tenantId"
+              label="Building"
+              rules={[{ required: true, message: 'Please select building' }]}
+            >
+              <Select placeholder="Select building">
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="ownerId"
@@ -348,6 +396,24 @@ export default function VehiclesPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* RFID Registration Modal */}
+      <RfidRegistrationModal
+        open={rfidModalVisible}
+        onClose={() => {
+          setRfidModalVisible(false);
+          setRfidTargetVehicle(null);
+        }}
+        onSuccess={handleRfidRegistrationSuccess}
+        targetType="vehicle"
+        targetId={rfidTargetVehicle?.id}
+        targetName={
+          rfidTargetVehicle
+            ? `${rfidTargetVehicle.licensePlate} (${rfidTargetVehicle.owner?.firstName} ${rfidTargetVehicle.owner?.lastName})`
+            : undefined
+        }
+        tenantId={rfidTargetVehicle?.tenantId}
+      />
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
   HistoryOutlined,
   ExperimentOutlined,
   BuildOutlined,
+  UsergroupAddOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
@@ -52,14 +53,21 @@ export function AppLayout() {
       label: 'Dashboard',
     },
     {
+      key: '/visitors',
+      icon: <UsergroupAddOutlined />,
+      label: 'My Visitors',
+    },
+    {
       key: '/gates',
       icon: <GatewayOutlined />,
       label: 'Gates',
+      roles: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY],
     },
     {
       key: '/simulator',
       icon: <ExperimentOutlined />,
       label: 'Gate Simulator',
+      roles: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY],
     },
     {
       key: '/events',

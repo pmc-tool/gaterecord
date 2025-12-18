@@ -1,4 +1,4 @@
-import { Module, Global } from '@nestjs/common';
+import { Module, Global, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MqttService } from './mqtt.service';
 import { DeviceGatewayService } from './device-gateway.service';
@@ -8,6 +8,7 @@ import { Vehicle } from '@database/entities/vehicle.entity';
 import { RfidCard } from '@database/entities/rfid-card.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
 import { GatewayModule } from '../gateway/gateway.module';
+import { RfidModule } from '../rfid/rfid.module';
 
 @Global()
 @Module({
@@ -20,6 +21,7 @@ import { GatewayModule } from '../gateway/gateway.module';
       AccessEvent,
     ]),
     GatewayModule,
+    forwardRef(() => RfidModule),
   ],
   providers: [MqttService, DeviceGatewayService],
   exports: [MqttService, DeviceGatewayService],

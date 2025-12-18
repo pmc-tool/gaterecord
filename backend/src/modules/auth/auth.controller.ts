@@ -1,8 +1,8 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AuthService } from './auth.service';
-import { LoginDto, LoginResponseDto, RefreshTokenDto } from './dto/login.dto';
+import { LoginDto, LoginResponseDto, RefreshTokenDto, SignupDto } from './dto/login.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
@@ -78,5 +78,25 @@ export class AuthController {
           }
         : null,
     };
+  }
+
+  @Post('signup')
+  @Public()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Register new building and admin account' })
+  @ApiResponse({ status: 201, description: 'Signup successful', type: LoginResponseDto })
+  @ApiResponse({ status: 409, description: 'Email or building name already exists' })
+  async signup(@Body() signupDto: SignupDto, @Req() req: Request): Promise<LoginResponseDto> {
+    const userAgent = req.headers['user-agent'];
+    const ipAddress = req.ip;
+    return this.authService.signup(signupDto, userAgent, ipAddress);
+  }
+
+  @Get('plans')
+  @Public()
+  @ApiOperation({ summary: 'Get available subscription plans' })
+  @ApiResponse({ status: 200, description: 'List of subscription plans' })
+  async getPlans() {
+    return this.authService.getSubscriptionPlans();
   }
 }

@@ -64,6 +64,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   broadcastToRoom(room: string, event: string, data: unknown): void {
+    this.logger.log(`=== EventsGateway: Broadcasting to room ${room} ===`);
+    this.logger.log(`Event: ${event}, Data: ${JSON.stringify(data)}`);
     this.server.to(room).emit(event, data);
   }
 

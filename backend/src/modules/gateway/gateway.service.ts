@@ -11,8 +11,10 @@ export class GatewayService {
    * Broadcast a message to all clients in a specific tenant room
    */
   broadcastToTenant(tenantId: string, event: string, data: unknown): void {
-    this.eventsGateway.broadcastToRoom(`tenant:${tenantId}`, event, data);
-    this.logger.debug(`Broadcast to tenant ${tenantId}: ${event}`);
+    const room = `tenant:${tenantId}`;
+    this.logger.log(`=== GatewayService: Broadcasting to room ${room} ===`);
+    this.logger.log(`Event: ${event}`);
+    this.eventsGateway.broadcastToRoom(room, event, data);
   }
 
   /**

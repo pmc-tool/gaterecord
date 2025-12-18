@@ -1,5 +1,5 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsObject } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class LoginDto {
   @ApiProperty({ example: 'user@example.com' })
@@ -37,4 +37,55 @@ export class RefreshTokenDto {
   @IsString()
   @IsNotEmpty()
   refreshToken: string;
+}
+
+export class SignupDto {
+  @ApiProperty({ example: 'John' })
+  @IsString()
+  @IsNotEmpty()
+  firstName: string;
+
+  @ApiProperty({ example: 'Doe' })
+  @IsString()
+  @IsNotEmpty()
+  lastName: string;
+
+  @ApiProperty({ example: 'admin@mybuilding.com' })
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+
+  @ApiProperty({ example: 'Password123!' })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(8)
+  password: string;
+
+  @ApiPropertyOptional({ example: '+1234567890' })
+  @IsString()
+  @IsOptional()
+  phone?: string;
+
+  @ApiProperty({ example: 'Sunrise Apartments' })
+  @IsString()
+  @IsNotEmpty()
+  buildingName: string;
+
+  @ApiPropertyOptional({ example: '123 Main St, City, State 12345' })
+  @IsString()
+  @IsOptional()
+  buildingAddress?: string;
+
+  @ApiProperty({ example: 'starter', description: 'Plan name: starter, professional, or enterprise' })
+  @IsString()
+  @IsNotEmpty()
+  planName: string;
+
+  @ApiPropertyOptional({ description: 'Dummy payment info for now' })
+  @IsObject()
+  @IsOptional()
+  paymentInfo?: {
+    cardLast4?: string;
+    cardBrand?: string;
+  };
 }

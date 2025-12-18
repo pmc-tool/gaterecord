@@ -41,7 +41,21 @@
       "Bash(timeout 20 ~/.platformio/penv/bin/pio device monitor:*)",
       "Bash(timeout 25 ~/.platformio/penv/bin/pio device monitor:*)",
       "Bash(timeout 20 cat:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(stty -f /dev/cu.usbserial-0001 115200 raw -echo echo \"Press RESET on ESP32 and scan card...\" timeout 15 dd if=/dev/cu.usbserial-0001 bs=1 count=2000)",
+      "Bash(npx tsc:*)",
+      "Bash(stty:*)",
+      "Bash(timeout 10 cat:*)",
+      "Bash(timeout 15 cat:*)",
+      "Bash(timeout 25 cat:*)",
+      "Bash(python3:*)",
+      "Bash(timeout 12 cat:*)",
+      "Bash(printf:*)",
+      "Bash(kill:*)",
+      "Bash(env)",
+      "Bash(xargs kill)",
+      "Bash(find:*)"
     ]
   }
 }

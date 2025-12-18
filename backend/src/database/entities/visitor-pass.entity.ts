@@ -23,6 +23,9 @@ export class VisitorPass extends BaseEntity {
   @Column({ name: 'visitor_phone', nullable: true })
   visitorPhone: string;
 
+  @Column({ name: 'visitor_email', nullable: true })
+  visitorEmail: string;
+
   @Column({ nullable: true })
   purpose: string;
 

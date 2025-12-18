@@ -25,11 +25,11 @@
 
 // ==================== CONFIGURATION ====================
 // WiFi Settings
-const char *WIFI_SSID = "Easital Technologies LTD";
-const char *WIFI_PASSWORD = "Easital@2025";
+const char *WIFI_SSID = "Mynul Home_2.4GHz";
+const char *WIFI_PASSWORD = "88889999";
 
 // MQTT Settings
-const char *MQTT_BROKER = "192.168.88.2"; // Your server IP
+const char *MQTT_BROKER = "192.168.0.198"; // Your server IP
 const int MQTT_PORT = 1883;
 const char *MQTT_USER = ""; // Leave empty if no auth
 const char *MQTT_PASSWORD = "";
@@ -44,7 +44,12 @@ const int SERVO_SPEED_DELAY = 15;            // ms between angle steps (lower = 
 const unsigned long AUTO_CLOSE_DELAY = 5000; // Auto-close after 5 seconds
 
 // Ultrasonic sensor threshold (cm)
-const int OBSTACLE_DISTANCE_CM = 30; // Object closer than this = obstacle
+const int OBSTACLE_DISTANCE_CM = 15; // Object closer than this = obstacle (reduced from 30)
+
+// Obstacle detection settings
+const int OBSTACLE_DEBOUNCE_COUNT = 3;  // Need 3 consecutive readings to trigger
+const bool IR_SENSOR_ENABLED = true;    // Set to false if IR sensor not connected
+const bool ULTRASONIC_ENABLED = true;   // Set to false if ultrasonic not connected
 
 // ==================== PIN DEFINITIONS ====================
 // Based on your exact wiring
@@ -60,8 +65,8 @@ const int OBSTACLE_DISTANCE_CM = 30; // Object closer than this = obstacle
 #define RFID_SCK 18
 #define RFID_MISO 19
 #define RFID_MOSI 23
-#define RFID_SS 5
-#define RFID_RST 16
+#define RFID_SS 4
+#define RFID_RST 17
 
 // Servo Motor
 #define SERVO_PIN 14
@@ -110,12 +115,38 @@ const unsigned long RFID_DEBOUNCE = 2000; // Prevent multiple reads
 unsigned long lastUltrasonicRead = 0;
 const unsigned long ULTRASONIC_INTERVAL = 100; // Read every 100ms
 
+// Obstacle debounce counters
+int obstacleDetectedCount = 0;
+int obstacleClearedCount = 0;
+
 // MQTT Topics
 String topicStatus;
 String topicCommand;
 String topicEvent;
 String topicDisplay;
 String topicFeedback;
+
+// ==================== FORWARD DECLARATIONS ====================
+void connectWiFi();
+void connectMQTT();
+void mqttCallback(char *topic, byte *payload, unsigned int length);
+void handleCommand(JsonDocument &doc);
+void handleDisplayMessage(JsonDocument &doc);
+void handleFeedback(JsonDocument &doc);
+void checkRfid();
+void checkObstacleSensors();
+float readUltrasonicDistance();
+void handleGateStateMachine();
+void openGate();
+void closeGate();
+void stopGate();
+void sendHeartbeat();
+void sendRfidEvent(String uid, String type);
+void sendEvent(String eventType);
+void sendStateChange();
+void showDisplay(const char *line1, const char *line2);
+void beep(int count, int duration);
+String getStateString(GateState state);
 
 // ==================== SETUP ====================
 void setup()
@@ -157,12 +188,26 @@ void setup()
   }
 
   // Initialize SPI for RFID
-  SPI.begin(RFID_SCK, RFID_MISO, RFID_MOSI, RFID_SS);
+  SPI.begin(RFID_SCK, RFID_MISO, RFID_MOSI);
+  pinMode(RFID_SS, OUTPUT);
+  digitalWrite(RFID_SS, HIGH);
+  pinMode(RFID_RST, OUTPUT);
+
+  // Hard reset the RFID module
+  Serial.println("Performing RFID hard reset...");
+  digitalWrite(RFID_RST, LOW);
+  delay(100);
+  digitalWrite(RFID_RST, HIGH);
+  delay(100);
+
   rfid.PCD_Init();
   delay(100);
 
   // Check RFID reader
   byte version = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  Serial.print("RFID Version register: 0x");
+  Serial.println(version, HEX);
+
   if (version == 0x00 || version == 0xFF)
   {
     Serial.println("WARNING: RFID reader not detected!");
@@ -171,17 +216,63 @@ void setup()
   }
   else
   {
-    Serial.print("RFID reader initialized, version: 0x");
-    Serial.println(version, HEX);
+    Serial.print("RFID reader detected, version: 0x");
+    Serial.print(version, HEX);
+    if (version == 0x91) Serial.println(" (MFRC522 v1.0)");
+    else if (version == 0x92) Serial.println(" (MFRC522 v2.0)");
+    else if (version == 0x88) Serial.println(" (FM17522 clone)");
+    else if (version == 0xB2) Serial.println(" (FM17522E clone)");
+    else Serial.println(" (Unknown)");
+
+    // Run self-test
+    Serial.println("Running MFRC522 self-test...");
+    bool selfTestPassed = rfid.PCD_PerformSelfTest();
+    Serial.println(selfTestPassed ? "Self-test PASSED" : "Self-test FAILED");
+
+    // Re-init after self-test (self-test leaves chip in weird state)
+    rfid.PCD_Init();
+    delay(50);
+
+    // Enable antenna using library function
+    rfid.PCD_AntennaOn();
+
+    // Check antenna status
+    byte txControl = rfid.PCD_ReadRegister(MFRC522::TxControlReg);
+    Serial.print("TxControl: 0x");
+    Serial.print(txControl, HEX);
+    Serial.println((txControl & 0x03) == 0x03 ? " (Antenna ON)" : " (Antenna OFF)");
+
+    // Set maximum gain
+    rfid.PCD_SetAntennaGain(rfid.RxGain_max);
+    byte gain = rfid.PCD_GetAntennaGain();
+    Serial.print("Antenna gain set to: 0x");
+    Serial.println(gain, HEX);
   }
 
   // Initialize Servo
   ESP32PWM::allocateTimer(0);
   gateServo.setPeriodHertz(50);
   gateServo.attach(SERVO_PIN, 500, 2400);
-  gateServo.write(SERVO_CLOSE_ANGLE);
-  currentServoAngle = SERVO_CLOSE_ANGLE;
   Serial.println("Servo initialized on GPIO" + String(SERVO_PIN));
+
+  // Test servo movement
+  Serial.println("Testing servo...");
+  showDisplay("Servo Test", "Moving...");
+
+  Serial.println("Moving to 0 degrees...");
+  gateServo.write(0);
+  delay(1000);
+
+  Serial.println("Moving to 90 degrees...");
+  gateServo.write(90);
+  delay(1000);
+
+  Serial.println("Moving to 0 degrees...");
+  gateServo.write(0);
+  delay(500);
+
+  Serial.println("Servo test complete");
+  currentServoAngle = SERVO_CLOSE_ANGLE;
 
   // Get device ID from MAC address
   uint8_t mac[6];
@@ -214,8 +305,16 @@ void setup()
   digitalWrite(LED_GREEN_PIN, HIGH);
   beep(2, 100);
 
+  // Show Device ID for configuration
+  showDisplay("Device ID:", DEVICE_ID.c_str());
+  Serial.println("=== Gate Controller Ready ===");
+  Serial.println("*** IMPORTANT: Configure this Device ID in the Gate settings ***");
+  Serial.println("Device ID: " + DEVICE_ID);
+  Serial.println("");
+  delay(5000);  // Show for 5 seconds so user can copy it
+
   showDisplay("Ready", "Scan RFID");
-  Serial.println("=== Gate Controller Ready ===\n");
+  Serial.println("");
   Serial.println("Pin Configuration:");
   Serial.println("  OLED: SDA=" + String(OLED_SDA) + ", SCL=" + String(OLED_SCL));
   Serial.println("  RFID: SS=" + String(RFID_SS) + ", RST=" + String(RFID_RST));
@@ -450,10 +549,33 @@ void checkRfid()
     return;
   }
 
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
+  // Periodic RFID status check (every 10 seconds)
+  static unsigned long lastRfidStatusCheck = 0;
+  if (millis() - lastRfidStatusCheck > 10000)
+  {
+    byte version = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+    byte txControl = rfid.PCD_ReadRegister(MFRC522::TxControlReg);
+    Serial.print("RFID: v=0x");
+    Serial.print(version, HEX);
+    Serial.print(" tx=0x");
+    Serial.print(txControl, HEX);
+    Serial.println((txControl & 0x03) == 0x03 ? " (OK)" : " (Antenna OFF!)");
+    lastRfidStatusCheck = millis();
+  }
+
+  // Check for new card
+  if (!rfid.PICC_IsNewCardPresent())
   {
     return;
   }
+
+  // Try to read the card
+  if (!rfid.PICC_ReadCardSerial())
+  {
+    return;
+  }
+
+  Serial.println("*** Card detected! ***");
 
   // Read UID
   String uid = "";
@@ -483,12 +605,24 @@ void checkRfid()
 // ==================== OBSTACLE SENSORS ====================
 void checkObstacleSensors()
 {
-  // Check IR sensor
-  bool irObstacle = digitalRead(IR_SENSOR_PIN) == LOW; // LOW = obstacle detected
+  // Only check during gate movement (OPENING or CLOSING states)
+  // Skip obstacle checking when gate is stationary to reduce false triggers
+  if (currentState != OPENING && currentState != CLOSING && currentState != OBSTACLE_HOLD)
+  {
+    return;
+  }
 
-  // Check ultrasonic sensor periodically
+  bool irObstacle = false;
   bool ultrasonicObstacle = false;
-  if (millis() - lastUltrasonicRead > ULTRASONIC_INTERVAL)
+
+  // Check IR sensor (only if enabled)
+  if (IR_SENSOR_ENABLED)
+  {
+    irObstacle = digitalRead(IR_SENSOR_PIN) == LOW; // LOW = obstacle detected
+  }
+
+  // Check ultrasonic sensor periodically (only if enabled)
+  if (ULTRASONIC_ENABLED && millis() - lastUltrasonicRead > ULTRASONIC_INTERVAL)
   {
     float distance = readUltrasonicDistance();
     lastUltrasonicRead = millis();
@@ -500,16 +634,38 @@ void checkObstacleSensors()
     }
   }
 
-  // Combined obstacle detection (either sensor)
-  bool obstacle = irObstacle || ultrasonicObstacle;
+  // Combined obstacle detection
+  bool currentReading = irObstacle || ultrasonicObstacle;
 
-  if (obstacle != obstacleDetected)
+  // Debug logging (only print changes or periodically)
+  static unsigned long lastDebugPrint = 0;
+  if (millis() - lastDebugPrint > 2000) // Print every 2 seconds max
   {
-    obstacleDetected = obstacle;
-
-    if (obstacleDetected)
+    if (IR_SENSOR_ENABLED || ULTRASONIC_ENABLED)
     {
-      Serial.println("!!! Obstacle detected !!!");
+      Serial.print("Sensors - IR: ");
+      Serial.print(irObstacle ? "BLOCKED" : "clear");
+      Serial.print(", Ultrasonic: ");
+      Serial.print(ultrasonicObstacle ? "BLOCKED" : "clear");
+      Serial.print(", Count: ");
+      Serial.println(obstacleDetectedCount);
+    }
+    lastDebugPrint = millis();
+  }
+
+  // Debounce logic - require multiple consecutive readings
+  if (currentReading && !obstacleDetected)
+  {
+    // Obstacle detected - increment counter
+    obstacleDetectedCount++;
+    obstacleClearedCount = 0;
+
+    if (obstacleDetectedCount >= OBSTACLE_DEBOUNCE_COUNT)
+    {
+      obstacleDetected = true;
+      obstacleDetectedCount = 0;
+
+      Serial.println("!!! OBSTACLE CONFIRMED (after debounce) !!!");
       sendEvent("OBSTACLE_DETECTED");
 
       if (currentState == CLOSING)
@@ -519,15 +675,37 @@ void checkObstacleSensors()
         beep(3, 100);
       }
     }
-    else
+  }
+  else if (!currentReading && obstacleDetected)
+  {
+    // Obstacle cleared - increment counter
+    obstacleClearedCount++;
+    obstacleDetectedCount = 0;
+
+    if (obstacleClearedCount >= OBSTACLE_DEBOUNCE_COUNT)
     {
-      Serial.println("Obstacle cleared");
+      obstacleDetected = false;
+      obstacleClearedCount = 0;
+
+      Serial.println("Obstacle cleared (after debounce)");
       sendEvent("OBSTACLE_CLEARED");
 
       if (currentState == OBSTACLE_HOLD)
       {
         closeGate(); // Resume closing
       }
+    }
+  }
+  else
+  {
+    // Reset counters if reading matches current state
+    if (currentReading)
+    {
+      obstacleClearedCount = 0;
+    }
+    else
+    {
+      obstacleDetectedCount = 0;
     }
   }
 }

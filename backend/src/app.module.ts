@@ -11,6 +11,8 @@ import { AccessEventsModule } from './modules/access-events/access-events.module
 import { ResidentsModule } from './modules/residents/residents.module';
 import { VehiclesModule } from './modules/vehicles/vehicles.module';
 import { MqttModule } from './modules/mqtt/mqtt.module';
+import { RfidModule } from './modules/rfid/rfid.module';
+import { VisitorPassModule } from './modules/visitor-pass/visitor-pass.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -42,6 +44,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     ResidentsModule,
     VehiclesModule,
     MqttModule,
+    RfidModule,
+    VisitorPassModule,
   ],
   controllers: [],
   providers: [
