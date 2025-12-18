@@ -1,0 +1,75 @@
+import { IsString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export enum SimulatorEvent {
+  CAR_RFID_DETECTED = 'car_rfid_detected',
+  HUMAN_RFID_DETECTED = 'human_rfid_detected',
+  QR_VERIFIED = 'qr_verified',
+  OBSTACLE_DETECTED = 'obstacle_detected',
+  OBSTACLE_CLEARED = 'obstacle_cleared',
+  LIMIT_OPEN_REACHED = 'limit_open_reached',
+  LIMIT_CLOSE_REACHED = 'limit_close_reached',
+  MANUAL_OPEN = 'manual_open',
+  MANUAL_CLOSE = 'manual_close',
+}
+
+export class TriggerEventDto {
+  @ApiProperty({ enum: SimulatorEvent })
+  @IsEnum(SimulatorEvent)
+  event: SimulatorEvent;
+
+  @ApiPropertyOptional({ example: 'ABCD1234' })
+  @IsString()
+  @IsOptional()
+  rfidUid?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  qrToken?: string;
+}
+
+export class SimulatorFeedbackDto {
+  @ApiProperty()
+  gateId: string;
+
+  @ApiProperty()
+  action: string;
+
+  @ApiProperty()
+  success: boolean;
+
+  @ApiProperty()
+  message: string;
+
+  @ApiProperty()
+  gateState: string;
+
+  @ApiPropertyOptional()
+  eventId?: string;
+}
+
+export class SetOnlineDto {
+  @ApiProperty()
+  isOnline: boolean;
+}
+
+export class UpdateSensorDto {
+  @ApiProperty()
+  @IsString()
+  sensorType: string;
+
+  @ApiProperty()
+  @IsString()
+  status: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  value?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  notes?: string;
+}
