@@ -59,6 +59,14 @@ async function seed() {
     features: { simulator_access: true, csv_export: true },
   });
 
+  const starterPlan = await planRepo.save({
+    name: 'Starter',
+    maxGates: 2,
+    maxUsers: 25,
+    logRetentionDays: 14,
+    features: { simulator_access: true },
+  });
+
   const proPlan = await planRepo.save({
     name: 'Professional',
     maxGates: 10,

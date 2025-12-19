@@ -55,7 +55,11 @@
       "Bash(kill:*)",
       "Bash(env)",
       "Bash(xargs kill)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(nc:*)",
+      "Bash(mailpit:*)",
+      "Bash(pkill:*)",
+      "Bash(PGPASSWORD=gate123 psql:*)"
     ]
   }
 }

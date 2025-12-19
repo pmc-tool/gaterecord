@@ -12,6 +12,8 @@ import {
   ExperimentOutlined,
   BuildOutlined,
   UsergroupAddOutlined,
+  DollarOutlined,
+  AlertOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
@@ -55,7 +57,9 @@ export function AppLayout() {
     {
       key: '/visitors',
       icon: <UsergroupAddOutlined />,
-      label: 'My Visitors',
+      label: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user?.role as UserRole)
+        ? 'Visitor Management'
+        : 'My Visitors',
     },
     {
       key: '/gates',
@@ -75,6 +79,12 @@ export function AppLayout() {
       label: 'Access Events',
     },
     {
+      key: '/security-alerts',
+      icon: <AlertOutlined />,
+      label: 'Security Alerts',
+      roles: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY],
+    },
+    {
       key: '/users',
       icon: <TeamOutlined />,
       label: 'Users',
@@ -86,10 +96,22 @@ export function AppLayout() {
       label: 'Admin',
       roles: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN],
       children: [
-        {
-          key: '/admin/tenants',
-          label: 'Buildings',
-        },
+        // Only SUPER_ADMIN can manage all buildings/tenants and see subscriptions
+        ...(user?.role === UserRole.SUPER_ADMIN ? [
+          {
+            key: '/admin/subscriptions',
+            icon: <DollarOutlined />,
+            label: 'Subscriptions',
+          },
+          {
+            key: '/admin/plans',
+            label: 'Plans',
+          },
+          {
+            key: '/admin/tenants',
+            label: 'Buildings',
+          },
+        ] : []),
         {
           key: '/admin/residents',
           label: 'Residents',

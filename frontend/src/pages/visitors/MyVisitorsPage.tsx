@@ -30,10 +30,15 @@ import {
   UserOutlined,
   PhoneOutlined,
   MailOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import api from '../../services/api';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -53,6 +58,24 @@ enum ValidityType {
   CUSTOM = 'custom',
 }
 
+enum RegistrationType {
+  SELF_SERVICE = 'self_service',
+  ON_PREMISE = 'on_premise',
+}
+
+interface Resident {
+  id: string;
+  firstName: string;
+  lastName: string;
+  unit: string;
+}
+
+interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 interface VisitorPass {
   id: string;
   qrToken: string;
@@ -70,6 +93,11 @@ interface VisitorPass {
   createdBy?: { firstName: string; lastName: string };
   tenantId: string;
   createdAt: string;
+  registrationType?: RegistrationType;
+  residentConfirmed?: boolean;
+  confirmationNotes?: string;
+  residentId?: string;
+  resident?: { firstName: string; lastName: string; unit: string };
 }
 
 interface Stats {
@@ -97,6 +125,10 @@ const purposeOptions = [
 ];
 
 export default function MyVisitorsPage() {
+  const { user } = useAuthStore();
+  const isStaff = user?.role && [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user.role);
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+
   const [passes, setPasses] = useState<VisitorPass[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, active: 0, expired: 0, cancelled: 0, used: 0 });
   const [loading, setLoading] = useState(false);
@@ -109,6 +141,11 @@ export default function MyVisitorsPage() {
   const [filters, setFilters] = useState({
     status: undefined as VisitorPassStatus | undefined,
   });
+
+  // For staff on-premise registration
+  const [residents, setResidents] = useState<Resident[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<string | undefined>(undefined);
 
   const fetchPasses = async () => {
     setLoading(true);
@@ -130,20 +167,60 @@ export default function MyVisitorsPage() {
     }
   };
 
+  const fetchTenants = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get('/admin/tenants');
+      setTenants(response.data);
+    } catch (error) {
+      console.error('Failed to fetch tenants');
+    }
+  };
+
+  const fetchResidents = async (tenantId?: string) => {
+    if (!isStaff) return;
+    try {
+      // For super admin, need tenant ID to fetch residents
+      if (isSuperAdmin && !tenantId) {
+        setResidents([]);
+        return;
+      }
+      const url = isSuperAdmin && tenantId ? `/residents?tenantId=${tenantId}` : '/residents';
+      const response = await api.get(url);
+      setResidents(response.data);
+    } catch (error) {
+      console.error('Failed to fetch residents');
+    }
+  };
+
   useEffect(() => {
     fetchPasses();
-  }, []);
+    if (isSuperAdmin) {
+      fetchTenants();
+    } else if (isStaff) {
+      fetchResidents();
+    }
+  }, [isStaff, isSuperAdmin]);
+
+  // When tenant changes, fetch residents for that tenant
+  useEffect(() => {
+    if (isSuperAdmin && selectedTenantId) {
+      fetchResidents(selectedTenantId);
+    }
+  }, [selectedTenantId, isSuperAdmin]);
 
   const handleCreate = () => {
     form.resetFields();
     setValidityType(ValidityType.SINGLE_USE);
+    setSelectedTenantId(undefined);
+    setResidents([]);
     setModalVisible(true);
   };
 
   const handleSubmit = async (values: Record<string, unknown>) => {
     try {
       const customDates = values.customDates as Array<{ toISOString: () => string }> | undefined;
-      const payload = {
+      const payload: Record<string, unknown> = {
         visitorName: values.visitorName,
         visitorPhone: values.visitorPhone,
         visitorEmail: values.visitorEmail,
@@ -156,6 +233,19 @@ export default function MyVisitorsPage() {
         sendEmail: values.sendEmail,
         sendWhatsApp: values.sendWhatsApp,
       };
+
+      // Add on-premise registration fields for staff
+      if (isStaff) {
+        payload.registrationType = values.registrationType || RegistrationType.ON_PREMISE;
+        payload.residentConfirmed = values.residentConfirmed;
+        payload.confirmationNotes = values.confirmationNotes;
+        payload.residentId = values.residentId;
+
+        // Super admin must specify tenant
+        if (isSuperAdmin) {
+          payload.tenantId = values.tenantId;
+        }
+      }
 
       const response = await api.post('/visitor-passes', payload);
       message.success('Visitor pass created successfully');
@@ -283,6 +373,36 @@ export default function MyVisitorsPage() {
       key: 'createdAt',
       render: (date: string) => dayjs(date).format('MMM D, YYYY'),
     },
+    // Show registration info only for staff
+    ...(isStaff ? [{
+      title: 'Registration',
+      key: 'registration',
+      render: (_: unknown, record: VisitorPass) => (
+        <div className="text-xs">
+          <Tag color={record.registrationType === RegistrationType.ON_PREMISE ? 'purple' : 'blue'}>
+            {record.registrationType === RegistrationType.ON_PREMISE ? 'On-Premise' : 'Self-Service'}
+          </Tag>
+          {record.registrationType === RegistrationType.ON_PREMISE && (
+            <div className="mt-1">
+              {record.residentConfirmed ? (
+                <span className="text-green-600">
+                  <CheckCircleOutlined /> Confirmed
+                </span>
+              ) : (
+                <span className="text-orange-500">
+                  <CloseCircleOutlined /> Not Confirmed
+                </span>
+              )}
+            </div>
+          )}
+          {record.resident && (
+            <div className="text-gray-500 mt-1">
+              Host: {record.resident.firstName} {record.resident.lastName}
+            </div>
+          )}
+        </div>
+      ),
+    }] : []),
     {
       title: 'Actions',
       key: 'actions',
@@ -380,14 +500,14 @@ export default function MyVisitorsPage() {
 
       {/* Main Table */}
       <Card
-        title="My Visitor Passes"
+        title={isStaff ? "Visitor Pass Management" : "My Visitor Passes"}
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchPasses}>
               Refresh
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-              Create Visitor Pass
+              {isStaff ? "Register Visitor" : "Create Visitor Pass"}
             </Button>
           </Space>
         }
@@ -423,13 +543,97 @@ export default function MyVisitorsPage() {
 
       {/* Create Visitor Pass Modal */}
       <Modal
-        title="Create Visitor Pass"
+        title={isStaff ? "Register Visitor (On-Premise)" : "Create Visitor Pass"}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
-        width={600}
+        width={650}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
+          {/* On-Premise Registration Section for Staff */}
+          {isStaff && (
+            <div className="bg-purple-50 p-4 rounded-lg mb-4 border border-purple-200">
+              <div className="flex items-center gap-2 mb-3">
+                <SafetyCertificateOutlined className="text-purple-600" />
+                <Text strong>On-Premise Registration</Text>
+              </div>
+
+              {/* Tenant selector for Super Admin */}
+              {isSuperAdmin && (
+                <Form.Item
+                  name="tenantId"
+                  label="Building"
+                  rules={[{ required: true, message: 'Please select a building' }]}
+                >
+                  <Select
+                    placeholder="Select building first"
+                    showSearch
+                    optionFilterProp="children"
+                    filterOption={(input, option) =>
+                      (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase())
+                    }
+                    onChange={(value) => {
+                      setSelectedTenantId(value);
+                      form.setFieldValue('residentId', undefined);
+                    }}
+                  >
+                    {tenants.map((t) => (
+                      <Select.Option key={t.id} value={t.id}>
+                        {t.name}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              )}
+
+              <Form.Item
+                name="residentId"
+                label="Resident Being Visited"
+                rules={[{ required: true, message: 'Please select the resident' }]}
+              >
+                <Select
+                  placeholder={isSuperAdmin && !selectedTenantId ? "Select building first" : "Select resident"}
+                  showSearch
+                  disabled={isSuperAdmin && !selectedTenantId}
+                  optionFilterProp="children"
+                  filterOption={(input, option) =>
+                    (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase())
+                  }
+                >
+                  {residents.map((r) => (
+                    <Select.Option key={r.id} value={r.id}>
+                      {r.firstName} {r.lastName} - Unit {r.unit}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+
+              <Form.Item
+                name="residentConfirmed"
+                valuePropName="checked"
+                className="mb-2"
+              >
+                <Checkbox>
+                  <span className="flex items-center gap-1">
+                    <CheckCircleOutlined className="text-green-600" />
+                    Resident has confirmed this visitor (via call/text)
+                  </span>
+                </Checkbox>
+              </Form.Item>
+
+              <Form.Item name="confirmationNotes" label="Confirmation Notes">
+                <Input.TextArea
+                  placeholder="e.g., Confirmed via phone call at 2:30 PM"
+                  rows={2}
+                />
+              </Form.Item>
+
+              <Form.Item name="registrationType" hidden initialValue={RegistrationType.ON_PREMISE}>
+                <Input />
+              </Form.Item>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <Form.Item
               name="visitorName"

@@ -11,3 +11,4 @@ export * from './visitor-pass.entity';
 export * from './access-event.entity';
 export * from './access-policy.entity';
 export * from './refresh-token.entity';
+export * from './security-alert.entity';

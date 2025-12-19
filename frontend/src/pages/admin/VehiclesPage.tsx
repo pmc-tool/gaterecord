@@ -24,6 +24,8 @@ import {
 import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 interface Vehicle {
   id: string;
@@ -53,6 +55,9 @@ interface Resident {
 }
 
 export default function VehiclesPage() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [residents, setResidents] = useState<Resident[]>([]);
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
@@ -98,8 +103,11 @@ export default function VehiclesPage() {
   useEffect(() => {
     fetchVehicles();
     fetchResidents();
-    fetchTenants();
-  }, []);
+    // Only super admin can fetch tenants list
+    if (isSuperAdmin) {
+      fetchTenants();
+    }
+  }, [isSuperAdmin]);
 
   const handleCreate = () => {
     setEditingVehicle(null);
@@ -230,7 +238,7 @@ export default function VehiclesPage() {
               {record.owner.firstName} {record.owner.lastName}
             </div>
             <div className="text-xs text-gray-500">
-              Unit {record.owner.unit} - {record.tenant?.name}
+              Unit {record.owner.unit}{isSuperAdmin && record.tenant ? ` - ${record.tenant.name}` : ''}
             </div>
           </div>
         ) : (
@@ -348,7 +356,8 @@ export default function VehiclesPage() {
             />
           </Form.Item>
 
-          {!editingVehicle && (
+          {/* Only super admin can select building - building admin's tenant is auto-assigned */}
+          {!editingVehicle && isSuperAdmin && (
             <Form.Item
               name="tenantId"
               label="Building"
@@ -373,7 +382,7 @@ export default function VehiclesPage() {
               {residents.map((resident) => (
                 <Select.Option key={resident.id} value={resident.id}>
                   {resident.firstName} {resident.lastName} - Unit {resident.unit}
-                  {resident.tenant && ` (${resident.tenant.name})`}
+                  {isSuperAdmin && resident.tenant && ` (${resident.tenant.name})`}
                 </Select.Option>
               ))}
             </Select>

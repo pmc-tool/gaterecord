@@ -1,6 +1,6 @@
-import { IsString, IsOptional, IsEnum, IsDateString, IsBoolean, IsNumber, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsDateString, IsBoolean, IsNumber, Min, Max, IsUUID } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { VisitorPassStatus } from '@database/entities/visitor-pass.entity';
+import { VisitorPassStatus, RegistrationType } from '@database/entities/visitor-pass.entity';
 
 export enum ValidityType {
   SINGLE_USE = 'single_use',
@@ -64,6 +64,36 @@ export class CreateVisitorPassDto {
   @IsBoolean()
   @IsOptional()
   sendWhatsApp?: boolean;
+
+  // On-premise registration fields (for admin/security creating passes)
+  @ApiPropertyOptional({ description: 'Tenant ID (required for super admin creating passes)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
+  @ApiPropertyOptional({
+    enum: RegistrationType,
+    description: 'Registration type (self_service for residents, on_premise for staff)',
+    default: RegistrationType.SELF_SERVICE
+  })
+  @IsEnum(RegistrationType)
+  @IsOptional()
+  registrationType?: RegistrationType;
+
+  @ApiPropertyOptional({ description: 'Whether resident confirmed the visitor (for on-premise registration)' })
+  @IsBoolean()
+  @IsOptional()
+  residentConfirmed?: boolean;
+
+  @ApiPropertyOptional({ description: 'Notes about confirmation (e.g., "Confirmed via phone call")' })
+  @IsString()
+  @IsOptional()
+  confirmationNotes?: string;
+
+  @ApiPropertyOptional({ description: 'Resident ID being visited (for on-premise registration)' })
+  @IsUUID()
+  @IsOptional()
+  residentId?: string;
 }
 
 export class UpdateVisitorPassDto {

@@ -15,6 +15,7 @@ import {
   CreateTenantDto,
   UpdateTenantDto,
   CreateSubscriptionPlanDto,
+  UpdateSubscriptionPlanDto,
   TenantResponseDto,
 } from './dto/tenant.dto';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -29,6 +30,22 @@ import { UserRole } from '@database/entities/user.entity';
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
+  // Super Admin Dashboard
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Get super admin dashboard with financial and platform metrics' })
+  @ApiResponse({ status: 200, description: 'Dashboard data including MRR, platform stats, and alerts' })
+  getSuperAdminDashboard() {
+    return this.tenantsService.getSuperAdminDashboard();
+  }
+
+  // Subscription Stats
+  @Get('subscription-stats')
+  @ApiOperation({ summary: 'Get subscription statistics and earnings' })
+  @ApiResponse({ status: 200, description: 'Subscription stats including revenue' })
+  getSubscriptionStats() {
+    return this.tenantsService.getSubscriptionStats();
+  }
+
   // Subscription Plans
   @Post('plans')
   @ApiOperation({ summary: 'Create subscription plan' })
@@ -38,10 +55,34 @@ export class TenantsController {
   }
 
   @Get('plans')
-  @ApiOperation({ summary: 'Get all subscription plans' })
+  @ApiOperation({ summary: 'Get all subscription plans (including inactive)' })
   @ApiResponse({ status: 200, description: 'List of plans' })
   findAllPlans() {
-    return this.tenantsService.findAllPlans();
+    return this.tenantsService.findAllPlans(true); // Include inactive for admin
+  }
+
+  @Get('plans/:id')
+  @ApiOperation({ summary: 'Get subscription plan by ID' })
+  @ApiResponse({ status: 200, description: 'Plan details' })
+  findOnePlan(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantsService.findOnePlan(id);
+  }
+
+  @Patch('plans/:id')
+  @ApiOperation({ summary: 'Update subscription plan' })
+  @ApiResponse({ status: 200, description: 'Plan updated' })
+  updatePlan(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSubscriptionPlanDto,
+  ) {
+    return this.tenantsService.updatePlan(id, dto);
+  }
+
+  @Delete('plans/:id')
+  @ApiOperation({ summary: 'Delete subscription plan' })
+  @ApiResponse({ status: 204, description: 'Plan deleted' })
+  removePlan(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantsService.removePlan(id);
   }
 
   // Tenants

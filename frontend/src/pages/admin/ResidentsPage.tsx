@@ -28,6 +28,8 @@ import {
 import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 interface RfidCard {
   id: string;
@@ -52,6 +54,9 @@ interface Resident {
 }
 
 export default function ResidentsPage() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+
   const [residents, setResidents] = useState<Resident[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -91,8 +96,11 @@ export default function ResidentsPage() {
 
   useEffect(() => {
     fetchResidents();
-    fetchTenants();
-  }, []);
+    // Only super admin can fetch tenants list
+    if (isSuperAdmin) {
+      fetchTenants();
+    }
+  }, [isSuperAdmin]);
 
   const handleCreate = () => {
     setEditingResident(null);
@@ -207,11 +215,12 @@ export default function ResidentsPage() {
       key: 'unit',
       render: (unit: string) => <Tag>{unit}</Tag>,
     },
-    {
+    // Only show Building column for super admin
+    ...(isSuperAdmin ? [{
       title: 'Building',
       dataIndex: ['tenant', 'name'],
       key: 'tenant',
-    },
+    }] : []),
     {
       title: 'Contact',
       key: 'contact',
@@ -355,19 +364,22 @@ export default function ResidentsPage() {
             <Input placeholder="e.g., A-101" />
           </Form.Item>
 
-          <Form.Item
-            name="tenantId"
-            label="Building"
-            rules={[{ required: true, message: 'Please select building' }]}
-          >
-            <Select placeholder="Select building">
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {/* Only super admin can select building - building admin's tenant is auto-assigned */}
+          {isSuperAdmin && (
+            <Form.Item
+              name="tenantId"
+              label="Building"
+              rules={[{ required: true, message: 'Please select building' }]}
+            >
+              <Select placeholder="Select building">
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="email"

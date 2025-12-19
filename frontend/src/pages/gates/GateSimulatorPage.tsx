@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Row,
   Col,
@@ -15,6 +15,7 @@ import {
   message,
   Switch,
   Alert,
+  Modal,
 } from 'antd';
 import {
   CarOutlined,
@@ -27,7 +28,11 @@ import {
   StopOutlined,
   WifiOutlined,
   ApiOutlined,
+  CameraOutlined,
+  CloseOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons';
+import { Html5Qrcode } from 'html5-qrcode';
 import { useGateStore } from '../../store/gateStore';
 import { simulatorService, TriggerEventDto } from '../../services/simulator.service';
 import { socketService } from '../../services/socket.service';
@@ -60,6 +65,12 @@ export function GateSimulatorPage() {
   const [qrToken, setQrToken] = useState('');
   const [eventLogs, setEventLogs] = useState<EventLog[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Camera scanner state
+  const [scannerModalOpen, setScannerModalOpen] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerContainerId = 'qr-scanner-container';
 
   useEffect(() => {
     fetchGates();
@@ -98,6 +109,15 @@ export function GateSimulatorPage() {
       };
     }
   }, [selectedGateId]);
+
+  // Cleanup scanner on unmount
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current && isScanning) {
+        scannerRef.current.stop().catch(() => {});
+      }
+    };
+  }, [isScanning]);
 
   const addEventLog = (feedback: SimulatorFeedback) => {
     setEventLogs((prev) => [
@@ -155,12 +175,13 @@ export function GateSimulatorPage() {
     triggerEvent(SimulatorEvent.HUMAN_RFID_DETECTED, { rfidUid: rfidUid.trim() });
   };
 
-  const handleQrVerify = () => {
-    if (!qrToken.trim()) {
+  const handleQrVerify = (token?: string) => {
+    const tokenToUse = token || qrToken.trim();
+    if (!tokenToUse) {
       message.error('Please enter QR Token');
       return;
     }
-    triggerEvent(SimulatorEvent.QR_VERIFIED, { qrToken: qrToken.trim() });
+    triggerEvent(SimulatorEvent.QR_VERIFIED, { qrToken: tokenToUse });
   };
 
   const toggleOnlineStatus = async (online: boolean) => {
@@ -172,6 +193,75 @@ export function GateSimulatorPage() {
     } catch {
       message.error('Failed to update status');
     }
+  };
+
+  // Extract QR token from URL or raw token
+  const extractQrToken = (scannedData: string): string => {
+    // Check if it's a URL containing the visitor pass path
+    const visitorPassMatch = scannedData.match(/\/visitor-pass\/([a-f0-9-]+)/i);
+    if (visitorPassMatch) {
+      return visitorPassMatch[1];
+    }
+    // Otherwise return as-is (might be a raw UUID token)
+    return scannedData;
+  };
+
+  const startScanner = async () => {
+    if (!selectedGateId) {
+      message.error('Please select a gate first');
+      return;
+    }
+
+    setScannerModalOpen(true);
+
+    // Wait for modal to render
+    setTimeout(async () => {
+      try {
+        scannerRef.current = new Html5Qrcode(scannerContainerId);
+
+        await scannerRef.current.start(
+          { facingMode: 'environment' }, // Use back camera
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+          },
+          async (decodedText) => {
+            // QR code detected
+            const token = extractQrToken(decodedText);
+            message.info(`QR Code detected: ${token.substring(0, 20)}...`);
+
+            // Stop scanner
+            await stopScanner();
+
+            // Set token and verify
+            setQrToken(token);
+            handleQrVerify(token);
+          },
+          () => {
+            // QR code not detected (ignore)
+          }
+        );
+
+        setIsScanning(true);
+      } catch (err) {
+        console.error('Failed to start scanner:', err);
+        message.error('Failed to access camera. Please check permissions.');
+        setScannerModalOpen(false);
+      }
+    }, 100);
+  };
+
+  const stopScanner = async () => {
+    if (scannerRef.current && isScanning) {
+      try {
+        await scannerRef.current.stop();
+        scannerRef.current = null;
+      } catch (err) {
+        console.error('Error stopping scanner:', err);
+      }
+    }
+    setIsScanning(false);
+    setScannerModalOpen(false);
   };
 
   return (
@@ -281,20 +371,31 @@ export function GateSimulatorPage() {
               <Divider className="my-2" />
 
               <Input
-                placeholder="QR Token"
+                placeholder="QR Token (or scan with camera)"
                 value={qrToken}
                 onChange={(e) => setQrToken(e.target.value)}
                 addonBefore={<QrcodeOutlined />}
               />
-              <Button
-                icon={<QrcodeOutlined />}
-                onClick={handleQrVerify}
-                loading={isProcessing}
-                disabled={!selectedGateId}
-                block
-              >
-                Verify QR Pass
-              </Button>
+              <Space className="w-full" style={{ display: 'flex' }}>
+                <Button
+                  icon={<QrcodeOutlined />}
+                  onClick={() => handleQrVerify()}
+                  loading={isProcessing}
+                  disabled={!selectedGateId}
+                  style={{ flex: 1 }}
+                >
+                  Verify QR
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<CameraOutlined />}
+                  onClick={startScanner}
+                  disabled={!selectedGateId}
+                  style={{ flex: 1 }}
+                >
+                  Scan QR
+                </Button>
+              </Space>
             </Space>
           </Card>
 
@@ -408,12 +509,56 @@ export function GateSimulatorPage() {
           <div>
             <div><strong>Vehicle RFIDs:</strong> VH-A1B2C3D4, VH-E5F6G7H8, VH-I9J0K1L2, VH-M3N4O5P6, VH-Q7R8S9T0</div>
             <div><strong>Human Card RFIDs:</strong> RF-JD-001, RF-JS-002, RF-MJ-003, RF-SW-004, RF-DB-005</div>
+            <div className="mt-2"><strong>QR Scanner:</strong> Click "Scan QR" button to use camera for scanning visitor pass QR codes</div>
           </div>
         }
         type="info"
         showIcon
         className="mt-4"
       />
+
+      {/* Camera Scanner Modal */}
+      <Modal
+        title={
+          <Space>
+            <VideoCameraOutlined />
+            <span>QR Code Scanner</span>
+          </Space>
+        }
+        open={scannerModalOpen}
+        onCancel={stopScanner}
+        footer={[
+          <Button key="close" icon={<CloseOutlined />} onClick={stopScanner}>
+            Close Scanner
+          </Button>,
+        ]}
+        width={400}
+        centered
+        destroyOnClose
+      >
+        <div className="text-center">
+          <div
+            id={scannerContainerId}
+            style={{
+              width: '100%',
+              minHeight: 300,
+              background: '#000',
+              borderRadius: 8,
+              overflow: 'hidden',
+            }}
+          />
+          <div className="mt-4">
+            <Text type="secondary">
+              Point your camera at a visitor pass QR code
+            </Text>
+          </div>
+          {isScanning && (
+            <div className="mt-2">
+              <Badge status="processing" text="Scanning..." />
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

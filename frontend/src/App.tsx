@@ -11,8 +11,12 @@ import UsersPage from './pages/users/UsersPage';
 import TenantsPage from './pages/admin/TenantsPage';
 import ResidentsPage from './pages/admin/ResidentsPage';
 import VehiclesPage from './pages/admin/VehiclesPage';
+import SubscriptionsPage from './pages/admin/SubscriptionsPage';
+import PlansManagementPage from './pages/admin/PlansManagementPage';
 import MyVisitorsPage from './pages/visitors/MyVisitorsPage';
 import VisitorPassPage from './pages/public/VisitorPassPage';
+import ReportUnauthorizedPage from './pages/public/ReportUnauthorizedPage';
+import SecurityAlertsPage from './pages/security/SecurityAlertsPage';
 import SignupPage from './pages/signup/SignupPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +53,9 @@ function App() {
         {/* Public visitor pass page (no auth required) */}
         <Route path="/visitor-pass/:qrToken" element={<VisitorPassPage />} />
 
+        {/* Public report unauthorized page (no auth required - accessed via email link) */}
+        <Route path="/report-unauthorized" element={<ReportUnauthorizedPage />} />
+
         {/* Protected app routes */}
         <Route
           element={
@@ -63,9 +70,12 @@ function App() {
           <Route path="events" element={<EventsPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="admin/tenants" element={<TenantsPage />} />
+          <Route path="admin/subscriptions" element={<SubscriptionsPage />} />
+          <Route path="admin/plans" element={<PlansManagementPage />} />
           <Route path="admin/residents" element={<ResidentsPage />} />
           <Route path="admin/vehicles" element={<VehiclesPage />} />
           <Route path="visitors" element={<MyVisitorsPage />} />
+          <Route path="security-alerts" element={<SecurityAlertsPage />} />
         </Route>
 
         {/* Catch all - redirect to landing */}

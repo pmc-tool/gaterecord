@@ -125,6 +125,12 @@ String topicCommand;
 String topicEvent;
 String topicDisplay;
 String topicFeedback;
+String topicAlarm;
+
+// Security Alarm State
+bool alarmActive = false;
+unsigned long lastAlarmBeep = 0;
+const unsigned long ALARM_BEEP_INTERVAL = 500; // Beep every 500ms when alarm is active
 
 // ==================== FORWARD DECLARATIONS ====================
 void connectWiFi();
@@ -133,6 +139,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length);
 void handleCommand(JsonDocument &doc);
 void handleDisplayMessage(JsonDocument &doc);
 void handleFeedback(JsonDocument &doc);
+void handleAlarm(JsonDocument &doc);
 void checkRfid();
 void checkObstacleSensors();
 float readUltrasonicDistance();
@@ -288,6 +295,7 @@ void setup()
   topicEvent = "gate/" + DEVICE_ID + "/event";
   topicDisplay = "gate/" + DEVICE_ID + "/display";
   topicFeedback = "gate/" + DEVICE_ID + "/feedback";
+  topicAlarm = "gate/" + DEVICE_ID + "/alarm";
 
   // Connect to WiFi
   connectWiFi();
@@ -361,6 +369,25 @@ void loop()
     closeGate();
     autoCloseTimer = 0;
   }
+
+  // Security alarm beeping (continuous alarm when active)
+  if (alarmActive)
+  {
+    if (millis() - lastAlarmBeep > ALARM_BEEP_INTERVAL)
+    {
+      // Toggle buzzer for alarm pattern
+      static bool buzzerState = false;
+      buzzerState = !buzzerState;
+      digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW);
+
+      // Alternate red LED for visual effect
+      static bool ledFlash = false;
+      ledFlash = !ledFlash;
+      digitalWrite(LED_RED_PIN, ledFlash ? HIGH : LOW);
+
+      lastAlarmBeep = millis();
+    }
+  }
 }
 
 // ==================== WIFI CONNECTION ====================
@@ -424,11 +451,13 @@ void connectMQTT()
       mqtt.subscribe(topicCommand.c_str());
       mqtt.subscribe(topicDisplay.c_str());
       mqtt.subscribe(topicFeedback.c_str());
+      mqtt.subscribe(topicAlarm.c_str());
 
       Serial.println("Subscribed to topics:");
       Serial.println("  " + topicCommand);
       Serial.println("  " + topicDisplay);
       Serial.println("  " + topicFeedback);
+      Serial.println("  " + topicAlarm);
 
       showDisplay("MQTT OK", "Ready");
       sendHeartbeat();
@@ -476,6 +505,10 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
   else if (topicStr == topicFeedback)
   {
     handleFeedback(doc);
+  }
+  else if (topicStr == topicAlarm)
+  {
+    handleAlarm(doc);
   }
 }
 
@@ -537,6 +570,53 @@ void handleFeedback(JsonDocument &doc)
     digitalWrite(LED_RED_PIN, HIGH);
     if (beepEnabled)
       beep(2, 150);
+  }
+}
+
+// ==================== SECURITY ALARM HANDLER ====================
+void handleAlarm(JsonDocument &doc)
+{
+  String action = doc["action"].as<String>();
+  String alertId = doc["alertId"].as<String>();
+  Serial.println("Alarm action: " + action + " (Alert: " + alertId + ")");
+
+  if (action == "START")
+  {
+    alarmActive = true;
+    lastAlarmBeep = 0; // Start beeping immediately
+    Serial.println("!!! SECURITY ALARM ACTIVATED !!!");
+    showDisplay("!! ALARM !!", "SECURITY ALERT");
+    digitalWrite(LED_RED_PIN, HIGH);
+    digitalWrite(LED_GREEN_PIN, LOW);
+
+    // Send event to confirm alarm started
+    StaticJsonDocument<128> eventDoc;
+    eventDoc["event"] = "ALARM_STARTED";
+    eventDoc["deviceId"] = DEVICE_ID;
+    eventDoc["alertId"] = alertId;
+    eventDoc["timestamp"] = millis();
+    String payload;
+    serializeJson(eventDoc, payload);
+    mqtt.publish(topicEvent.c_str(), payload.c_str());
+  }
+  else if (action == "STOP")
+  {
+    alarmActive = false;
+    digitalWrite(BUZZER_PIN, LOW); // Ensure buzzer is off
+    Serial.println("Security alarm deactivated");
+    showDisplay("Alarm Off", "Scan RFID");
+    digitalWrite(LED_RED_PIN, LOW);
+    digitalWrite(LED_GREEN_PIN, HIGH);
+
+    // Send event to confirm alarm stopped
+    StaticJsonDocument<128> eventDoc;
+    eventDoc["event"] = "ALARM_STOPPED";
+    eventDoc["deviceId"] = DEVICE_ID;
+    eventDoc["alertId"] = alertId;
+    eventDoc["timestamp"] = millis();
+    String payload;
+    serializeJson(eventDoc, payload);
+    mqtt.publish(topicEvent.c_str(), payload.c_str());
   }
 }
 

@@ -11,6 +11,11 @@ export enum VisitorPassStatus {
   CANCELLED = 'cancelled',
 }
 
+export enum RegistrationType {
+  SELF_SERVICE = 'self_service',    // Resident created pass for their visitor
+  ON_PREMISE = 'on_premise',         // Admin/Security registered visitor on-site
+}
+
 @Entity('visitor_passes')
 @Index(['tenantId', 'qrToken'], { unique: true })
 export class VisitorPass extends BaseEntity {
@@ -60,4 +65,25 @@ export class VisitorPass extends BaseEntity {
 
   @Column({ name: 'host_unit', nullable: true })
   hostUnit: string;
+
+  @Column({
+    type: 'enum',
+    enum: RegistrationType,
+    name: 'registration_type',
+    default: RegistrationType.SELF_SERVICE
+  })
+  registrationType: RegistrationType;
+
+  @Column({ name: 'resident_confirmed', nullable: true })
+  residentConfirmed: boolean;
+
+  @Column({ name: 'confirmation_notes', nullable: true })
+  confirmationNotes: string;
+
+  @Column({ name: 'resident_id', nullable: true })
+  residentId: string;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'resident_id' })
+  resident: User;
 }

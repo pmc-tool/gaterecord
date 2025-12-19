@@ -15,6 +15,11 @@ export enum TenantStatus {
   TRIAL = 'trial',
 }
 
+export enum BillingCycle {
+  MONTHLY = 'monthly',
+  YEARLY = 'yearly',
+}
+
 @Entity('tenants')
 export class Tenant extends BaseEntity {
   @Column({ unique: true })
@@ -44,6 +49,12 @@ export class Tenant extends BaseEntity {
 
   @Column({ name: 'subscription_expires_at', nullable: true })
   subscriptionExpiresAt: Date;
+
+  @Column({ name: 'subscription_started_at', nullable: true })
+  subscriptionStartedAt: Date;
+
+  @Column({ type: 'enum', enum: BillingCycle, name: 'billing_cycle', default: BillingCycle.MONTHLY })
+  billingCycle: BillingCycle;
 
   @Column({ type: 'jsonb', nullable: true })
   settings: Record<string, unknown>;

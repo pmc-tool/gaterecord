@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
-import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
-import { User } from '@database/entities/user.entity';
+import { VisitorPass, VisitorPassStatus, RegistrationType } from '@database/entities/visitor-pass.entity';
+import { User, UserRole } from '@database/entities/user.entity';
 import { CreateVisitorPassDto, UpdateVisitorPassDto, VisitorPassQueryDto, ValidityType } from './dto/visitor-pass.dto';
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
@@ -33,8 +33,24 @@ export class VisitorPassService {
     // Calculate validity dates based on validity type
     const { validFrom, validUntil, maxUses } = this.calculateValidity(createDto);
 
-    // Validate tenant - residents must have a tenant
-    if (!currentUser.tenantId) {
+    // Determine registration type based on user role
+    const isStaffRegistration = [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(currentUser.role);
+    const registrationType = isStaffRegistration
+      ? (createDto.registrationType || RegistrationType.ON_PREMISE)
+      : RegistrationType.SELF_SERVICE;
+
+    // Determine tenant ID
+    let tenantId: string;
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      // Super admin must specify tenant ID
+      if (!createDto.tenantId) {
+        throw new BadRequestException('Super admin must specify a tenant ID when creating visitor passes');
+      }
+      tenantId = createDto.tenantId;
+    } else if (currentUser.tenantId) {
+      // Other users use their own tenant
+      tenantId = currentUser.tenantId;
+    } else {
       throw new BadRequestException('You must belong to a tenant to create visitor passes');
     }
 
@@ -52,7 +68,12 @@ export class VisitorPassService {
       maxUses,
       useCount: 0,
       createdById: currentUser.id,
-      tenantId: currentUser.tenantId,
+      tenantId,
+      // On-premise registration fields
+      registrationType,
+      residentConfirmed: registrationType === RegistrationType.ON_PREMISE ? createDto.residentConfirmed : undefined,
+      confirmationNotes: registrationType === RegistrationType.ON_PREMISE ? createDto.confirmationNotes : undefined,
+      residentId: registrationType === RegistrationType.ON_PREMISE ? createDto.residentId : undefined,
     });
 
     const savedPass = await this.visitorPassRepository.save(pass);
@@ -97,7 +118,8 @@ export class VisitorPassService {
     const queryBuilder = this.visitorPassRepository
       .createQueryBuilder('pass')
       .leftJoinAndSelect('pass.createdBy', 'createdBy')
-      .leftJoinAndSelect('pass.tenant', 'tenant');
+      .leftJoinAndSelect('pass.tenant', 'tenant')
+      .leftJoinAndSelect('pass.resident', 'resident');
 
     // Filter by tenant for non-super-admin users
     if (currentUser.tenantId) {
@@ -131,7 +153,7 @@ export class VisitorPassService {
   async findOne(id: string, currentUser: User): Promise<VisitorPass> {
     const pass = await this.visitorPassRepository.findOne({
       where: { id },
-      relations: ['createdBy', 'tenant'],
+      relations: ['createdBy', 'tenant', 'resident'],
     });
 
     if (!pass) {
@@ -156,7 +178,7 @@ export class VisitorPassService {
   async findByToken(qrToken: string): Promise<VisitorPass> {
     const pass = await this.visitorPassRepository.findOne({
       where: { qrToken },
-      relations: ['createdBy', 'tenant'],
+      relations: ['createdBy', 'tenant', 'resident'],
     });
 
     if (!pass) {

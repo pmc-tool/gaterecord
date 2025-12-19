@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan, LessThan } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Gate, GateState } from '@database/entities/gate.entity';
 import { GateController as GateControllerEntity, ControllerStatus } from '@database/entities/gate-controller.entity';
 import { SensorStatus, SensorType, SensorHealthStatus } from '@database/entities/sensor-status.entity';
@@ -11,6 +12,8 @@ import { AccessEvent, AccessMethod, AccessResult, AccessSubjectType } from '@dat
 import { User, UserRole } from '@database/entities/user.entity';
 import { TriggerEventDto, SimulatorEvent, SimulatorFeedbackDto, UpdateSensorDto } from './dto/simulator.dto';
 import { MqttService } from '../mqtt/mqtt.service';
+import { EmailService } from '../notification/email.service';
+import { SecurityAlertService } from '../security-alert/security-alert.service';
 
 @Injectable()
 export class SimulatorService {
@@ -19,6 +22,9 @@ export class SimulatorService {
 
   constructor(
     private mqttService: MqttService,
+    private emailService: EmailService,
+    private securityAlertService: SecurityAlertService,
+    private configService: ConfigService,
     @InjectRepository(Gate)
     private gateRepository: Repository<Gate>,
     @InjectRepository(GateControllerEntity)
@@ -33,6 +39,8 @@ export class SimulatorService {
     private visitorPassRepository: Repository<VisitorPass>,
     @InjectRepository(AccessEvent)
     private accessEventRepository: Repository<AccessEvent>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
   ) {}
 
   async triggerEvent(
@@ -304,7 +312,7 @@ export class SimulatorService {
         tenantId: gate.tenantId,
         qrToken,
       },
-      relations: ['createdBy'],
+      relations: ['createdBy', 'resident', 'tenant'],
     });
 
     if (!pass) {
@@ -400,6 +408,12 @@ export class SimulatorService {
       status: VisitorPassStatus.ACTIVE,
     });
 
+    // Determine resident info for notification
+    const resident = pass.resident || pass.createdBy;
+    const residentId = resident?.id;
+    const residentName = resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown';
+    const residentEmail = resident?.email;
+
     const event = await this.createAccessEvent(gate, {
       method: AccessMethod.QR,
       subjectType: AccessSubjectType.VISITOR_PASS,
@@ -407,9 +421,28 @@ export class SimulatorService {
       subjectIdentifier: qrToken,
       subjectName: `${pass.visitorName} (Visitor)`,
       result: AccessResult.ALLOWED,
+      metadata: {
+        residentId,
+        residentName,
+        residentEmail,
+        visitorName: pass.visitorName,
+        visitorPassId: pass.id,
+      },
     });
 
     await this.transitionState(gate, GateState.OPENING);
+
+    // Send visitor entry notification to resident
+    if (residentEmail) {
+      this.sendVisitorEntryNotification(
+        event,
+        gate,
+        pass,
+        resident,
+      ).catch((err) => {
+        this.logger.error('Failed to send visitor entry notification:', err);
+      });
+    }
 
     return {
       gateId: gate.id,
@@ -419,6 +452,32 @@ export class SimulatorService {
       gateState: GateState.OPENING,
       eventId: event.id,
     };
+  }
+
+  private async sendVisitorEntryNotification(
+    accessEvent: AccessEvent,
+    gate: Gate,
+    pass: VisitorPass,
+    resident: User,
+  ): Promise<void> {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const reportToken = this.securityAlertService.generateReportToken(accessEvent.id);
+    const reportUrl = `${frontendUrl}/report-unauthorized?eventId=${accessEvent.id}&token=${reportToken}`;
+
+    const buildingName = pass.tenant?.name || gate.tenant?.name || 'the building';
+
+    await this.emailService.sendVisitorEntryNotification(
+      resident.email,
+      `${resident.firstName} ${resident.lastName}`,
+      pass.visitorName,
+      buildingName,
+      gate.name,
+      accessEvent.timestamp,
+      accessEvent.id,
+      reportUrl,
+    );
+
+    this.logger.log(`Visitor entry notification sent to ${resident.email}`);
   }
 
   private async handleObstacle(gate: Gate, detected: boolean): Promise<SimulatorFeedbackDto> {

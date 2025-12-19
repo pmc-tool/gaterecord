@@ -27,20 +27,23 @@ const { RangePicker } = DatePicker;
 
 interface AccessEvent {
   id: string;
-  eventType: 'entry' | 'exit';
-  accessMethod: 'rfid' | 'qr' | 'manual' | 'remote';
-  wasSuccessful: boolean;
-  denialReason?: string;
+  gateId: string;
   timestamp: string;
-  gate?: { name: string; location: string };
-  resident?: { firstName: string; lastName: string; unit: string };
-  vehicle?: { plateNumber: string; make: string; model: string };
-  humanAccess?: { firstName: string; lastName: string };
+  method: 'rfid' | 'qr_code' | 'pin' | 'manual' | 'remote';
+  subjectType: 'resident' | 'vehicle' | 'visitor' | 'unknown';
+  subjectId?: string;
+  subjectIdentifier?: string;
+  subjectName?: string;
+  result: 'allowed' | 'denied';
+  denialReason?: string;
+  operatorName?: string;
+  gate?: { id: string; name: string };
 }
 
 const accessMethodColors: Record<string, string> = {
   rfid: 'blue',
-  qr: 'purple',
+  qr_code: 'purple',
+  pin: 'green',
   manual: 'orange',
   remote: 'cyan',
 };
@@ -51,16 +54,15 @@ export default function EventsPage() {
   const [filters, setFilters] = useState({
     startDate: dayjs().subtract(7, 'day').toISOString(),
     endDate: dayjs().toISOString(),
-    eventType: undefined as string | undefined,
-    wasSuccessful: undefined as boolean | undefined,
+    method: undefined as string | undefined,
+    result: undefined as string | undefined,
   });
   const [stats, setStats] = useState({
     total: 0,
-    successful: 0,
+    allowed: 0,
     denied: 0,
-    entries: 0,
-    exits: 0,
   });
+  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0 });
 
   const fetchEvents = async () => {
     setLoading(true);
@@ -68,24 +70,25 @@ export default function EventsPage() {
       const params = new URLSearchParams();
       if (filters.startDate) params.append('startDate', filters.startDate);
       if (filters.endDate) params.append('endDate', filters.endDate);
-      if (filters.eventType) params.append('eventType', filters.eventType);
-      if (filters.wasSuccessful !== undefined)
-        params.append('wasSuccessful', String(filters.wasSuccessful));
+      if (filters.method) params.append('method', filters.method);
+      if (filters.result) params.append('result', filters.result);
+      params.append('page', String(pagination.page));
+      params.append('limit', String(pagination.limit));
 
       const response = await api.get(`/events?${params.toString()}`);
-      setEvents(response.data);
+      const { events: eventList, total } = response.data;
+      setEvents(eventList || []);
+      setPagination(prev => ({ ...prev, total }));
 
-      // Calculate stats
-      const data = response.data;
+      // Calculate stats from current page data
+      const data = eventList || [];
       setStats({
-        total: data.length,
-        successful: data.filter((e: AccessEvent) => e.wasSuccessful).length,
-        denied: data.filter((e: AccessEvent) => !e.wasSuccessful).length,
-        entries: data.filter((e: AccessEvent) => e.eventType === 'entry').length,
-        exits: data.filter((e: AccessEvent) => e.eventType === 'exit').length,
+        total: total,
+        allowed: data.filter((e: AccessEvent) => e.result === 'allowed').length,
+        denied: data.filter((e: AccessEvent) => e.result === 'denied').length,
       });
     } catch (error) {
-      console.error('Failed to fetch events');
+      console.error('Failed to fetch events:', error);
     } finally {
       setLoading(false);
     }
@@ -130,32 +133,48 @@ export default function EventsPage() {
       title: 'Gate',
       dataIndex: ['gate', 'name'],
       key: 'gate',
-    },
-    {
-      title: 'Type',
-      dataIndex: 'eventType',
-      key: 'eventType',
-      render: (type: string) => (
-        <Tag color={type === 'entry' ? 'green' : 'red'}>{type.toUpperCase()}</Tag>
-      ),
+      render: (name: string) => name || '-',
     },
     {
       title: 'Method',
-      dataIndex: 'accessMethod',
-      key: 'accessMethod',
+      dataIndex: 'method',
+      key: 'method',
       render: (method: string) => (
-        <Tag color={accessMethodColors[method]}>{method.toUpperCase()}</Tag>
+        <Tag color={accessMethodColors[method] || 'default'}>
+          {method?.replace('_', ' ').toUpperCase() || '-'}
+        </Tag>
       ),
     },
     {
-      title: 'Status',
-      dataIndex: 'wasSuccessful',
-      key: 'wasSuccessful',
-      render: (wasSuccessful: boolean, record) => (
+      title: 'Subject',
+      key: 'subject',
+      render: (_, record) => {
+        const icon = record.subjectType === 'vehicle' ? <CarOutlined /> : <UserOutlined />;
+        return (
+          <Space>
+            {icon}
+            <span>{record.subjectName || record.subjectIdentifier || '-'}</span>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Type',
+      dataIndex: 'subjectType',
+      key: 'subjectType',
+      render: (type: string) => (
+        <Tag>{type?.toUpperCase() || '-'}</Tag>
+      ),
+    },
+    {
+      title: 'Result',
+      dataIndex: 'result',
+      key: 'result',
+      render: (result: string, record) => (
         <Space>
-          {wasSuccessful ? (
+          {result === 'allowed' ? (
             <Tag icon={<CheckCircleOutlined />} color="success">
-              Granted
+              Allowed
             </Tag>
           ) : (
             <Tag icon={<CloseCircleOutlined />} color="error">
@@ -168,64 +187,27 @@ export default function EventsPage() {
         </Space>
       ),
     },
-    {
-      title: 'Person/Vehicle',
-      key: 'accessor',
-      render: (_, record) => {
-        if (record.vehicle) {
-          return (
-            <Space>
-              <CarOutlined />
-              <span>
-                {record.vehicle.plateNumber} ({record.vehicle.make} {record.vehicle.model})
-              </span>
-            </Space>
-          );
-        }
-        if (record.humanAccess) {
-          return (
-            <Space>
-              <UserOutlined />
-              <span>
-                {record.humanAccess.firstName} {record.humanAccess.lastName}
-              </span>
-            </Space>
-          );
-        }
-        if (record.resident) {
-          return (
-            <Space>
-              <UserOutlined />
-              <span>
-                {record.resident.firstName} {record.resident.lastName} (Unit {record.resident.unit})
-              </span>
-            </Space>
-          );
-        }
-        return <span className="text-gray-400">Unknown</span>;
-      },
-    },
   ];
 
   return (
     <div className="space-y-4">
       <Row gutter={16}>
-        <Col span={4}>
+        <Col span={8}>
           <Card>
             <Statistic title="Total Events" value={stats.total} />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col span={8}>
           <Card>
             <Statistic
-              title="Successful"
-              value={stats.successful}
+              title="Allowed"
+              value={stats.allowed}
               valueStyle={{ color: '#3f8600' }}
               prefix={<CheckCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col span={8}>
           <Card>
             <Statistic
               title="Denied"
@@ -233,16 +215,6 @@ export default function EventsPage() {
               valueStyle={{ color: '#cf1322' }}
               prefix={<CloseCircleOutlined />}
             />
-          </Card>
-        </Col>
-        <Col span={5}>
-          <Card>
-            <Statistic title="Entries" value={stats.entries} valueStyle={{ color: '#52c41a' }} />
-          </Card>
-        </Col>
-        <Col span={5}>
-          <Card>
-            <Statistic title="Exits" value={stats.exits} valueStyle={{ color: '#1890ff' }} />
           </Card>
         </Col>
       </Row>
@@ -275,24 +247,27 @@ export default function EventsPage() {
               }}
             />
             <Select
-              placeholder="Event Type"
+              placeholder="Method"
               allowClear
               style={{ width: 120 }}
-              value={filters.eventType}
-              onChange={(value) => setFilters({ ...filters, eventType: value })}
+              value={filters.method}
+              onChange={(value) => setFilters({ ...filters, method: value })}
             >
-              <Select.Option value="entry">Entry</Select.Option>
-              <Select.Option value="exit">Exit</Select.Option>
+              <Select.Option value="rfid">RFID</Select.Option>
+              <Select.Option value="qr_code">QR Code</Select.Option>
+              <Select.Option value="pin">PIN</Select.Option>
+              <Select.Option value="manual">Manual</Select.Option>
+              <Select.Option value="remote">Remote</Select.Option>
             </Select>
             <Select
-              placeholder="Status"
+              placeholder="Result"
               allowClear
               style={{ width: 120 }}
-              value={filters.wasSuccessful}
-              onChange={(value) => setFilters({ ...filters, wasSuccessful: value })}
+              value={filters.result}
+              onChange={(value) => setFilters({ ...filters, result: value })}
             >
-              <Select.Option value={true}>Granted</Select.Option>
-              <Select.Option value={false}>Denied</Select.Option>
+              <Select.Option value="allowed">Allowed</Select.Option>
+              <Select.Option value="denied">Denied</Select.Option>
             </Select>
             <Button type="primary" onClick={fetchEvents}>
               Apply Filters
@@ -305,7 +280,17 @@ export default function EventsPage() {
           dataSource={events}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20 }}
+          pagination={{
+            current: pagination.page,
+            pageSize: pagination.limit,
+            total: pagination.total,
+            showSizeChanger: true,
+            showTotal: (total) => `Total ${total} events`,
+            onChange: (page, pageSize) => {
+              setPagination({ ...pagination, page, limit: pageSize });
+              fetchEvents();
+            },
+          }}
         />
       </Card>
     </div>

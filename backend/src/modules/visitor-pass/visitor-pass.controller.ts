@@ -9,13 +9,17 @@ import {
   Query,
   UseGuards,
   Req,
+  Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 import { VisitorPassService } from './visitor-pass.service';
 import { CreateVisitorPassDto, UpdateVisitorPassDto, VisitorPassQueryDto } from './dto/visitor-pass.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { Public } from '@common/decorators/public.decorator';
 import { User } from '@database/entities/user.entity';
+import { EmailService } from '../notification/email.service';
+import { VisitorPass } from '@database/entities/visitor-pass.entity';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -24,9 +28,46 @@ interface RequestWithUser extends Request {
 @ApiTags('Visitor Passes')
 @Controller('visitor-passes')
 export class VisitorPassController {
+  private readonly logger = new Logger(VisitorPassController.name);
+
   constructor(
     private readonly visitorPassService: VisitorPassService,
+    private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private async sendPassNotification(pass: VisitorPass, currentUser: User, sendEmail: boolean): Promise<void> {
+    if (!sendEmail || !pass.visitorEmail) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const passUrl = `${frontendUrl}/visitor-pass/${pass.qrToken}`;
+
+    // Determine host name
+    let hostName = 'Staff';
+    if (pass.resident) {
+      hostName = `${pass.resident.firstName} ${pass.resident.lastName}`;
+    } else if (currentUser) {
+      hostName = `${currentUser.firstName} ${currentUser.lastName}`;
+    }
+
+    // Get building name
+    const buildingName = pass.tenant?.name || 'the building';
+
+    try {
+      await this.emailService.sendVisitorPassEmail(
+        pass.visitorEmail,
+        pass.visitorName,
+        hostName,
+        buildingName,
+        passUrl,
+        pass.validFrom,
+        pass.validUntil,
+      );
+      this.logger.log(`Email sent to ${pass.visitorEmail} for pass ${pass.id}`);
+    } catch (error) {
+      this.logger.error(`Failed to send email for pass ${pass.id}:`, error);
+    }
+  }
 
   @Post()
   @ApiBearerAuth()
@@ -35,13 +76,18 @@ export class VisitorPassController {
   async create(@Body() createDto: CreateVisitorPassDto, @Req() req: RequestWithUser) {
     const pass = await this.visitorPassService.create(createDto, req.user);
 
-    // TODO: Send notifications via notification service
-    // if (createDto.sendEmail && createDto.visitorEmail) {
-    //   await this.notificationService.sendVisitorPassEmail(pass, req.user);
-    // }
-    // if (createDto.sendWhatsApp && createDto.visitorPhone) {
-    //   await this.notificationService.sendVisitorPassWhatsApp(pass, req.user);
-    // }
+    // Fetch full pass with relations for email
+    const fullPass = await this.visitorPassService.findOne(pass.id, req.user);
+
+    // Send email notification if requested
+    if (createDto.sendEmail && createDto.visitorEmail) {
+      await this.sendPassNotification(fullPass, req.user, true);
+    }
+
+    // TODO: WhatsApp integration via Twilio
+    if (createDto.sendWhatsApp && createDto.visitorPhone) {
+      this.logger.log(`WhatsApp notification requested for ${createDto.visitorPhone} - not yet implemented`);
+    }
 
     return pass;
   }
@@ -69,10 +115,18 @@ export class VisitorPassController {
   async findByToken(@Param('qrToken') qrToken: string) {
     const pass = await this.visitorPassService.findByToken(qrToken);
 
+    // Determine host name based on registration type
+    let hostName = 'Unknown';
+    if (pass.registrationType === 'on_premise' && pass.resident) {
+      hostName = `${pass.resident.firstName} ${pass.resident.lastName}`;
+    } else if (pass.createdBy) {
+      hostName = `${pass.createdBy.firstName} ${pass.createdBy.lastName}`;
+    }
+
     // Return limited info for public view
     return {
       visitorName: pass.visitorName,
-      hostName: pass.createdBy ? `${pass.createdBy.firstName} ${pass.createdBy.lastName}` : 'Unknown',
+      hostName,
       hostUnit: pass.hostUnit,
       buildingName: pass.tenant?.name || 'Unknown Building',
       buildingAddress: pass.tenant?.address || '',
@@ -82,6 +136,8 @@ export class VisitorPassController {
       qrToken: pass.qrToken,
       purpose: pass.purpose,
       usesRemaining: Math.max(0, pass.maxUses - pass.useCount),
+      registrationType: pass.registrationType,
+      residentConfirmed: pass.residentConfirmed,
     };
   }
 
@@ -137,15 +193,23 @@ export class VisitorPassController {
   async resend(@Param('id') id: string, @Req() req: RequestWithUser) {
     const pass = await this.visitorPassService.findOne(id, req.user);
 
-    // TODO: Implement notification resending
-    // if (pass.visitorEmail) {
-    //   await this.notificationService.sendVisitorPassEmail(pass, req.user);
-    // }
-    // if (pass.visitorPhone) {
-    //   await this.notificationService.sendVisitorPassWhatsApp(pass, req.user);
-    // }
+    let emailSent = false;
 
-    return { message: 'Notification resent successfully', pass };
+    if (pass.visitorEmail) {
+      await this.sendPassNotification(pass, req.user, true);
+      emailSent = true;
+    }
+
+    // TODO: WhatsApp resend
+    if (pass.visitorPhone) {
+      this.logger.log(`WhatsApp resend requested for ${pass.visitorPhone} - not yet implemented`);
+    }
+
+    return {
+      message: emailSent ? 'Notification resent successfully' : 'No email address available',
+      emailSent,
+      pass,
+    };
   }
 
   @Delete(':id')

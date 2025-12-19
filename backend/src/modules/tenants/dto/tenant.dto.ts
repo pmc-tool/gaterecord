@@ -1,6 +1,6 @@
-import { IsString, IsEmail, IsEnum, IsOptional, IsUUID, IsDateString } from 'class-validator';
+import { IsString, IsEmail, IsEnum, IsOptional, IsUUID, IsDateString, IsNumber, IsBoolean, IsObject } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { TenantStatus } from '@database/entities/tenant.entity';
+import { TenantStatus, BillingCycle } from '@database/entities/tenant.entity';
 
 export class CreateTenantDto {
   @ApiProperty({ example: 'Sunrise Apartments' })
@@ -55,28 +55,122 @@ export class UpdateTenantDto extends PartialType(CreateTenantDto) {
 }
 
 export class CreateSubscriptionPlanDto {
-  @ApiProperty({ example: 'Basic' })
+  @ApiProperty({ example: 'Professional' })
   @IsString()
   name: string;
 
-  @ApiProperty({ example: 3 })
-  maxGates: number;
+  @ApiPropertyOptional({ example: 'Perfect for medium-sized buildings' })
+  @IsString()
+  @IsOptional()
+  description?: string;
 
-  @ApiProperty({ example: 50 })
-  maxUsers: number;
+  // Pricing
+  @ApiProperty({ example: 49.99 })
+  @IsNumber()
+  monthlyPrice: number;
 
-  @ApiProperty({ example: 30 })
-  logRetentionDays: number;
+  @ApiProperty({ example: 499.99 })
+  @IsNumber()
+  yearlyPrice: number;
+
+  // Discount
+  @ApiPropertyOptional({ example: 15 })
+  @IsNumber()
+  @IsOptional()
+  discountPercent?: number;
+
+  @ApiPropertyOptional({ example: 'Save 15%' })
+  @IsString()
+  @IsOptional()
+  discountLabel?: string;
 
   @ApiPropertyOptional()
+  @IsDateString()
+  @IsOptional()
+  discountValidUntil?: string;
+
+  // Trial
+  @ApiPropertyOptional({ example: 14 })
+  @IsNumber()
+  @IsOptional()
+  trialDays?: number;
+
+  @ApiPropertyOptional({ example: false })
+  @IsBoolean()
+  @IsOptional()
+  trialRequiresCard?: boolean;
+
+  // Limits
+  @ApiProperty({ example: 5 })
+  @IsNumber()
+  maxGates: number;
+
+  @ApiProperty({ example: 100 })
+  @IsNumber()
+  maxUsers: number;
+
+  @ApiPropertyOptional({ example: 200 })
+  @IsNumber()
+  @IsOptional()
+  maxVehicles?: number;
+
+  @ApiPropertyOptional({ example: 100 })
+  @IsNumber()
+  @IsOptional()
+  maxVisitorPassesPerMonth?: number;
+
+  @ApiProperty({ example: 90 })
+  @IsNumber()
+  logRetentionDays: number;
+
+  // Features
+  @ApiPropertyOptional()
+  @IsObject()
   @IsOptional()
   features?: {
     simulator_access?: boolean;
     csv_export?: boolean;
     api_access?: boolean;
     custom_branding?: boolean;
+    priority_support?: boolean;
+    advanced_analytics?: boolean;
+    multi_building?: boolean;
+    webhook_notifications?: boolean;
   };
+
+  // Display settings
+  @ApiPropertyOptional({ example: 1 })
+  @IsNumber()
+  @IsOptional()
+  displayOrder?: number;
+
+  @ApiPropertyOptional({ example: 'Popular' })
+  @IsString()
+  @IsOptional()
+  badge?: string;
+
+  @ApiPropertyOptional({ example: 'blue' })
+  @IsString()
+  @IsOptional()
+  badgeColor?: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  isFeatured?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  isPublic?: boolean;
 }
+
+export class UpdateSubscriptionPlanDto extends PartialType(CreateSubscriptionPlanDto) {}
 
 export class TenantResponseDto {
   @ApiProperty()

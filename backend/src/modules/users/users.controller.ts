@@ -6,11 +6,10 @@ import {
   Patch,
   Param,
   Delete,
-  Query,
   UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto/user.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
@@ -34,12 +33,12 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
-  @ApiOperation({ summary: 'Get all users' })
-  @ApiQuery({ name: 'tenantId', required: false })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @ApiOperation({ summary: 'Get all users for current tenant' })
   @ApiResponse({ status: 200, description: 'List of users', type: [UserResponseDto] })
-  findAll(@Query('tenantId') tenantId: string | undefined, @CurrentUser() currentUser: User) {
-    return this.usersService.findAll(tenantId || null, currentUser);
+  findAll(@CurrentUser() currentUser: User) {
+    // Non-super-admins always get their own tenant's users
+    return this.usersService.findAll(null, currentUser);
   }
 
   @Get(':id')

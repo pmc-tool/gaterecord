@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
+import { User, UserRole } from '@database/entities/user.entity';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 
 @Injectable()
@@ -11,20 +12,24 @@ export class VehiclesService {
     private readonly vehicleRepository: Repository<Vehicle>,
   ) {}
 
-  async findAll(tenantId?: string): Promise<Vehicle[]> {
+  async findAll(currentUser: User): Promise<Vehicle[]> {
     const query = this.vehicleRepository
       .createQueryBuilder('vehicle')
       .leftJoinAndSelect('vehicle.owner', 'owner')
       .leftJoinAndSelect('vehicle.tenant', 'tenant');
 
-    if (tenantId) {
-      query.where('vehicle.tenantId = :tenantId', { tenantId });
+    // Tenant isolation - non-super-admins can only see their own tenant's vehicles
+    if (currentUser.role !== UserRole.SUPER_ADMIN) {
+      if (!currentUser.tenantId) {
+        throw new ForbiddenException('User must belong to a tenant');
+      }
+      query.where('vehicle.tenantId = :tenantId', { tenantId: currentUser.tenantId });
     }
 
     return query.orderBy('vehicle.createdAt', 'DESC').getMany();
   }
 
-  async findOne(id: string): Promise<Vehicle> {
+  async findOne(id: string, currentUser: User): Promise<Vehicle> {
     const vehicle = await this.vehicleRepository.findOne({
       where: { id },
       relations: ['owner', 'tenant'],
@@ -32,6 +37,13 @@ export class VehiclesService {
 
     if (!vehicle) {
       throw new NotFoundException(`Vehicle with ID ${id} not found`);
+    }
+
+    // Tenant isolation check
+    if (currentUser.role !== UserRole.SUPER_ADMIN) {
+      if (vehicle.tenantId !== currentUser.tenantId) {
+        throw new ForbiddenException('Access denied - vehicle belongs to different tenant');
+      }
     }
 
     return vehicle;
@@ -44,7 +56,20 @@ export class VehiclesService {
     });
   }
 
-  async create(createDto: CreateVehicleDto): Promise<Vehicle> {
+  async create(createDto: CreateVehicleDto, currentUser: User): Promise<Vehicle> {
+    // Ensure tenant is set for non-super-admins
+    if (currentUser.role !== UserRole.SUPER_ADMIN) {
+      if (!currentUser.tenantId) {
+        throw new ForbiddenException('User must belong to a tenant');
+      }
+      createDto.tenantId = currentUser.tenantId;
+    }
+
+    // Validate tenantId is provided
+    if (!createDto.tenantId) {
+      throw new ForbiddenException('Tenant ID is required');
+    }
+
     const existingRfid = await this.vehicleRepository.findOne({
       where: { rfidUid: createDto.rfidUid, tenantId: createDto.tenantId },
     });
@@ -66,8 +91,8 @@ export class VehiclesService {
     return this.vehicleRepository.save(vehicle);
   }
 
-  async update(id: string, updateDto: UpdateVehicleDto): Promise<Vehicle> {
-    const vehicle = await this.findOne(id);
+  async update(id: string, updateDto: UpdateVehicleDto, currentUser: User): Promise<Vehicle> {
+    const vehicle = await this.findOne(id, currentUser);
 
     if (updateDto.rfidUid && updateDto.rfidUid !== vehicle.rfidUid) {
       const existingRfid = await this.vehicleRepository.findOne({
@@ -103,8 +128,8 @@ export class VehiclesService {
     return this.vehicleRepository.save(vehicle);
   }
 
-  async remove(id: string): Promise<void> {
-    const vehicle = await this.findOne(id);
+  async remove(id: string, currentUser: User): Promise<void> {
+    const vehicle = await this.findOne(id, currentUser);
     await this.vehicleRepository.remove(vehicle);
   }
 }

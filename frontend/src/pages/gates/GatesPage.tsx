@@ -106,7 +106,9 @@ export default function GatesPage() {
   const handleSubmit = async (values: Partial<Gate>) => {
     try {
       if (editingGate) {
-        await api.patch(`/gates/${editingGate.id}`, values);
+        // Don't send tenantId on update - it's not allowed
+        const { tenantId, ...updateValues } = values;
+        await api.patch(`/gates/${editingGate.id}`, updateValues);
         message.success('Gate updated successfully');
       } else {
         await api.post('/gates', values);
@@ -114,8 +116,10 @@ export default function GatesPage() {
       }
       setModalVisible(false);
       fetchGates();
-    } catch (error) {
-      message.error('Failed to save gate');
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { message?: string } } };
+      const errorMsg = err.response?.data?.message || 'Failed to save gate';
+      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : errorMsg);
     }
   };
 
@@ -136,8 +140,8 @@ export default function GatesPage() {
       dataIndex: 'type',
       key: 'type',
       render: (type: string) => (
-        <Tag color={type === 'entry' ? 'green' : type === 'exit' ? 'red' : 'blue'}>
-          {type.toUpperCase()}
+        <Tag color={type === 'vehicle' ? 'green' : type === 'pedestrian' ? 'blue' : 'purple'}>
+          {type?.toUpperCase()}
         </Tag>
       ),
     },
@@ -258,9 +262,9 @@ export default function GatesPage() {
             rules={[{ required: true, message: 'Please select gate type' }]}
           >
             <Select placeholder="Select type">
-              <Select.Option value="entry">Entry Only</Select.Option>
-              <Select.Option value="exit">Exit Only</Select.Option>
-              <Select.Option value="bidirectional">Bidirectional</Select.Option>
+              <Select.Option value="vehicle">Vehicle</Select.Option>
+              <Select.Option value="pedestrian">Pedestrian</Select.Option>
+              <Select.Option value="mixed">Mixed</Select.Option>
             </Select>
           </Form.Item>
 

@@ -205,6 +205,25 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  // Security alarm commands
+  async sendAlarmStart(deviceId: string, alertId: string): Promise<void> {
+    this.logger.warn(`>>> SENDING ALARM START to device ${deviceId} for alert ${alertId}`);
+    await this.publish(`gate/${deviceId}/alarm`, {
+      action: 'START',
+      alertId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  async sendAlarmStop(deviceId: string, alertId: string): Promise<void> {
+    this.logger.log(`>>> SENDING ALARM STOP to device ${deviceId} for alert ${alertId}`);
+    await this.publish(`gate/${deviceId}/alarm`, {
+      action: 'STOP',
+      alertId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   getConnectionStatus(): boolean {
     return this.isConnected;
   }

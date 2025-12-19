@@ -14,9 +14,11 @@ import { VisitorPass } from '@database/entities/visitor-pass.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
 import { AccessPolicy } from '@database/entities/access-policy.entity';
 import { User } from '@database/entities/user.entity';
+import { Tenant } from '@database/entities/tenant.entity';
 import { GatesModule } from '../gates/gates.module';
 import { AccessEventsModule } from '../access-events/access-events.module';
 import { MqttModule } from '../mqtt/mqtt.module';
+import { SecurityAlertModule } from '../security-alert/security-alert.module';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { MqttModule } from '../mqtt/mqtt.module';
       AccessEvent,
       AccessPolicy,
       User,
+      Tenant,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -41,6 +44,7 @@ import { MqttModule } from '../mqtt/mqtt.module';
     GatesModule,
     AccessEventsModule,
     MqttModule,
+    SecurityAlertModule,
   ],
   controllers: [SimulatorController],
   providers: [SimulatorService, SimulatorGateway],

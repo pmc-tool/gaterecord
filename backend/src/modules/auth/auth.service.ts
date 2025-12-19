@@ -60,6 +60,11 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role,
         tenantId: user.tenantId,
+        tenant: user.tenant ? {
+          id: user.tenant.id,
+          name: user.tenant.name,
+          slug: user.tenant.slug,
+        } : null,
       },
     };
   }
@@ -93,6 +98,11 @@ export class AuthService {
         lastName: tokenEntity.user.lastName,
         role: tokenEntity.user.role,
         tenantId: tokenEntity.user.tenantId,
+        tenant: tokenEntity.user.tenant ? {
+          id: tokenEntity.user.tenant.id,
+          name: tokenEntity.user.tenant.name,
+          slug: tokenEntity.user.tenant.slug,
+        } : null,
       },
     };
   }
@@ -197,13 +207,21 @@ export class AuthService {
       throw new ConflictException('Building name already registered');
     }
 
-    // Find subscription plan
-    const plan = await this.subscriptionPlanRepository.findOne({
-      where: { name: signupDto.planName.toLowerCase() },
-    });
+    // Find subscription plan (case-insensitive)
+    const plans = await this.subscriptionPlanRepository.find({ where: { isActive: true } });
+    const plan = plans.find(p => p.name.toLowerCase() === signupDto.planName.toLowerCase());
 
     if (!plan) {
-      throw new BadRequestException('Invalid subscription plan');
+      // Default to the first available plan if not found
+      const defaultPlan = plans[0];
+      if (!defaultPlan) {
+        throw new BadRequestException('No subscription plans available');
+      }
+      // Use the default plan
+      console.log(`Plan "${signupDto.planName}" not found, using default: ${defaultPlan.name}`);
+      var selectedPlan = defaultPlan;
+    } else {
+      var selectedPlan = plan;
     }
 
     // Generate slug from building name
@@ -220,7 +238,7 @@ export class AuthService {
       contactPhone: signupDto.phone,
       address: signupDto.buildingAddress,
       status: TenantStatus.TRIAL, // Start with trial, payment would make it ACTIVE
-      subscriptionPlanId: plan.id,
+      subscriptionPlanId: selectedPlan.id,
       subscriptionExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14-day trial
       settings: {
         paymentInfo: signupDto.paymentInfo,
@@ -261,6 +279,11 @@ export class AuthService {
         lastName: savedUser.lastName,
         role: savedUser.role,
         tenantId: savedUser.tenantId,
+        tenant: {
+          id: savedTenant.id,
+          name: savedTenant.name,
+          slug: savedTenant.slug,
+        },
       },
     };
   }

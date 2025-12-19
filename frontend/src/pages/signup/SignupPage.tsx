@@ -192,7 +192,13 @@ export default function SignupPage() {
             />
           )}
 
-          <Form form={form} layout="vertical" size="large" preserve={true}>
+          <Form
+            form={form}
+            layout="vertical"
+            size="large"
+            preserve={true}
+            validateTrigger={['onChange', 'onBlur']}
+          >
             {/* Step 1: Select Plan */}
             {currentStep === 0 && (
               <div>
@@ -261,6 +267,7 @@ export default function SignupPage() {
                   <Form.Item
                     name="firstName"
                     label="First Name"
+                    hasFeedback
                     rules={[{ required: true, message: 'Please enter your first name' }]}
                   >
                     <Input prefix={<UserOutlined />} placeholder="John" />
@@ -269,6 +276,7 @@ export default function SignupPage() {
                   <Form.Item
                     name="lastName"
                     label="Last Name"
+                    hasFeedback
                     rules={[{ required: true, message: 'Please enter your last name' }]}
                   >
                     <Input prefix={<UserOutlined />} placeholder="Doe" />
@@ -278,6 +286,7 @@ export default function SignupPage() {
                 <Form.Item
                   name="email"
                   label="Email"
+                  hasFeedback
                   rules={[
                     { required: true, message: 'Please enter your email' },
                     { type: 'email', message: 'Please enter a valid email' },
@@ -296,6 +305,7 @@ export default function SignupPage() {
                 <Form.Item
                   name="password"
                   label="Password"
+                  hasFeedback
                   rules={[
                     { required: true, message: 'Please enter a password' },
                     { min: 8, message: 'Password must be at least 8 characters' },
@@ -308,6 +318,7 @@ export default function SignupPage() {
                   name="confirmPassword"
                   label="Confirm Password"
                   dependencies={['password']}
+                  hasFeedback
                   rules={[
                     { required: true, message: 'Please confirm your password' },
                     ({ getFieldValue }) => ({
@@ -336,6 +347,7 @@ export default function SignupPage() {
                 <Form.Item
                   name="buildingName"
                   label="Building / Property Name"
+                  hasFeedback
                   rules={[{ required: true, message: 'Please enter your building name' }]}
                 >
                   <Input prefix={<HomeOutlined />} placeholder="Sunrise Apartments" />

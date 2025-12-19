@@ -13,6 +13,8 @@ import { VehiclesModule } from './modules/vehicles/vehicles.module';
 import { MqttModule } from './modules/mqtt/mqtt.module';
 import { RfidModule } from './modules/rfid/rfid.module';
 import { VisitorPassModule } from './modules/visitor-pass/visitor-pass.module';
+import { NotificationModule } from './modules/notification/notification.module';
+import { SecurityAlertModule } from './modules/security-alert/security-alert.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -46,6 +48,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     MqttModule,
     RfidModule,
     VisitorPassModule,
+    NotificationModule,
+    SecurityAlertModule,
   ],
   controllers: [],
   providers: [
