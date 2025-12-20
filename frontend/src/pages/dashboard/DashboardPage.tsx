@@ -2,11 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Row,
   Col,
-  Card,
-  Statistic,
   Table,
   Tag,
-  Typography,
   Spin,
   Progress,
   Alert,
@@ -15,6 +12,7 @@ import {
   Tooltip,
   Button,
   notification,
+  Avatar,
 } from 'antd';
 import {
   GatewayOutlined,
@@ -32,6 +30,11 @@ import {
   AlertOutlined,
   SoundOutlined,
   ExclamationCircleOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
+  SafetyCertificateOutlined,
+  CloudOutlined,
+  CalendarOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useGateStore } from '../../store/gateStore';
@@ -64,7 +67,6 @@ interface AlertStats {
   today: number;
 }
 
-const { Title, Text } = Typography;
 
 const priorityColors: Record<string, string> = {
   low: 'blue',
@@ -72,6 +74,47 @@ const priorityColors: Record<string, string> = {
   high: 'red',
   critical: 'magenta',
 };
+
+// Stat Card Component
+interface StatCardProps {
+  title: string;
+  value: number | string;
+  prefix?: React.ReactNode;
+  suffix?: string;
+  trend?: number;
+  trendLabel?: string;
+  color: string;
+  bgColor: string;
+  precision?: number;
+}
+
+function StatCard({ title, value, prefix, suffix, trend, trendLabel, color, bgColor, precision = 0 }: StatCardProps) {
+  return (
+    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200">
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <p className="text-gray-500 text-sm font-medium mb-1">{title}</p>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-gray-900">
+              {typeof value === 'number' ? value.toLocaleString(undefined, { minimumFractionDigits: precision, maximumFractionDigits: precision }) : value}
+            </span>
+            {suffix && <span className="text-gray-500 text-sm">{suffix}</span>}
+          </div>
+          {trend !== undefined && (
+            <div className={`flex items-center gap-1 mt-2 text-xs font-medium ${trend >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {trend >= 0 ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+              <span>{Math.abs(trend)}%</span>
+              {trendLabel && <span className="text-gray-400 ml-1">{trendLabel}</span>}
+            </div>
+          )}
+        </div>
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${bgColor}`}>
+          <span className={`text-xl ${color}`}>{prefix}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Security Alerts Dashboard Section Component
 function SecurityAlertsDashboard() {
@@ -108,7 +151,6 @@ function SecurityAlertsDashboard() {
 
     loadData();
 
-    // Subscribe to real-time security alerts
     const unsubNew = socketService.on<SecurityAlert>('security:alert:new', (data) => {
       notification.error({
         message: (
@@ -224,8 +266,7 @@ function SecurityAlertsDashboard() {
   const hasActiveAlerts = alerts.length > 0;
 
   return (
-    <div className="mb-6">
-      {/* Active Alert Banner */}
+    <div className="mb-8">
       {buzzerActive && (
         <Alert
           type="error"
@@ -241,81 +282,75 @@ function SecurityAlertsDashboard() {
         />
       )}
 
-      <div className="flex justify-between items-center mb-3">
-        <Text strong className="text-lg flex items-center gap-2">
-          <AlertOutlined style={{ color: hasActiveAlerts ? '#ff4d4f' : undefined }} />
-          Security Alerts
-          {hasActiveAlerts && (
-            <Badge count={alerts.length} style={{ backgroundColor: '#ff4d4f' }} />
-          )}
-        </Text>
-        <Button size="small" onClick={() => navigate('/security-alerts')}>
-          View All
-        </Button>
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${hasActiveAlerts ? 'bg-red-100' : 'bg-gray-100'}`}>
+            <AlertOutlined className={`text-lg ${hasActiveAlerts ? 'text-red-600' : 'text-gray-600'}`} />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              Security Alerts
+              {hasActiveAlerts && (
+                <Badge count={alerts.length} style={{ backgroundColor: '#ff4d4f' }} />
+              )}
+            </h3>
+            <p className="text-xs text-gray-500">Real-time security monitoring</p>
+          </div>
+        </div>
+        <Button onClick={() => navigate('/security-alerts')}>View All</Button>
       </div>
 
       <Row gutter={[16, 16]}>
-        {/* Stats Cards */}
         <Col xs={12} sm={6}>
-          <Card
-            size="small"
-            className={hasActiveAlerts ? 'border-red-400 bg-red-50' : ''}
-            style={hasActiveAlerts ? { animation: 'pulse 2s infinite' } : {}}
-          >
-            <Statistic
-              title="Active"
-              value={stats?.active || 0}
-              valueStyle={{ color: (stats?.active || 0) > 0 ? '#ff4d4f' : '#52c41a', fontSize: 24 }}
-              prefix={<ExclamationCircleOutlined />}
-            />
-          </Card>
+          <StatCard
+            title="Active"
+            value={stats?.active || 0}
+            prefix={<ExclamationCircleOutlined />}
+            color={(stats?.active || 0) > 0 ? 'text-red-600' : 'text-green-600'}
+            bgColor={(stats?.active || 0) > 0 ? 'bg-red-100' : 'bg-green-100'}
+          />
         </Col>
         <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="Acknowledged"
-              value={stats?.acknowledged || 0}
-              valueStyle={{ color: '#faad14', fontSize: 24 }}
-            />
-          </Card>
+          <StatCard
+            title="Acknowledged"
+            value={stats?.acknowledged || 0}
+            prefix={<ClockCircleOutlined />}
+            color="text-amber-600"
+            bgColor="bg-amber-100"
+          />
         </Col>
         <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="Resolved Today"
-              value={stats?.resolved || 0}
-              valueStyle={{ color: '#52c41a', fontSize: 24 }}
-            />
-          </Card>
+          <StatCard
+            title="Resolved Today"
+            value={stats?.resolved || 0}
+            prefix={<CheckCircleOutlined />}
+            color="text-green-600"
+            bgColor="bg-green-100"
+          />
         </Col>
         <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="Total Today"
-              value={stats?.today || 0}
-              valueStyle={{ fontSize: 24 }}
-            />
-          </Card>
+          <StatCard
+            title="Total Today"
+            value={stats?.today || 0}
+            prefix={<HistoryOutlined />}
+            color="text-blue-600"
+            bgColor="bg-blue-100"
+          />
         </Col>
 
-        {/* Active Alerts List */}
         {hasActiveAlerts && (
           <Col span={24}>
-            <Card
-              size="small"
-              className="border-red-400"
-              title={
-                <span className="flex items-center gap-2 text-red-600">
-                  <WarningOutlined className="animate-pulse" />
-                  Active Alerts - Immediate Attention Required
-                </span>
-              }
-            >
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-red-700 font-semibold mb-3">
+                <WarningOutlined className="animate-pulse" />
+                Active Alerts - Immediate Attention Required
+              </div>
               <List
                 size="small"
                 dataSource={alerts.slice(0, 5)}
                 renderItem={(alert) => (
                   <List.Item
+                    className="!border-red-100"
                     actions={[
                       <Button
                         key="ack"
@@ -328,12 +363,7 @@ function SecurityAlertsDashboard() {
                     ]}
                   >
                     <List.Item.Meta
-                      avatar={
-                        <Badge
-                          status="processing"
-                          color="red"
-                        />
-                      }
+                      avatar={<Badge status="processing" color="red" />}
                       title={
                         <span className="flex items-center gap-2">
                           <Tag color={priorityColors[alert.priority]}>{alert.priority.toUpperCase()}</Tag>
@@ -341,7 +371,7 @@ function SecurityAlertsDashboard() {
                         </span>
                       }
                       description={
-                        <span className="text-xs">
+                        <span className="text-xs text-gray-500">
                           {alert.gateName} - {dayjs(alert.createdAt).format('HH:mm:ss')}
                         </span>
                       }
@@ -349,17 +379,10 @@ function SecurityAlertsDashboard() {
                   </List.Item>
                 )}
               />
-            </Card>
+            </div>
           </Col>
         )}
       </Row>
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.7; }
-        }
-      `}</style>
     </div>
   );
 }
@@ -374,7 +397,7 @@ const stateColors: Record<GateState, string> = {
   [GateState.MANUAL_OVERRIDE]: 'purple',
 };
 
-interface SuperAdminDashboard {
+interface SuperAdminDashboardData {
   mrr: number;
   arr: number;
   totalRevenue: number;
@@ -396,9 +419,62 @@ interface SuperAdminDashboard {
   tenantsAtLimit: { id: string; name: string; limitType: string; current: number; max: number }[];
 }
 
+// Dashboard Header Component
+function DashboardHeader({ userName, role }: { userName: string; role: string }) {
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
+
+  return (
+    <div className="mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {getGreeting()}, {userName}
+          </h1>
+          <p className="text-gray-500 mt-1 flex items-center gap-2">
+            <CalendarOutlined />
+            {dayjs().format('dddd, MMMM D, YYYY')}
+            <span className="text-gray-300">|</span>
+            <span className="capitalize">{role.replace('_', ' ')}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 rounded-full">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            System Online
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Section Header Component
+function SectionHeader({ icon, title, subtitle, action }: { icon: React.ReactNode; title: string; subtitle?: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex justify-between items-center mb-4">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white">
+          {icon}
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+          {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+}
+
 // Super Admin Dashboard Component
 function SuperAdminDashboard() {
-  const [data, setData] = useState<SuperAdminDashboard | null>(null);
+  const { user } = useAuthStore();
+  const [data, setData] = useState<SuperAdminDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -437,280 +513,324 @@ function SuperAdminDashboard() {
 
   return (
     <div>
-      <Title level={4} className="mb-6">
-        Super Admin Dashboard
-      </Title>
+      <DashboardHeader
+        userName={user?.firstName || 'Admin'}
+        role={user?.role || 'super_admin'}
+      />
 
-      {/* Security Alerts Section */}
       <SecurityAlertsDashboard />
 
       {/* Financial Metrics */}
-      <div className="mb-6">
-        <Text strong className="text-lg mb-3 block">Financial Overview</Text>
+      <div className="mb-8">
+        <SectionHeader
+          icon={<DollarOutlined />}
+          title="Financial Overview"
+          subtitle="Revenue and growth metrics"
+        />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Monthly Recurring Revenue"
-                value={data.mrr}
-                prefix={<DollarOutlined />}
-                precision={2}
-                valueStyle={{ color: '#52c41a' }}
-              />
-              <div className="mt-2">
-                <Text type="secondary">MRR</Text>
-              </div>
-            </Card>
+            <StatCard
+              title="Monthly Recurring Revenue"
+              value={data.mrr}
+              prefix={<DollarOutlined />}
+              color="text-green-600"
+              bgColor="bg-green-100"
+              precision={2}
+            />
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Annual Recurring Revenue"
-                value={data.arr}
-                prefix={<DollarOutlined />}
-                precision={2}
-                valueStyle={{ color: '#1890ff' }}
-              />
-              <div className="mt-2">
-                <Text type="secondary">ARR (MRR x 12)</Text>
-              </div>
-            </Card>
+            <StatCard
+              title="Annual Recurring Revenue"
+              value={data.arr}
+              prefix={<DollarOutlined />}
+              color="text-blue-600"
+              bgColor="bg-blue-100"
+              precision={2}
+            />
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Revenue Growth"
-                value={data.revenueGrowth}
-                prefix={data.revenueGrowth >= 0 ? <RiseOutlined /> : <FallOutlined />}
-                suffix="%"
-                precision={1}
-                valueStyle={{ color: data.revenueGrowth >= 0 ? '#52c41a' : '#ff4d4f' }}
-              />
-              <div className="mt-2">
-                <Text type="secondary">vs last month</Text>
-              </div>
-            </Card>
+            <StatCard
+              title="Revenue Growth"
+              value={`${data.revenueGrowth >= 0 ? '+' : ''}${data.revenueGrowth.toFixed(1)}%`}
+              prefix={data.revenueGrowth >= 0 ? <RiseOutlined /> : <FallOutlined />}
+              color={data.revenueGrowth >= 0 ? 'text-green-600' : 'text-red-600'}
+              bgColor={data.revenueGrowth >= 0 ? 'bg-green-100' : 'bg-red-100'}
+              suffix="vs last month"
+            />
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="New This Month"
-                value={data.newTenantsThisMonth}
-                prefix={<BuildOutlined />}
-                valueStyle={{ color: '#722ed1' }}
-              />
-              <div className="mt-2">
-                <Text type="secondary">New buildings</Text>
-              </div>
-            </Card>
+            <StatCard
+              title="New Buildings"
+              value={data.newTenantsThisMonth}
+              prefix={<BuildOutlined />}
+              color="text-purple-600"
+              bgColor="bg-purple-100"
+              suffix="this month"
+            />
           </Col>
         </Row>
       </div>
 
       {/* Platform Overview */}
-      <div className="mb-6">
-        <Text strong className="text-lg mb-3 block">Platform Overview</Text>
+      <div className="mb-8">
+        <SectionHeader
+          icon={<CloudOutlined />}
+          title="Platform Overview"
+          subtitle="System-wide statistics"
+        />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Total Buildings"
-                value={data.totalTenants}
-                prefix={<BuildOutlined />}
-              />
-              <div className="mt-3">
-                <div className="flex justify-between text-xs">
-                  <span><Badge color="green" /> Active: {data.activeTenants}</span>
-                  <span><Badge color="blue" /> Trial: {data.trialTenants}</span>
+            <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="text-gray-500 text-sm font-medium">Total Buildings</p>
+                  <span className="text-2xl font-bold text-gray-900">{data.totalTenants}</span>
                 </div>
+                <div className="w-12 h-12 rounded-xl bg-indigo-100 flex items-center justify-center">
+                  <BuildOutlined className="text-xl text-indigo-600" />
+                </div>
+              </div>
+              <div className="flex gap-3 text-xs">
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                  {data.activeTenants} Active
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  {data.trialTenants} Trial
+                </span>
                 {data.suspendedTenants > 0 && (
-                  <div className="text-xs mt-1">
-                    <Badge color="red" /> Suspended: {data.suspendedTenants}
-                  </div>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                    {data.suspendedTenants} Suspended
+                  </span>
                 )}
               </div>
-            </Card>
+            </div>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Total Users"
-                value={data.totalUsers}
-                prefix={<TeamOutlined />}
-              />
-              <div className="mt-3 text-xs">
-                <UserOutlined /> {data.totalResidents} residents
+            <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="text-gray-500 text-sm font-medium">Total Users</p>
+                  <span className="text-2xl font-bold text-gray-900">{data.totalUsers}</span>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-cyan-100 flex items-center justify-center">
+                  <TeamOutlined className="text-xl text-cyan-600" />
+                </div>
               </div>
-            </Card>
+              <div className="flex items-center gap-1 text-xs text-gray-500">
+                <UserOutlined />
+                {data.totalResidents} residents registered
+              </div>
+            </div>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Total Gates"
-                value={data.totalGates}
-                prefix={<GatewayOutlined />}
-              />
-              <div className="mt-3">
-                <Progress
-                  percent={data.totalGates > 0 ? Math.round((data.onlineGates / data.totalGates) * 100) : 0}
-                  size="small"
-                  format={() => `${data.onlineGates} online`}
-                  status={data.onlineGates === data.totalGates ? 'success' : 'normal'}
-                />
+            <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <p className="text-gray-500 text-sm font-medium">Total Gates</p>
+                  <span className="text-2xl font-bold text-gray-900">{data.totalGates}</span>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-orange-100 flex items-center justify-center">
+                  <GatewayOutlined className="text-xl text-orange-600" />
+                </div>
               </div>
-            </Card>
+              <Progress
+                percent={data.totalGates > 0 ? Math.round((data.onlineGates / data.totalGates) * 100) : 0}
+                size="small"
+                format={() => <span className="text-xs">{data.onlineGates} online</span>}
+                strokeColor={{ '0%': '#10b981', '100%': '#059669' }}
+              />
+            </div>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Card className="h-full">
-              <Statistic
-                title="Access Events Today"
-                value={data.totalEventsToday}
-                prefix={<ThunderboltOutlined />}
-                valueStyle={{ color: '#faad14' }}
-              />
-              <div className="mt-3 text-xs">
-                <HistoryOutlined /> {data.totalEventsThisMonth.toLocaleString()} this month
+            <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="text-gray-500 text-sm font-medium">Events Today</p>
+                  <span className="text-2xl font-bold text-gray-900">{data.totalEventsToday.toLocaleString()}</span>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
+                  <ThunderboltOutlined className="text-xl text-amber-600" />
+                </div>
               </div>
-            </Card>
+              <div className="flex items-center gap-1 text-xs text-gray-500">
+                <HistoryOutlined />
+                {data.totalEventsThisMonth.toLocaleString()} this month
+              </div>
+            </div>
           </Col>
         </Row>
       </div>
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[24, 24]}>
         {/* Plan Distribution */}
         <Col xs={24} lg={12}>
-          <Card title="Revenue by Plan" className="h-full">
-            <Table
-              dataSource={data.planDistribution}
-              rowKey="planName"
-              pagination={false}
-              size="small"
-              columns={[
-                {
-                  title: 'Plan',
-                  dataIndex: 'planName',
-                  key: 'planName',
-                  render: (name: string) => <Text strong>{name}</Text>,
-                },
-                {
-                  title: 'Subscribers',
-                  dataIndex: 'count',
-                  key: 'count',
-                  align: 'center',
-                  render: (count: number) => <Tag color="blue">{count}</Tag>,
-                },
-                {
-                  title: 'MRR',
-                  dataIndex: 'revenue',
-                  key: 'revenue',
-                  align: 'right',
-                  render: (revenue: number) => (
-                    <Text strong style={{ color: '#52c41a' }}>
-                      ${revenue.toFixed(2)}
-                    </Text>
-                  ),
-                },
-              ]}
-            />
-          </Card>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
+            <div className="p-5 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+                  <DollarOutlined />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Revenue by Plan</h3>
+                  <p className="text-xs text-gray-500">Monthly recurring revenue breakdown</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-5">
+              <Table
+                dataSource={data.planDistribution}
+                rowKey="planName"
+                pagination={false}
+                size="small"
+                className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
+                columns={[
+                  {
+                    title: 'PLAN',
+                    dataIndex: 'planName',
+                    key: 'planName',
+                    render: (name: string) => (
+                      <span className="font-medium text-gray-900">{name}</span>
+                    ),
+                  },
+                  {
+                    title: 'SUBSCRIBERS',
+                    dataIndex: 'count',
+                    key: 'count',
+                    align: 'center',
+                    render: (count: number) => (
+                      <Tag color="blue" className="rounded-full">{count}</Tag>
+                    ),
+                  },
+                  {
+                    title: 'MRR',
+                    dataIndex: 'revenue',
+                    key: 'revenue',
+                    align: 'right',
+                    render: (revenue: number) => (
+                      <span className="font-semibold text-green-600">
+                        ${revenue.toFixed(2)}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          </div>
         </Col>
 
         {/* Recent Tenants */}
         <Col xs={24} lg={12}>
-          <Card title="Recent Buildings" className="h-full">
-            <List
-              size="small"
-              dataSource={data.recentTenants}
-              renderItem={(tenant) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={
-                      <span className="flex items-center gap-2">
-                        {tenant.name}
-                        <Tag color={statusColors[tenant.status]}>{tenant.status}</Tag>
-                      </span>
-                    }
-                    description={
-                      <span className="text-xs">
-                        {tenant.planName} - {dayjs(tenant.createdAt).format('MMM D, YYYY')}
-                      </span>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          </Card>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
+            <div className="p-5 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white">
+                  <BuildOutlined />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Recent Buildings</h3>
+                  <p className="text-xs text-gray-500">Newly registered properties</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-5">
+              <List
+                size="small"
+                dataSource={data.recentTenants}
+                renderItem={(tenant) => (
+                  <List.Item className="!px-0">
+                    <div className="flex items-center gap-3 w-full">
+                      <Avatar
+                        size={40}
+                        className="bg-gradient-to-br from-blue-500 to-indigo-600"
+                        icon={<BuildOutlined />}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-gray-900 truncate">{tenant.name}</span>
+                          <Tag color={statusColors[tenant.status]} className="rounded-full text-xs">
+                            {tenant.status}
+                          </Tag>
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          {tenant.planName} · {dayjs(tenant.createdAt).format('MMM D, YYYY')}
+                        </p>
+                      </div>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </div>
+          </div>
         </Col>
       </Row>
 
       {/* Alerts Section */}
       {(data.expiringTrials.length > 0 || data.tenantsAtLimit.length > 0) && (
-        <div className="mt-6">
-          <Text strong className="text-lg mb-3 block">Alerts & Warnings</Text>
-          <Row gutter={[16, 16]}>
+        <div className="mt-8">
+          <SectionHeader
+            icon={<WarningOutlined />}
+            title="Alerts & Warnings"
+            subtitle="Items requiring attention"
+          />
+          <Row gutter={[24, 24]}>
             {data.expiringTrials.length > 0 && (
               <Col xs={24} lg={12}>
-                <Card
-                  title={
-                    <span className="flex items-center gap-2">
-                      <ClockCircleOutlined style={{ color: '#faad14' }} />
-                      Expiring Trials
-                    </span>
-                  }
-                  className="border-yellow-300"
-                >
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
+                  <div className="flex items-center gap-2 text-amber-700 font-semibold mb-4">
+                    <ClockCircleOutlined />
+                    Expiring Trials
+                  </div>
                   <List
                     size="small"
                     dataSource={data.expiringTrials}
                     renderItem={(trial) => (
-                      <List.Item>
-                        <div className="flex justify-between w-full">
-                          <Text>{trial.name}</Text>
-                          <Tag color={trial.daysLeft <= 2 ? 'red' : 'orange'}>
+                      <List.Item className="!border-amber-200 !px-0">
+                        <div className="flex justify-between w-full items-center">
+                          <span className="font-medium text-gray-700">{trial.name}</span>
+                          <Tag color={trial.daysLeft <= 2 ? 'red' : 'orange'} className="rounded-full">
                             {trial.daysLeft} day{trial.daysLeft !== 1 ? 's' : ''} left
                           </Tag>
                         </div>
                       </List.Item>
                     )}
                   />
-                </Card>
+                </div>
               </Col>
             )}
 
             {data.tenantsAtLimit.length > 0 && (
               <Col xs={24} lg={12}>
-                <Card
-                  title={
-                    <span className="flex items-center gap-2">
-                      <WarningOutlined style={{ color: '#ff4d4f' }} />
-                      Approaching Limits
-                    </span>
-                  }
-                  className="border-red-300"
-                >
+                <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+                  <div className="flex items-center gap-2 text-red-700 font-semibold mb-4">
+                    <WarningOutlined />
+                    Approaching Limits
+                  </div>
                   <List
                     size="small"
                     dataSource={data.tenantsAtLimit}
                     renderItem={(tenant) => (
-                      <List.Item>
-                        <div className="flex justify-between w-full items-center">
+                      <List.Item className="!border-red-200 !px-0">
+                        <div className="flex justify-between w-full items-center gap-4">
                           <div>
-                            <Text>{tenant.name}</Text>
-                            <Text type="secondary" className="ml-2">({tenant.limitType})</Text>
+                            <span className="font-medium text-gray-700">{tenant.name}</span>
+                            <span className="text-gray-400 text-xs ml-2">({tenant.limitType})</span>
                           </div>
                           <Tooltip title={`${tenant.current} of ${tenant.max} used`}>
                             <Progress
                               percent={Math.round((tenant.current / tenant.max) * 100)}
                               size="small"
                               style={{ width: 100 }}
-                              status={tenant.current >= tenant.max ? 'exception' : 'normal'}
+                              strokeColor={tenant.current >= tenant.max ? '#ef4444' : '#f59e0b'}
                             />
                           </Tooltip>
                         </div>
                       </List.Item>
                     )}
                   />
-                </Card>
+                </div>
               </Col>
             )}
           </Row>
@@ -720,9 +840,10 @@ function SuperAdminDashboard() {
   );
 }
 
-// Regular Dashboard Component (for other users)
+// Regular Dashboard Component
 function RegularDashboard() {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const { gates, fetchGates, isLoading } = useGateStore();
   const showSecurityAlerts = [UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user?.role as UserRole);
   const [stats, setStats] = useState<EventsStats | null>(null);
@@ -761,39 +882,50 @@ function RegularDashboard() {
   };
 
   const onlineGates = gates.filter((g) => g.isOnline).length;
+  const successRate = stats?.totalEvents ? Math.round((stats.allowedCount / stats.totalEvents) * 100) : 0;
 
   const eventColumns = [
     {
-      title: 'Time',
+      title: 'TIME',
       dataIndex: 'timestamp',
       key: 'timestamp',
-      render: (ts: string) => new Date(ts).toLocaleTimeString(),
-    },
-    {
-      title: 'Gate',
-      dataIndex: 'gateName',
-      key: 'gateName',
-    },
-    {
-      title: 'Method',
-      dataIndex: 'method',
-      key: 'method',
-      render: (method: string) => (
-        <Tag>{method.replace('_', ' ').toUpperCase()}</Tag>
+      width: 100,
+      render: (ts: string) => (
+        <span className="text-gray-600 font-mono text-xs">
+          {new Date(ts).toLocaleTimeString()}
+        </span>
       ),
     },
     {
-      title: 'Subject',
-      dataIndex: 'subjectName',
-      key: 'subjectName',
-      render: (name: string) => name || '-',
+      title: 'GATE',
+      dataIndex: 'gateName',
+      key: 'gateName',
+      render: (name: string) => <span className="font-medium">{name}</span>,
     },
     {
-      title: 'Result',
+      title: 'METHOD',
+      dataIndex: 'method',
+      key: 'method',
+      render: (method: string) => (
+        <Tag className="rounded-full text-xs">{method.replace('_', ' ').toUpperCase()}</Tag>
+      ),
+    },
+    {
+      title: 'SUBJECT',
+      dataIndex: 'subjectName',
+      key: 'subjectName',
+      render: (name: string) => name || <span className="text-gray-400">—</span>,
+    },
+    {
+      title: 'RESULT',
       dataIndex: 'result',
       key: 'result',
+      width: 100,
       render: (result: AccessResult) => (
-        <Tag color={result === AccessResult.ALLOWED ? 'success' : 'error'}>
+        <Tag
+          color={result === AccessResult.ALLOWED ? 'success' : 'error'}
+          className="rounded-full"
+        >
           {result.toUpperCase()}
         </Tag>
       ),
@@ -802,32 +934,39 @@ function RegularDashboard() {
 
   const gateColumns = [
     {
-      title: 'Name',
+      title: 'NAME',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string) => <span className="font-medium">{name}</span>,
     },
     {
-      title: 'Type',
+      title: 'TYPE',
       dataIndex: 'type',
       key: 'type',
-      render: (type: string) => <Tag>{type.toUpperCase()}</Tag>,
-    },
-    {
-      title: 'State',
-      dataIndex: 'state',
-      key: 'state',
-      render: (state: GateState) => (
-        <Tag color={stateColors[state]}>{state}</Tag>
+      render: (type: string) => (
+        <Tag className="rounded-full text-xs">{type.toUpperCase()}</Tag>
       ),
     },
     {
-      title: 'Status',
+      title: 'STATE',
+      dataIndex: 'state',
+      key: 'state',
+      render: (state: GateState) => (
+        <Tag color={stateColors[state]} className="rounded-full">{state}</Tag>
+      ),
+    },
+    {
+      title: 'STATUS',
       dataIndex: 'isOnline',
       key: 'isOnline',
+      width: 100,
       render: (online: boolean) => (
-        <Tag color={online ? 'success' : 'error'}>
-          {online ? 'Online' : 'Offline'}
-        </Tag>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`}></span>
+          <span className={online ? 'text-green-600' : 'text-red-600'}>
+            {online ? 'Online' : 'Offline'}
+          </span>
+        </div>
       ),
     },
   ];
@@ -842,83 +981,127 @@ function RegularDashboard() {
 
   return (
     <div>
-      <Title level={4} className="mb-6">
-        Dashboard
-      </Title>
+      <DashboardHeader
+        userName={user?.firstName || 'User'}
+        role={user?.role || 'user'}
+      />
 
-      {/* Security Alerts Section - Only for admins and security */}
       {showSecurityAlerts && <SecurityAlertsDashboard />}
 
-      <Row gutter={[16, 16]} className="mb-6">
+      {/* Stats Cards */}
+      <Row gutter={[16, 16]} className="mb-8">
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Total Gates"
-              value={gates.length}
-              prefix={<GatewayOutlined />}
-            />
-          </Card>
+          <StatCard
+            title="Total Gates"
+            value={gates.length}
+            prefix={<GatewayOutlined />}
+            color="text-blue-600"
+            bgColor="bg-blue-100"
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Online Gates"
-              value={onlineGates}
-              valueStyle={{ color: '#52c41a' }}
-              prefix={<CheckCircleOutlined />}
-            />
-          </Card>
+          <StatCard
+            title="Online Gates"
+            value={onlineGates}
+            prefix={<CheckCircleOutlined />}
+            color="text-green-600"
+            bgColor="bg-green-100"
+            suffix={`of ${gates.length}`}
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Today's Events"
-              value={stats?.totalEvents || 0}
-              prefix={<HistoryOutlined />}
-            />
-          </Card>
+          <StatCard
+            title="Today's Events"
+            value={stats?.totalEvents || 0}
+            prefix={<HistoryOutlined />}
+            color="text-purple-600"
+            bgColor="bg-purple-100"
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Access Granted"
-              value={stats?.allowedCount || 0}
-              valueStyle={{ color: '#52c41a' }}
-              suffix={`/ ${stats?.deniedCount || 0} denied`}
+          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <p className="text-gray-500 text-sm font-medium">Success Rate</p>
+                <span className="text-2xl font-bold text-gray-900">{successRate}%</span>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+                <SafetyCertificateOutlined className="text-xl text-emerald-600" />
+              </div>
+            </div>
+            <Progress
+              percent={successRate}
+              size="small"
+              showInfo={false}
+              strokeColor={{ '0%': '#10b981', '100%': '#059669' }}
             />
-          </Card>
+            <div className="flex justify-between text-xs text-gray-500 mt-2">
+              <span>{stats?.allowedCount || 0} allowed</span>
+              <span>{stats?.deniedCount || 0} denied</span>
+            </div>
+          </div>
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[24, 24]}>
         <Col xs={24} lg={12}>
-          <Card title="Gates Overview" className="h-full">
-            <Table
-              dataSource={gates}
-              columns={gateColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-            />
-          </Card>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white">
+                  <GatewayOutlined />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Gates Overview</h3>
+                  <p className="text-xs text-gray-500">All registered gates</p>
+                </div>
+              </div>
+              <Button size="small" onClick={() => navigate('/gates')}>View All</Button>
+            </div>
+            <div className="p-5">
+              <Table
+                dataSource={gates}
+                columns={gateColumns}
+                rowKey="id"
+                pagination={false}
+                size="small"
+                className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
+              />
+            </div>
+          </div>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="Recent Access Events" className="h-full">
-            <Table
-              dataSource={recentEvents}
-              columns={eventColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-            />
-          </Card>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white">
+                  <HistoryOutlined />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Recent Access Events</h3>
+                  <p className="text-xs text-gray-500">Latest gate activity</p>
+                </div>
+              </div>
+              <Button size="small" onClick={() => navigate('/events')}>View All</Button>
+            </div>
+            <div className="p-5">
+              <Table
+                dataSource={recentEvents}
+                columns={eventColumns}
+                rowKey="id"
+                pagination={false}
+                size="small"
+                className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
+              />
+            </div>
+          </div>
         </Col>
       </Row>
     </div>
   );
 }
 
-// Main Dashboard Page - shows different content based on user role
+// Main Dashboard Page
 export function DashboardPage() {
   const { user } = useAuthStore();
 
