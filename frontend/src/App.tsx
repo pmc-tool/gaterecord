@@ -13,6 +13,8 @@ import ResidentsPage from './pages/admin/ResidentsPage';
 import VehiclesPage from './pages/admin/VehiclesPage';
 import SubscriptionsPage from './pages/admin/SubscriptionsPage';
 import PlansManagementPage from './pages/admin/PlansManagementPage';
+import DevicesPage from './pages/admin/DevicesPage';
+import FirmwareManagementPage from './pages/admin/FirmwareManagementPage';
 import MyVisitorsPage from './pages/visitors/MyVisitorsPage';
 import VisitorPassPage from './pages/public/VisitorPassPage';
 import ReportUnauthorizedPage from './pages/public/ReportUnauthorizedPage';
@@ -72,6 +74,8 @@ function App() {
           <Route path="admin/tenants" element={<TenantsPage />} />
           <Route path="admin/subscriptions" element={<SubscriptionsPage />} />
           <Route path="admin/plans" element={<PlansManagementPage />} />
+          <Route path="admin/devices" element={<DevicesPage />} />
+          <Route path="admin/firmware" element={<FirmwareManagementPage />} />
           <Route path="admin/residents" element={<ResidentsPage />} />
           <Route path="admin/vehicles" element={<VehiclesPage />} />
           <Route path="visitors" element={<MyVisitorsPage />} />

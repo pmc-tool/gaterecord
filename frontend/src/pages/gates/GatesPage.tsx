@@ -32,9 +32,20 @@ interface Gate {
   status: string;
   isOnline: boolean;
   hardwareId?: string;
+  deviceName?: string;
   tenantId: string;
   tenant?: { name: string };
   createdAt: string;
+}
+
+interface Device {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  gateId?: string;
+  gateName?: string;
+  status: string;
+  tenantId: string;
 }
 
 const gateStatusColors: Record<string, string> = {
@@ -53,6 +64,7 @@ export default function GatesPage() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingGate, setEditingGate] = useState<Gate | null>(null);
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [form] = Form.useForm();
 
   const fetchGates = async () => {
@@ -76,20 +88,47 @@ export default function GatesPage() {
     }
   };
 
+  const fetchDevices = async () => {
+    try {
+      const response = await api.get('/devices');
+      setDevices(response.data);
+    } catch (error) {
+      console.error('Failed to fetch devices');
+    }
+  };
+
   useEffect(() => {
     fetchGates();
     fetchTenants();
+    fetchDevices();
   }, []);
 
   const handleCreate = () => {
     setEditingGate(null);
     form.resetFields();
+    fetchDevices(); // Refresh devices list
     setModalVisible(true);
   };
 
-  const handleEdit = (gate: Gate) => {
+  const handleEdit = async (gate: Gate) => {
     setEditingGate(gate);
-    form.setFieldsValue(gate);
+    // Refresh devices and get latest list
+    try {
+      const response = await api.get('/devices');
+      const latestDevices = response.data as Device[];
+      setDevices(latestDevices);
+      // Find the device linked to this gate
+      const linkedDevice = latestDevices.find((d: Device) => d.gateId === gate.id);
+      form.setFieldsValue({
+        ...gate,
+        deviceId: linkedDevice?.deviceId || gate.hardwareId,
+      });
+    } catch {
+      form.setFieldsValue({
+        ...gate,
+        deviceId: gate.hardwareId,
+      });
+    }
     setModalVisible(true);
   };
 
@@ -103,18 +142,46 @@ export default function GatesPage() {
     }
   };
 
-  const handleSubmit = async (values: Partial<Gate>) => {
+  const handleSubmit = async (values: Partial<Gate> & { deviceId?: string }) => {
     try {
+      const { deviceId, ...gateValues } = values;
+
       if (editingGate) {
         // Don't send tenantId on update - it's not allowed
-        const { tenantId, ...updateValues } = values;
+        const { tenantId, ...updateValues } = gateValues;
         await api.patch(`/gates/${editingGate.id}`, updateValues);
+
+        // Handle device linking/unlinking
+        if (deviceId) {
+          // Find the device and link it to this gate
+          const device = devices.find(d => d.deviceId === deviceId);
+          if (device) {
+            await api.patch(`/devices/${device.id}`, { gateId: editingGate.id });
+          }
+        } else if (editingGate.hardwareId) {
+          // Unlink the current device
+          const linkedDevice = devices.find(d => d.deviceId === editingGate.hardwareId);
+          if (linkedDevice) {
+            await api.patch(`/devices/${linkedDevice.id}`, { gateId: null });
+          }
+        }
+
         message.success('Gate updated successfully');
       } else {
-        await api.post('/gates', values);
+        const newGate = await api.post('/gates', gateValues);
+
+        // Link device to newly created gate
+        if (deviceId) {
+          const device = devices.find(d => d.deviceId === deviceId);
+          if (device) {
+            await api.patch(`/devices/${device.id}`, { gateId: newGate.data.id });
+          }
+        }
+
         message.success('Gate created successfully');
       }
       setModalVisible(false);
+      fetchDevices(); // Refresh devices to get updated linkage
       fetchGates();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
@@ -162,13 +229,17 @@ export default function GatesPage() {
       ),
     },
     {
-      title: 'Hardware ID',
-      dataIndex: 'hardwareId',
-      key: 'hardwareId',
-      render: (hardwareId: string) =>
-        hardwareId ? (
-          <Tooltip title="ESP32 Device ID (MAC Address)">
-            <Tag color="geekblue">{hardwareId}</Tag>
+      title: 'Device',
+      dataIndex: 'deviceName',
+      key: 'device',
+      render: (_: unknown, record: Gate) =>
+        record.deviceName ? (
+          <Tooltip title={`Hardware ID: ${record.hardwareId}`}>
+            <Tag color="geekblue">{record.deviceName}</Tag>
+          </Tooltip>
+        ) : record.hardwareId ? (
+          <Tooltip title="Device registered but name not set">
+            <Tag color="orange">{record.hardwareId}</Tag>
           </Tooltip>
         ) : (
           <Tag color="default">Not linked</Tag>
@@ -283,15 +354,28 @@ export default function GatesPage() {
           </Form.Item>
 
           <Form.Item
-            name="hardwareId"
-            label="Hardware ID (ESP32)"
-            tooltip="Enter the ESP32 device MAC address (shown on device OLED at startup)"
+            name="deviceId"
+            label="Link Device"
+            tooltip="Select a registered device to link to this gate"
           >
-            <Input
-              placeholder="e.g., AABBCCDDEEFF"
-              maxLength={12}
-              style={{ fontFamily: 'monospace' }}
-            />
+            <Select
+              placeholder="Select a device to link"
+              allowClear
+              showSearch
+              optionFilterProp="children"
+            >
+              {devices
+                .filter(device => {
+                  // Show devices that are either unlinked or linked to the current gate
+                  return !device.gateId || device.gateId === editingGate?.id;
+                })
+                .map((device) => (
+                  <Select.Option key={device.deviceId} value={device.deviceId}>
+                    {device.deviceName} ({device.deviceId})
+                    {device.gateId && device.gateId === editingGate?.id && ' - Currently linked'}
+                  </Select.Option>
+                ))}
+            </Select>
           </Form.Item>
 
           <Form.Item className="mb-0 text-right">

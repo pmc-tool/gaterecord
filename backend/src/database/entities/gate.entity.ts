@@ -28,8 +28,8 @@ export class Gate extends BaseEntity {
   @Column()
   name: string;
 
-  @Column({ name: 'hardware_id', nullable: true, unique: true })
-  hardwareId: string; // ESP32 device ID (MAC address or custom ID)
+  @Column({ name: 'hardware_id', type: 'varchar', nullable: true, unique: true })
+  hardwareId: string | null; // ESP32 device ID (MAC address or custom ID)
 
   @Column({ type: 'enum', enum: GateType })
   type: GateType;

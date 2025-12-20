@@ -15,6 +15,7 @@ import { RfidModule } from './modules/rfid/rfid.module';
 import { VisitorPassModule } from './modules/visitor-pass/visitor-pass.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { SecurityAlertModule } from './modules/security-alert/security-alert.module';
+import { DevicesModule } from './modules/devices/devices.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -50,6 +51,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     VisitorPassModule,
     NotificationModule,
     SecurityAlertModule,
+    DevicesModule,
   ],
   controllers: [],
   providers: [

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventsGateway } from './events.gateway';
 import { SecurityAlert } from '@database/entities/security-alert.entity';
+import { DeviceStatus } from '@database/entities/device-config.entity';
 
 @Injectable()
 export class GatewayService {
@@ -116,6 +117,121 @@ export class GatewayService {
     this.broadcastToTenant(tenantId, 'security:buzzer:stop', {
       alertId,
       action: 'stop',
+      timestamp: new Date(),
+    });
+  }
+
+  // ==================== Device Status Events ====================
+
+  /**
+   * Broadcast when a device comes online
+   */
+  broadcastDeviceOnline(
+    tenantId: string,
+    deviceId: string,
+    deviceName: string,
+    gateId?: string,
+  ): void {
+    this.logger.log(`Device ${deviceId} (${deviceName}) is now online`);
+
+    this.broadcastToTenant(tenantId, 'device:status', {
+      deviceId,
+      deviceName,
+      gateId,
+      status: DeviceStatus.ONLINE,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Broadcast when a device goes offline
+   */
+  broadcastDeviceOffline(
+    tenantId: string,
+    deviceId: string,
+    deviceName: string,
+    gateId?: string,
+  ): void {
+    this.logger.warn(`Device ${deviceId} (${deviceName}) went offline`);
+
+    this.broadcastToTenant(tenantId, 'device:status', {
+      deviceId,
+      deviceName,
+      gateId,
+      status: DeviceStatus.OFFLINE,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Broadcast device heartbeat/metrics update
+   */
+  broadcastDeviceHeartbeat(
+    tenantId: string,
+    deviceId: string,
+    metrics: {
+      firmwareVersion?: string;
+      wifiSignalStrength?: number;
+      uptime?: number;
+      freeHeap?: number;
+      ipAddress?: string;
+    },
+  ): void {
+    this.broadcastToTenant(tenantId, 'device:heartbeat', {
+      deviceId,
+      ...metrics,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Broadcast OTA update progress
+   */
+  broadcastOtaProgress(
+    tenantId: string,
+    deviceId: string,
+    updateId: string,
+    status: string,
+    progress?: number,
+  ): void {
+    this.logger.log(`OTA update ${updateId}: ${status} (${progress || 0}%)`);
+
+    this.broadcastToTenant(tenantId, 'device:ota:progress', {
+      deviceId,
+      updateId,
+      status,
+      progress: progress || 0,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Broadcast device paired/claimed
+   */
+  broadcastDevicePaired(
+    tenantId: string,
+    deviceId: string,
+    deviceName: string,
+    gateId?: string,
+  ): void {
+    this.logger.log(`Device ${deviceId} paired successfully`);
+
+    this.broadcastToTenant(tenantId, 'device:paired', {
+      deviceId,
+      deviceName,
+      gateId,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Broadcast device removed/unpaired
+   */
+  broadcastDeviceRemoved(tenantId: string, deviceId: string): void {
+    this.logger.log(`Device ${deviceId} removed`);
+
+    this.broadcastToTenant(tenantId, 'device:removed', {
+      deviceId,
       timestamp: new Date(),
     });
   }

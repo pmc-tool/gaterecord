@@ -1,3 +1,9 @@
+// Polyfill for crypto.randomUUID in Node.js < 19
+import * as cryptoNode from 'crypto';
+if (typeof globalThis.crypto === 'undefined') {
+  (globalThis as unknown as { crypto: typeof cryptoNode }).crypto = cryptoNode;
+}
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -22,8 +28,11 @@ async function bootstrap() {
   );
 
   // CORS
+  const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'];
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || ['http://localhost:5173', 'http://localhost:3000'],
+    origin: corsOrigins,
     credentials: true,
   });
 

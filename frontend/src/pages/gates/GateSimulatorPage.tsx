@@ -37,6 +37,7 @@ import { useGateStore } from '../../store/gateStore';
 import { simulatorService, TriggerEventDto } from '../../services/simulator.service';
 import { socketService } from '../../services/socket.service';
 import { GateState, SimulatorEvent, SimulatorFeedback, SensorHealthStatus } from '../../types';
+import api from '../../services/api';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -182,6 +183,44 @@ export function GateSimulatorPage() {
       return;
     }
     triggerEvent(SimulatorEvent.QR_VERIFIED, { qrToken: tokenToUse });
+  };
+
+  // Send real command to hardware via MQTT
+  const sendHardwareCommand = async (action: 'OPEN' | 'CLOSE' | 'STOP') => {
+    if (!selectedGateId) {
+      message.error('Please select a gate first');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const response = await api.post(`/gates/${selectedGateId}/control`, { action });
+      if (response.data.success) {
+        message.success(response.data.message);
+        addEventLog({
+          eventId: Date.now().toString(),
+          action: `HARDWARE_${action}`,
+          success: true,
+          message: response.data.message,
+          gateId: selectedGateId,
+          gateState: selectedGate?.state || GateState.CLOSED,
+        });
+      } else {
+        message.warning(response.data.message);
+        addEventLog({
+          eventId: Date.now().toString(),
+          action: `HARDWARE_${action}`,
+          success: false,
+          message: response.data.message,
+          gateId: selectedGateId,
+          gateState: selectedGate?.state || GateState.CLOSED,
+        });
+      }
+    } catch (error) {
+      message.error('Failed to send hardware command');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const toggleOnlineStatus = async (online: boolean) => {
@@ -401,6 +440,37 @@ export function GateSimulatorPage() {
 
           <Card title="Manual Controls" className="mb-4">
             <Space direction="vertical" className="w-full">
+              {/* Real Hardware Control - only show if gate has hardware linked */}
+              {selectedGate?.hardwareId && (
+                <>
+                  <Text strong className="text-green-600">Hardware Control (Real Device)</Text>
+                  <Space className="w-full justify-center">
+                    <Button
+                      type="primary"
+                      icon={<UpOutlined />}
+                      onClick={() => sendHardwareCommand('OPEN')}
+                      loading={isProcessing}
+                      disabled={!selectedGateId}
+                      size="large"
+                      style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
+                    >
+                      Open Gate
+                    </Button>
+                    <Button
+                      danger
+                      icon={<DownOutlined />}
+                      onClick={() => sendHardwareCommand('CLOSE')}
+                      loading={isProcessing}
+                      disabled={!selectedGateId}
+                      size="large"
+                    >
+                      Close Gate
+                    </Button>
+                  </Space>
+                  <Divider className="my-2" />
+                  <Text type="secondary" className="text-xs">Simulation (Software Only)</Text>
+                </>
+              )}
               <Space className="w-full justify-center">
                 <Button
                   type="primary"
@@ -410,7 +480,7 @@ export function GateSimulatorPage() {
                   disabled={!selectedGateId}
                   size="large"
                 >
-                  Manual Open
+                  {selectedGate?.hardwareId ? 'Simulate Open' : 'Manual Open'}
                 </Button>
                 <Button
                   danger
@@ -420,7 +490,7 @@ export function GateSimulatorPage() {
                   disabled={!selectedGateId}
                   size="large"
                 >
-                  Manual Close
+                  {selectedGate?.hardwareId ? 'Simulate Close' : 'Manual Close'}
                 </Button>
               </Space>
             </Space>

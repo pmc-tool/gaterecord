@@ -90,6 +90,8 @@ export interface Gate {
   isOnline: boolean;
   lastHeartbeatAt?: string;
   tenantId: string;
+  hardwareId?: string;
+  deviceName?: string;
   createdAt: string;
   updatedAt: string;
 }

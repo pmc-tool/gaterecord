@@ -6,6 +6,7 @@ import { GateController as GateControllerEntity, ControllerStatus } from '@datab
 import { SensorStatus, SensorType, SensorHealthStatus } from '@database/entities/sensor-status.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { User, UserRole } from '@database/entities/user.entity';
+import { DeviceConfig } from '@database/entities/device-config.entity';
 import { CreateGateDto, UpdateGateDto, GateHealthDto } from './dto/gate.dto';
 
 @Injectable()
@@ -19,6 +20,8 @@ export class GatesService {
     private sensorRepository: Repository<SensorStatus>,
     @InjectRepository(Tenant)
     private tenantRepository: Repository<Tenant>,
+    @InjectRepository(DeviceConfig)
+    private deviceConfigRepository: Repository<DeviceConfig>,
   ) {}
 
   async create(dto: CreateGateDto, currentUser: User): Promise<Gate> {
@@ -104,14 +107,33 @@ export class GatesService {
     await this.sensorRepository.save(sensors);
   }
 
-  async findAll(currentUser: User): Promise<Gate[]> {
+  async findAll(currentUser: User): Promise<(Gate & { deviceName?: string })[]> {
     const query = this.gateRepository.createQueryBuilder('gate');
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       query.where('gate.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
     }
 
-    return query.leftJoinAndSelect('gate.controller', 'controller').getMany();
+    const gates = await query.leftJoinAndSelect('gate.controller', 'controller').getMany();
+
+    // Fetch device names for gates with hardware IDs
+    const hardwareIds = gates.filter(g => g.hardwareId).map(g => g.hardwareId);
+
+    if (hardwareIds.length > 0) {
+      const devices = await this.deviceConfigRepository
+        .createQueryBuilder('device')
+        .where('device.device_id IN (:...ids)', { ids: hardwareIds })
+        .getMany();
+
+      const deviceMap = new Map(devices.map(d => [d.deviceId, d.deviceName]));
+
+      return gates.map(gate => ({
+        ...gate,
+        deviceName: gate.hardwareId ? deviceMap.get(gate.hardwareId) : undefined,
+      }));
+    }
+
+    return gates;
   }
 
   async findOne(id: string, currentUser: User): Promise<Gate> {

@@ -12,3 +12,7 @@ export * from './access-event.entity';
 export * from './access-policy.entity';
 export * from './refresh-token.entity';
 export * from './security-alert.entity';
+export * from './setup-code.entity';
+export * from './device-config.entity';
+export * from './firmware-version.entity';
+export * from './ota-update.entity';

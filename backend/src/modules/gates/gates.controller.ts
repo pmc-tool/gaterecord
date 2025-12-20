@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   ParseUUIDPipe,
+  Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { GatesService } from './gates.service';
@@ -16,13 +17,19 @@ import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { User, UserRole } from '@database/entities/user.entity';
+import { MqttService } from '../mqtt/mqtt.service';
 
 @ApiTags('Gates')
 @ApiBearerAuth()
 @Controller('gates')
 @UseGuards(RolesGuard)
 export class GatesController {
-  constructor(private readonly gatesService: GatesService) {}
+  private readonly logger = new Logger(GatesController.name);
+
+  constructor(
+    private readonly gatesService: GatesService,
+    private readonly mqttService: MqttService,
+  ) {}
 
   @Post()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
@@ -71,5 +78,30 @@ export class GatesController {
   @ApiResponse({ status: 204, description: 'Gate deleted' })
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
     return this.gatesService.remove(id, user);
+  }
+
+  @Post(':id/control')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
+  @ApiOperation({ summary: 'Control gate (open/close)' })
+  @ApiResponse({ status: 200, description: 'Command sent' })
+  async control(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { action: 'OPEN' | 'CLOSE' | 'STOP' },
+    @CurrentUser() user: User,
+  ) {
+    const gate = await this.gatesService.findOne(id, user);
+
+    if (!gate.hardwareId) {
+      return { success: false, message: 'No hardware device linked to this gate' };
+    }
+
+    // Remove colons from hardware ID for MQTT topic
+    const deviceId = gate.hardwareId.replace(/:/g, '');
+
+    this.logger.log(`Sending ${dto.action} command to gate ${gate.name} (device: ${deviceId})`);
+
+    await this.mqttService.sendGateCommand(deviceId, dto.action);
+
+    return { success: true, message: `${dto.action} command sent to ${gate.name}` };
   }
 }

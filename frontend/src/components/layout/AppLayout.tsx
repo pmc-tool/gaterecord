@@ -14,6 +14,8 @@ import {
   UsergroupAddOutlined,
   DollarOutlined,
   AlertOutlined,
+  DesktopOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
@@ -111,7 +113,17 @@ export function AppLayout() {
             key: '/admin/tenants',
             label: 'Buildings',
           },
+          {
+            key: '/admin/firmware',
+            icon: <CloudUploadOutlined />,
+            label: 'Firmware',
+          },
         ] : []),
+        {
+          key: '/admin/devices',
+          icon: <DesktopOutlined />,
+          label: 'Devices',
+        },
         {
           key: '/admin/residents',
           label: 'Residents',

@@ -7,6 +7,7 @@ import { GateController as GateControllerEntity, ControllerStatus } from '@datab
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { AccessEvent, AccessMethod, AccessResult, AccessSubjectType } from '@database/entities/access-event.entity';
+import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { RfidRegistrationService } from '../rfid/rfid-registration.service';
 
@@ -60,6 +61,8 @@ export class DeviceGatewayService implements OnModuleInit {
     private rfidCardRepository: Repository<RfidCard>,
     @InjectRepository(AccessEvent)
     private accessEventRepository: Repository<AccessEvent>,
+    @InjectRepository(DeviceConfig)
+    private deviceConfigRepository: Repository<DeviceConfig>,
   ) {}
 
   onModuleInit() {
@@ -88,12 +91,24 @@ export class DeviceGatewayService implements OnModuleInit {
     this.logger.log('Device message handlers registered');
   }
 
+  private normalizeDeviceId(deviceId: string): string {
+    // Convert A4F00F60BB70 to A4:F0:0F:60:BB:70
+    const clean = deviceId.replace(/:/g, '').toUpperCase();
+    if (clean.length === 12) {
+      return clean.match(/.{2}/g)!.join(':');
+    }
+    return deviceId;
+  }
+
   private async handleDeviceStatus(deviceId: string, payload: DeviceStatusPayload): Promise<void> {
     this.logger.debug(`Device status from ${deviceId}: ${JSON.stringify(payload)}`);
 
+    // Normalize device ID (convert A4F00F60BB70 to A4:F0:0F:60:BB:70)
+    const normalizedId = this.normalizeDeviceId(deviceId);
+
     // Find gate by device ID (MAC address or custom ID)
     const gate = await this.gateRepository.findOne({
-      where: { hardwareId: deviceId },
+      where: { hardwareId: normalizedId },
       relations: ['controller'],
     });
 
@@ -120,10 +135,23 @@ export class DeviceGatewayService implements OnModuleInit {
       await this.controllerRepository.save(gate.controller);
     }
 
+    // Also update device_configs table for the Devices management page
+    const deviceConfig = await this.deviceConfigRepository.findOne({
+      where: { deviceId: normalizedId },
+    });
+    if (deviceConfig) {
+      deviceConfig.status = DeviceStatus.ONLINE;
+      deviceConfig.lastSeenAt = new Date();
+      deviceConfig.wifiSignalStrength = payload.wifiStrength;
+      deviceConfig.uptime = payload.uptimeSeconds;
+      deviceConfig.firmwareVersion = payload.firmwareVersion;
+      await this.deviceConfigRepository.save(deviceConfig);
+    }
+
     // Notify frontend via WebSocket
     this.gatewayService.broadcastToTenant(gate.tenantId, 'device:status', {
       gateId: gate.id,
-      deviceId,
+      deviceId: normalizedId,
       isOnline: true,
       state: gate.state,
     });
