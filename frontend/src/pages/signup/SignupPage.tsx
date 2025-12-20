@@ -22,7 +22,6 @@ import {
   CreditCardOutlined,
   CheckCircleOutlined,
 } from '@ant-design/icons';
-import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
 
@@ -166,9 +165,8 @@ export default function SignupPage() {
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center gap-2 mb-4">
-            <img src="/logo.png" alt="GateGuard" className="h-12 w-12 object-contain" />
-            <span className="text-2xl font-bold text-gray-900">GateGuard</span>
+          <Link to="/" className="inline-flex items-center mb-4">
+            <img src="/logo.png" alt="GateRecord" className="h-14 object-contain" />
           </Link>
           <Title level={2} className="mb-2">Create Your Account</Title>
           <Text type="secondary">Set up your building's gate management system</Text>

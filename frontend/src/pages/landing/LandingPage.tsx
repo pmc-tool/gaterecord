@@ -129,7 +129,7 @@ const pricing = [
 
 const testimonials = [
   {
-    content: "GateGuard transformed our community's security. The RFID system is incredibly reliable, and residents love the convenience. Best investment we've made.",
+    content: "GateRecord transformed our community's security. The RFID system is incredibly reliable, and residents love the convenience. Best investment we've made.",
     author: 'Sarah Johnson',
     role: 'Property Manager',
     company: 'Skyline Residences',
@@ -137,7 +137,7 @@ const testimonials = [
     rating: 5,
   },
   {
-    content: "We manage 15 buildings and GateGuard handles them all seamlessly. The multi-tenant feature is a game-changer. Support team is exceptional.",
+    content: "We manage 15 buildings and GateRecord handles them all seamlessly. The multi-tenant feature is a game-changer. Support team is exceptional.",
     author: 'Michael Chen',
     role: 'Operations Director',
     company: 'Urban Living Properties',
@@ -170,11 +170,8 @@ export default function LandingPage() {
       <header className="fixed inset-x-0 top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100">
         <nav className="flex items-center justify-between p-4 lg:px-8 max-w-7xl mx-auto">
           <div className="flex lg:flex-1">
-            <a href="#" className="-m-1.5 p-1.5 flex items-center gap-2">
-              <img src="/logo.png" alt="GateGuard" className="h-10 w-10 object-contain" />
-              <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                GateGuard
-              </span>
+            <a href="#" className="-m-1.5 p-1.5">
+              <img src="/logo.png" alt="GateRecord" className="h-12 object-contain" />
             </a>
           </div>
           <div className="flex lg:hidden">
@@ -217,9 +214,8 @@ export default function LandingPage() {
         {mobileMenuOpen && (
           <div className="lg:hidden fixed inset-0 z-50 bg-white">
             <div className="flex items-center justify-between p-4">
-              <a href="#" className="-m-1.5 p-1.5 flex items-center gap-2">
-                <img src="/logo.png" alt="GateGuard" className="h-10 w-10 object-contain" />
-                <span className="text-xl font-bold">GateGuard</span>
+              <a href="#" className="-m-1.5 p-1.5">
+                <img src="/logo.png" alt="GateRecord" className="h-12 object-contain" />
               </a>
               <button
                 type="button"
@@ -581,7 +577,7 @@ export default function LandingPage() {
             Ready to secure your property?
           </h2>
           <p className="mt-6 text-lg leading-8 text-blue-100 max-w-2xl mx-auto">
-            Join hundreds of communities using GateGuard to manage access.
+            Join hundreds of communities using GateRecord to manage access.
             Start your free trial today — no credit card required.
           </p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -606,9 +602,8 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 lg:gap-16">
             <div className="col-span-2 md:col-span-1">
-              <div className="flex items-center gap-2 mb-4">
-                <img src="/logo.png" alt="GateGuard" className="h-10 w-10 object-contain" />
-                <span className="text-xl font-bold text-white">GateGuard</span>
+              <div className="mb-4">
+                <img src="/logo.png" alt="GateRecord" className="h-12 object-contain" />
               </div>
               <p className="text-gray-400 text-sm leading-relaxed">
                 Smart gate access control for modern communities. Secure, reliable, and easy to manage.
@@ -647,7 +642,7 @@ export default function LandingPage() {
 
           <div className="mt-16 pt-8 border-t border-gray-800 flex flex-col md:flex-row justify-between items-center gap-4">
             <p className="text-gray-500 text-sm">
-              © {new Date().getFullYear()} GateGuard. All rights reserved.
+              © {new Date().getFullYear()} GateRecord. All rights reserved.
             </p>
             <div className="flex gap-6">
               <a href="#" className="text-gray-500 hover:text-white transition-colors">
