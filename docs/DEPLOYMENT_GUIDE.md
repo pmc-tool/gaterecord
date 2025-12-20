@@ -35,15 +35,95 @@ Complete guide to deploy GateRecord to production with all services.
 ## Prerequisites
 
 - Ubuntu 22.04 LTS server (or similar)
-- Domain name pointing to your server
+- Domain name (e.g., `gaterecord.com`)
 - Minimum 2GB RAM, 2 CPU cores
 - Open ports: 80, 443, 1883 (MQTT), 8883 (MQTT SSL)
 
 ---
 
-## Step 1: Server Setup
+## Step 1: Domain & DNS Setup
 
-### 1.1 Initial Server Configuration
+Before deploying, configure your domain's DNS records.
+
+### 1.1 Required Subdomains
+
+| Subdomain | Purpose | Example |
+|-----------|---------|---------|
+| `@` (root) | Frontend website | `gaterecord.com` |
+| `www` | Frontend (redirect) | `www.gaterecord.com` |
+| `api` | Backend API & WebSocket | `api.gaterecord.com` |
+| `mqtt` | MQTT broker for ESP32 devices | `mqtt.gaterecord.com` |
+
+### 1.2 DNS Records to Create
+
+Go to your domain registrar (GoDaddy, Namecheap, Cloudflare, etc.) and add these DNS records:
+
+| Type | Name | Value | TTL |
+|------|------|-------|-----|
+| A | `@` | `YOUR_SERVER_IP` | 300 |
+| A | `www` | `YOUR_SERVER_IP` | 300 |
+| A | `api` | `YOUR_SERVER_IP` | 300 |
+| A | `mqtt` | `YOUR_SERVER_IP` | 300 |
+
+**Example for `gaterecord.com` with server IP `143.198.45.123`:**
+
+```
+Type    Name    Value              TTL
+A       @       143.198.45.123     300
+A       www     143.198.45.123     300
+A       api     143.198.45.123     300
+A       mqtt    143.198.45.123     300
+```
+
+### 1.3 Verify DNS Propagation
+
+After adding records, verify they're working (may take 5-30 minutes):
+
+```bash
+# Check each subdomain
+nslookup gaterecord.com
+nslookup api.gaterecord.com
+nslookup mqtt.gaterecord.com
+
+# Or use dig
+dig +short gaterecord.com
+dig +short api.gaterecord.com
+dig +short mqtt.gaterecord.com
+```
+
+All should return your server IP.
+
+### 1.4 Final URL Structure
+
+After deployment, your services will be available at:
+
+| Service | URL | Used By |
+|---------|-----|---------|
+| Frontend | `https://gaterecord.com` | Web browsers |
+| API | `https://api.gaterecord.com/api/v1` | Frontend, Mobile apps |
+| WebSocket | `wss://api.gaterecord.com` | Real-time updates |
+| MQTT | `mqtt.gaterecord.com:1883` | ESP32 devices |
+| MQTT SSL | `mqtt.gaterecord.com:8883` | ESP32 devices (secure) |
+
+### 1.5 ESP32 Captive Portal Configuration
+
+When setting up ESP32 devices via the captive portal, users will enter:
+
+| Field | Value |
+|-------|-------|
+| WiFi SSID | Building's WiFi network name |
+| WiFi Password | WiFi password |
+| **MQTT Server** | `mqtt.gaterecord.com` |
+| **MQTT Port** | `1883` (or `8883` for SSL) |
+| Setup Code | Generated from admin dashboard |
+
+> **Tip:** Using the subdomain (`mqtt.gaterecord.com`) instead of IP address allows you to change servers without reconfiguring devices - just update DNS.
+
+---
+
+## Step 2: Server Setup
+
+### 2.1 Initial Server Configuration
 
 ```bash
 # Update system
@@ -60,7 +140,7 @@ sudo ufw allow 8883/tcp  # MQTT SSL
 sudo ufw enable
 ```
 
-### 1.2 Install Docker
+### 2.2 Install Docker
 
 ```bash
 # Install Docker
@@ -78,7 +158,7 @@ docker --version
 docker compose version
 ```
 
-### 1.3 Install Node.js (for building)
+### 2.3 Install Node.js (for building)
 
 ```bash
 # Install Node.js 20 LTS
@@ -92,9 +172,9 @@ npm --version
 
 ---
 
-## Step 2: Clone and Configure
+## Step 3: Clone and Configure
 
-### 2.1 Clone Repository
+### 3.1 Clone Repository
 
 ```bash
 # Create app directory
@@ -106,7 +186,7 @@ cd /opt/gaterecord
 git clone https://github.com/pmc-tool/gaterecord.git .
 ```
 
-### 2.2 Create Environment Files
+### 3.2 Create Environment Files
 
 **Backend Environment** (`/opt/gaterecord/backend/.env`):
 
@@ -171,9 +251,9 @@ EOF
 
 ---
 
-## Step 3: Docker Compose Setup
+## Step 4: Docker Compose Setup
 
-### 3.1 Create Production Docker Compose
+### 4.1 Create Production Docker Compose
 
 ```bash
 cat > /opt/gaterecord/docker-compose.prod.yml << 'EOF'
@@ -258,7 +338,7 @@ networks:
 EOF
 ```
 
-### 3.2 Create Backend Dockerfile
+### 4.2 Create Backend Dockerfile
 
 ```bash
 cat > /opt/gaterecord/backend/Dockerfile << 'EOF'
@@ -303,7 +383,7 @@ CMD ["node", "dist/main.js"]
 EOF
 ```
 
-### 3.3 Create Frontend Dockerfile
+### 4.3 Create Frontend Dockerfile
 
 ```bash
 cat > /opt/gaterecord/frontend/Dockerfile << 'EOF'
@@ -339,7 +419,7 @@ CMD ["nginx", "-g", "daemon off;"]
 EOF
 ```
 
-### 3.4 Create Frontend Nginx Config
+### 4.4 Create Frontend Nginx Config
 
 ```bash
 cat > /opt/gaterecord/frontend/nginx.conf << 'EOF'
@@ -369,9 +449,9 @@ EOF
 
 ---
 
-## Step 4: MQTT Broker Setup
+## Step 5: MQTT Broker Setup
 
-### 4.1 Create Mosquitto Configuration
+### 5.1 Create Mosquitto Configuration
 
 ```bash
 # Create directories
@@ -415,7 +495,7 @@ protocol websockets
 EOF
 ```
 
-### 4.2 Create MQTT Users
+### 5.2 Create MQTT Users
 
 ```bash
 # Create password file (replace YOUR_MQTT_PASSWORD with actual password)
@@ -427,7 +507,7 @@ docker run --rm -v /opt/gaterecord/mosquitto/config:/mosquitto/config \
   eclipse-mosquitto:2 mosquitto_passwd -b /mosquitto/config/passwd device DEVICE_PASSWORD
 ```
 
-### 4.3 Create MQTT ACL
+### 5.3 Create MQTT ACL
 
 ```bash
 cat > /opt/gaterecord/mosquitto/config/acl << 'EOF'
@@ -448,7 +528,7 @@ EOF
 
 ---
 
-## Step 5: SMTP Setup
+## Step 6: SMTP Setup
 
 ### Option A: SendGrid (Recommended for Production)
 
@@ -512,9 +592,9 @@ SMTP_FROM=noreply@gaterecord.local
 
 ---
 
-## Step 6: Nginx Reverse Proxy
+## Step 7: Nginx Reverse Proxy
 
-### 6.1 Create Nginx Configuration
+### 7.1 Create Nginx Configuration
 
 ```bash
 sudo cat > /etc/nginx/sites-available/gaterecord << 'EOF'
@@ -577,7 +657,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 6.2 Setup SSL with Let's Encrypt
+### 7.2 Setup SSL with Let's Encrypt
 
 ```bash
 # Install SSL certificates
@@ -590,9 +670,9 @@ sudo certbot renew --dry-run
 
 ---
 
-## Step 7: Deploy Application
+## Step 8: Deploy Application
 
-### 7.1 Build and Start Services
+### 8.1 Build and Start Services
 
 ```bash
 cd /opt/gaterecord
@@ -612,7 +692,7 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml logs -f
 ```
 
-### 7.2 Run Database Migrations
+### 8.2 Run Database Migrations
 
 ```bash
 # Run migrations
@@ -622,7 +702,7 @@ docker compose -f docker-compose.prod.yml exec backend npm run migration:run
 docker compose -f docker-compose.prod.yml exec backend npm run seed
 ```
 
-### 7.3 Create Super Admin
+### 8.3 Create Super Admin
 
 ```bash
 # Connect to backend container
@@ -634,9 +714,9 @@ npm run seed:admin
 
 ---
 
-## Step 8: ESP32 Firmware Configuration
+## Step 9: ESP32 Firmware Configuration
 
-### 8.1 Update Firmware for Production
+### 9.1 Update Firmware for Production
 
 Edit `firmware/gate_controller/src/main.cpp`:
 
@@ -652,7 +732,7 @@ Edit `firmware/gate_controller/src/main.cpp`:
 // #define MQTT_USE_SSL true
 ```
 
-### 8.2 Build and Flash
+### 9.2 Build and Flash
 
 ```bash
 cd firmware/gate_controller
@@ -665,7 +745,7 @@ pio run
 pio run -t upload
 ```
 
-### 8.3 Device Registration
+### 9.3 Device Registration
 
 1. Power on ESP32
 2. Connect to "GateSetup-XXXXXX" WiFi
@@ -678,9 +758,9 @@ pio run -t upload
 
 ---
 
-## Step 9: SSL for MQTT (Optional but Recommended)
+## Step 10: SSL for MQTT (Optional but Recommended)
 
-### 9.1 Generate Certificates
+### 10.1 Generate Certificates
 
 ```bash
 cd /opt/gaterecord/mosquitto/certs
