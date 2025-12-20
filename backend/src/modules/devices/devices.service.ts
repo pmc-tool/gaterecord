@@ -33,6 +33,11 @@ export class DevicesService {
 
   // Characters for setup code (excluding confusing: 0, O, I, L, 1)
   private readonly CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+  // Normalize device ID by removing colons (MAC address format)
+  private normalizeDeviceId(deviceId: string): string {
+    return deviceId.replace(/:/g, '');
+  }
   private readonly CODE_EXPIRY_MINUTES = 30;
 
   // Rate limiting storage (in production, use Redis)
@@ -217,9 +222,9 @@ export class DevicesService {
         claimedAt: new Date(),
       });
 
-      // Update gate hardware ID
+      // Update gate hardware ID (normalized - no colons)
       if (setupCode.gateId) {
-        await this.gateRepo.update(setupCode.gateId, { hardwareId: dto.deviceId });
+        await this.gateRepo.update(setupCode.gateId, { hardwareId: this.normalizeDeviceId(dto.deviceId) });
       }
 
       return this.buildClaimResponse(setupCode, mqttCreds);
@@ -250,9 +255,9 @@ export class DevicesService {
       claimedAt: new Date(),
     });
 
-    // Update gate hardware ID
+    // Update gate hardware ID (normalized - no colons)
     if (setupCode.gateId) {
-      await this.gateRepo.update(setupCode.gateId, { hardwareId: dto.deviceId });
+      await this.gateRepo.update(setupCode.gateId, { hardwareId: this.normalizeDeviceId(dto.deviceId) });
     }
 
     this.logger.log(`Device ${dto.deviceId} claimed with code ${dto.code}`);
@@ -392,8 +397,8 @@ export class DevicesService {
         throw new NotFoundException('Gate not found');
       }
 
-      // Update gate hardware ID
-      await this.gateRepo.update(dto.gateId, { hardwareId: device.deviceId });
+      // Update gate hardware ID (normalized - no colons)
+      await this.gateRepo.update(dto.gateId, { hardwareId: this.normalizeDeviceId(device.deviceId) });
 
       // Remove hardware ID from old gate
       if (device.gateId && device.gateId !== dto.gateId) {

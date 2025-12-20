@@ -102,7 +102,8 @@
       "Bash(break)",
       "Bash(echo:*)",
       "Bash(done)",
-      "Bash(timeout 12 ~/.platformio/penv/bin/pio device monitor:*)"
+      "Bash(timeout 12 ~/.platformio/penv/bin/pio device monitor:*)",
+      "Bash(if ls /dev/cu.usbserial-0001)"
     ]
   }
 }
