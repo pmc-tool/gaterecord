@@ -501,8 +501,16 @@ void handleCaptivePortalRoot() {
       document.getElementById('resultIcon').textContent = '✓';
       document.getElementById('resultTitle').className = 'result-title success';
       document.getElementById('resultTitle').textContent = 'Setup Complete!';
-      document.getElementById('resultMsg').textContent = 'Your gate is now configured and ready to use. The device will restart automatically.';
-      document.getElementById('retryBtn').style.display = 'none';
+      document.getElementById('resultMsg').innerHTML = 'Your gate is configured and ready!<br><br><b>You can now close this page</b> and connect back to your home WiFi.';
+      document.getElementById('retryBtn').textContent = 'Close';
+      document.getElementById('retryBtn').style.display = 'block';
+      document.getElementById('retryBtn').onclick = function() {
+        window.close();
+        // Fallback for browsers that block window.close()
+        setTimeout(function() {
+          document.body.innerHTML = '<div style="text-align:center;padding:50px;font-family:sans-serif;"><h2>✓ Setup Complete!</h2><p>Please close this tab manually.</p></div>';
+        }, 500);
+      };
     }
 
     function showError(msg) {
