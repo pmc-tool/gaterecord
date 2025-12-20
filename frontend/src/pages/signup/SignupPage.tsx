@@ -167,10 +167,8 @@ export default function SignupPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center gap-2 mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center">
-              <ShieldCheckIcon className="w-7 h-7 text-white" />
-            </div>
-            <span className="text-2xl font-bold text-gray-900">GateRecord</span>
+            <img src="/logo.png" alt="GateGuard" className="h-12 w-12 object-contain" />
+            <span className="text-2xl font-bold text-gray-900">GateGuard</span>
           </Link>
           <Title level={2} className="mb-2">Create Your Account</Title>
           <Text type="secondary">Set up your building's gate management system</Text>

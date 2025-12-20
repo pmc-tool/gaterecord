@@ -170,10 +170,13 @@ export function AppLayout() {
         theme="light"
         className="shadow-sm"
       >
-        <div className="h-16 flex items-center justify-center border-b">
-          <Text strong className="text-lg">
-            {collapsed ? 'GM' : 'Gate Management'}
-          </Text>
+        <div className="h-16 flex items-center justify-center border-b px-2">
+          <img
+            src="/logo.png"
+            alt="Gate Management"
+            className={collapsed ? "h-8 w-8 object-contain" : "h-10 object-contain"}
+          />
+          {!collapsed && <Text strong className="ml-2 text-lg">GateGuard</Text>}
         </div>
         <Menu
           mode="inline"
