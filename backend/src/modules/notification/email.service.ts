@@ -38,10 +38,12 @@ export class EmailService {
       requireTLS: useTLS, // Require TLS upgrade for port 587
       tls: {
         rejectUnauthorized: false, // Accept self-signed certs in development
-        ciphers: 'SSLv3',
+        minVersion: 'TLSv1.2',
       },
       // Only include auth if credentials are provided
       ...(user && pass ? { auth: { user, pass } } : {}),
+      debug: this.configService.get<string>('NODE_ENV') !== 'production', // Enable debug in dev
+      logger: this.configService.get<string>('NODE_ENV') !== 'production', // Enable logging in dev
     } as nodemailer.TransportOptions);
 
     this.logger.log(`Email transporter initialized: ${host}:${port} (secure: ${secure}, requireTLS: ${useTLS})`);
