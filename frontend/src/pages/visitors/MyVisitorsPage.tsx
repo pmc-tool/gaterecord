@@ -213,7 +213,11 @@ export default function MyVisitorsPage() {
     form.resetFields();
     setValidityType(ValidityType.SINGLE_USE);
     setSelectedTenantId(undefined);
-    setResidents([]);
+    // Only clear residents for super admin (they need to select tenant first)
+    // Building admins already have residents loaded for their tenant
+    if (isSuperAdmin) {
+      setResidents([]);
+    }
     setModalVisible(true);
   };
 
