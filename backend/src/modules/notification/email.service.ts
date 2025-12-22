@@ -32,8 +32,11 @@ export class EmailService {
       host,
       port,
       secure, // true = SSL on connect (465), false = plain then upgrade (587)
+      // Enable STARTTLS for port 587
+      requireTLS: port === 587,
       tls: {
         rejectUnauthorized: false, // Accept self-signed certs
+        minVersion: 'TLSv1.2',
       },
       // Only include auth if credentials are provided
       ...(user && pass ? { auth: { user, pass } } : {}),
