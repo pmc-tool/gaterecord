@@ -26,24 +26,20 @@ export class EmailService {
     const user = this.configService.get<string>('SMTP_USER', '');
     const pass = this.configService.get<string>('SMTP_PASS', '');
 
-    // SMTP_SECURE=true  → SSL/TLS (port 465)
-    // SMTP_SECURE=false → STARTTLS (port 587) or plain (port 25/1025)
-    const isProduction = port === 587 || port === 465;
-
+    // SMTP_SECURE=true  → SSL/TLS (port 465) - encrypted from start
+    // SMTP_SECURE=false → STARTTLS (port 587) - upgrades to TLS after connect
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure, // true = SSL on connect (465), false = STARTTLS or plain
-      requireTLS: !secure && isProduction, // Require STARTTLS upgrade for port 587
+      secure, // true = SSL on connect (465), false = plain then upgrade (587)
       tls: {
-        rejectUnauthorized: isProduction, // Verify certs in production
-        minVersion: 'TLSv1.2',
+        rejectUnauthorized: false, // Accept self-signed certs
       },
       // Only include auth if credentials are provided
       ...(user && pass ? { auth: { user, pass } } : {}),
     } as nodemailer.TransportOptions);
 
-    this.logger.log(`Email transporter initialized: ${host}:${port} (secure: ${secure}, requireTLS: ${!secure && isProduction})`);
+    this.logger.log(`Email transporter initialized: ${host}:${port} (secure: ${secure})`);
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
