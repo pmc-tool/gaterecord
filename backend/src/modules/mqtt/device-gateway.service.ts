@@ -92,19 +92,33 @@ export class DeviceGatewayService implements OnModuleInit {
   }
 
   private normalizeDeviceId(deviceId: string): string {
-    // Convert A4F00F60BB70 to A4:F0:0F:60:BB:70
-    const clean = deviceId.replace(/:/g, '').toUpperCase();
-    if (clean.length === 12) {
-      return clean.match(/.{2}/g)!.join(':');
-    }
-    return deviceId;
+    // Remove colons and uppercase - stored in DB without colons
+    return deviceId.replace(/:/g, '').toUpperCase();
   }
 
   private async handleDeviceStatus(deviceId: string, payload: DeviceStatusPayload): Promise<void> {
     this.logger.debug(`Device status from ${deviceId}: ${JSON.stringify(payload)}`);
 
-    // Normalize device ID (convert A4F00F60BB70 to A4:F0:0F:60:BB:70)
+    // Normalize device ID (remove colons, uppercase)
     const normalizedId = this.normalizeDeviceId(deviceId);
+
+    // First, update device_configs table (always do this)
+    const deviceConfig = await this.deviceConfigRepository.findOne({
+      where: [
+        { deviceId: normalizedId },
+        { deviceId: deviceId }, // Also try with original format (with colons)
+      ],
+    });
+
+    if (deviceConfig) {
+      deviceConfig.status = DeviceStatus.ONLINE;
+      deviceConfig.lastSeenAt = new Date();
+      deviceConfig.wifiSignalStrength = payload.wifiStrength;
+      deviceConfig.uptime = payload.uptimeSeconds;
+      deviceConfig.firmwareVersion = payload.firmwareVersion;
+      await this.deviceConfigRepository.save(deviceConfig);
+      this.logger.debug(`Updated device config for ${deviceId}`);
+    }
 
     // Find gate by device ID (MAC address or custom ID)
     const gate = await this.gateRepository.findOne({
@@ -113,6 +127,11 @@ export class DeviceGatewayService implements OnModuleInit {
     });
 
     if (!gate) {
+      // Device is registered but not assigned to a gate - that's okay
+      if (deviceConfig) {
+        this.logger.debug(`Device ${deviceId} online but not assigned to gate`);
+        return;
+      }
       this.logger.warn(`Unknown device: ${deviceId}`);
       return;
     }
@@ -133,19 +152,6 @@ export class DeviceGatewayService implements OnModuleInit {
       gate.controller.firmwareVersion = payload.firmwareVersion;
       gate.controller.lastHeartbeatAt = new Date();
       await this.controllerRepository.save(gate.controller);
-    }
-
-    // Also update device_configs table for the Devices management page
-    const deviceConfig = await this.deviceConfigRepository.findOne({
-      where: { deviceId: normalizedId },
-    });
-    if (deviceConfig) {
-      deviceConfig.status = DeviceStatus.ONLINE;
-      deviceConfig.lastSeenAt = new Date();
-      deviceConfig.wifiSignalStrength = payload.wifiStrength;
-      deviceConfig.uptime = payload.uptimeSeconds;
-      deviceConfig.firmwareVersion = payload.firmwareVersion;
-      await this.deviceConfigRepository.save(deviceConfig);
     }
 
     // Notify frontend via WebSocket
