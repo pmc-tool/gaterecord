@@ -28,9 +28,16 @@ async function bootstrap() {
   );
 
   // CORS
+  const defaultOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+    'https://gaterecord.com',
+    'https://www.gaterecord.com',
+  ];
   const corsOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'];
+    : defaultOrigins;
   app.enableCors({
     origin: corsOrigins,
     credentials: true,
