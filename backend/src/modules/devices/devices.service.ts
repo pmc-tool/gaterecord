@@ -289,13 +289,13 @@ export class DevicesService {
     setupCode: SetupCode,
     mqttCreds: { username: string; password: string },
   ): ClaimResponseDto {
-    const mqttBroker = this.configService.get<string>('MQTT_BROKER_URL', 'mqtt://localhost:1883');
-    const apiBaseUrl = this.configService.get<string>('API_BASE_URL', 'http://localhost:3001');
+    // External MQTT URL for devices (different from internal Docker URL)
+    const mqttExternalHost = this.configService.get<string>('MQTT_EXTERNAL_HOST', 'mqtt.gaterecord.com');
+    const mqttExternalPort = this.configService.get<number>('MQTT_EXTERNAL_PORT', 18883);
+    const apiBaseUrl = this.configService.get<string>('API_BASE_URL', 'https://api.gaterecord.com');
 
-    // Parse broker URL for host and port
-    const brokerMatch = mqttBroker.match(/(?:mqtts?:\/\/)?([^:]+)(?::(\d+))?/);
-    const brokerHost = brokerMatch?.[1] || 'localhost';
-    const brokerPort = parseInt(brokerMatch?.[2] || '1883', 10);
+    const brokerHost = mqttExternalHost;
+    const brokerPort = mqttExternalPort;
 
     return {
       success: true,

@@ -20,6 +20,7 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
@@ -88,8 +89,9 @@ const unsigned long UPDATE_CHECK_INTERVAL = 300000;  // 5 minutes
 const unsigned long SETUP_TIMEOUT = 300000;  // 5 minutes for setup mode
 
 // ==================== OBJECTS ====================
+WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient;
-PubSubClient mqtt(wifiClient);
+PubSubClient mqtt(wifiClientSecure);  // Use secure client for MQTT SSL
 WebServer webServer(80);
 DNSServer dnsServer;
 Preferences preferences;
@@ -943,7 +945,8 @@ void enterNormalMode() {
   // Connect to WiFi
   connectWiFi();
 
-  // Setup MQTT
+  // Setup MQTT with SSL
+  wifiClientSecure.setInsecure();  // Skip certificate verification (or use setCACert for production)
   mqtt.setServer(storedMqttBroker.c_str(), storedMqttPort);
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(1024);
