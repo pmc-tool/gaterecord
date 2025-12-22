@@ -70,7 +70,13 @@ export class FirmwareController {
   }
 
   @Post()
-  @UseInterceptors(FileInterceptor('firmware'))
+  @UseInterceptors(
+    FileInterceptor('firmware', {
+      limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB max
+      },
+    }),
+  )
   @ApiOperation({ summary: 'Upload new firmware version' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
