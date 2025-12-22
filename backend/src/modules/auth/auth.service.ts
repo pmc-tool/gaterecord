@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,9 +11,12 @@ import { Tenant, TenantStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { LoginDto, LoginResponseDto, SignupDto } from './dto/login.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
+import { EmailService } from '../notification/email.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
@@ -25,6 +28,7 @@ export class AuthService {
     private subscriptionPlanRepository: Repository<SubscriptionPlan>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private emailService: EmailService,
   ) {}
 
   async login(loginDto: LoginDto, userAgent?: string, ipAddress?: string): Promise<LoginResponseDto> {
@@ -269,6 +273,17 @@ export class AuthService {
 
     // Generate tokens and auto-login
     const tokens = await this.generateTokens(savedUser, userAgent, ipAddress);
+
+    // Send welcome email (don't wait for it, don't fail signup if email fails)
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+    this.emailService.sendWelcomeEmail(
+      savedUser.email,
+      `${savedUser.firstName} ${savedUser.lastName}`,
+      savedTenant.name,
+      `${frontendUrl}/dashboard`,
+    ).catch((error) => {
+      this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
+    });
 
     return {
       ...tokens,

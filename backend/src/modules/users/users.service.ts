@@ -38,14 +38,16 @@ export class UsersService {
       ...createUserDto,
       email: createUserDto.email.toLowerCase(),
       passwordHash,
-      status: UserStatus.ACTIVE,
+      status: createUserDto.status || UserStatus.ACTIVE,
     });
 
     return this.userRepository.save(user);
   }
 
   async findAll(tenantId: string | null, currentUser: User): Promise<User[]> {
-    const query = this.userRepository.createQueryBuilder('user');
+    const query = this.userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.tenant', 'tenant');
 
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       if (tenantId) {
@@ -55,7 +57,7 @@ export class UsersService {
       query.where('user.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
     }
 
-    return query.getMany();
+    return query.orderBy('user.createdAt', 'DESC').getMany();
   }
 
   async findOne(id: string, currentUser: User): Promise<User> {

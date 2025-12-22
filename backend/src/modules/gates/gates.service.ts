@@ -107,7 +107,7 @@ export class GatesService {
     await this.sensorRepository.save(sensors);
   }
 
-  async findAll(currentUser: User): Promise<(Gate & { deviceName?: string })[]> {
+  async findAll(currentUser: User): Promise<(Gate & { deviceName?: string; deviceStatus?: string })[]> {
     const query = this.gateRepository.createQueryBuilder('gate');
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
@@ -116,7 +116,7 @@ export class GatesService {
 
     const gates = await query.leftJoinAndSelect('gate.controller', 'controller').getMany();
 
-    // Fetch device names for gates with hardware IDs
+    // Fetch device info for gates with hardware IDs
     const hardwareIds = gates.filter(g => g.hardwareId).map(g => g.hardwareId);
 
     if (hardwareIds.length > 0) {
@@ -125,15 +125,27 @@ export class GatesService {
         .where('device.device_id IN (:...ids)', { ids: hardwareIds })
         .getMany();
 
-      const deviceMap = new Map(devices.map(d => [d.deviceId, d.deviceName]));
+      const deviceMap = new Map(devices.map(d => [d.deviceId, { name: d.deviceName, status: d.status }]));
 
-      return gates.map(gate => ({
-        ...gate,
-        deviceName: gate.hardwareId ? deviceMap.get(gate.hardwareId) : undefined,
-      }));
+      return gates.map(gate => {
+        const deviceInfo = gate.hardwareId ? deviceMap.get(gate.hardwareId) : undefined;
+        // Gate is only online if it has a connected device that is online
+        const isReallyOnline = deviceInfo?.status === 'online';
+        return {
+          ...gate,
+          isOnline: isReallyOnline,
+          deviceName: deviceInfo?.name,
+          deviceStatus: deviceInfo?.status,
+        };
+      });
     }
 
-    return gates;
+    // Gates without hardware IDs are offline
+    return gates.map(gate => ({
+      ...gate,
+      isOnline: false,
+      deviceStatus: undefined,
+    }));
   }
 
   async findOne(id: string, currentUser: User): Promise<Gate> {

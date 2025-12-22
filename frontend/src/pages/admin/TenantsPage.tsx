@@ -32,7 +32,7 @@ interface Tenant {
   address?: string;
   contactEmail?: string;
   contactPhone?: string;
-  isActive: boolean;
+  status: 'active' | 'suspended' | 'trial';
   createdAt: string;
   _count?: {
     users: number;
@@ -142,11 +142,21 @@ export default function TenantsPage() {
     },
     {
       title: 'Status',
-      dataIndex: 'isActive',
-      key: 'isActive',
-      render: (isActive: boolean) => (
-        <Tag color={isActive ? 'success' : 'default'}>{isActive ? 'Active' : 'Inactive'}</Tag>
-      ),
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: string) => {
+        const statusColors: Record<string, string> = {
+          active: 'success',
+          suspended: 'error',
+          trial: 'warning',
+        };
+        const statusLabels: Record<string, string> = {
+          active: 'Active',
+          suspended: 'Suspended',
+          trial: 'Trial',
+        };
+        return <Tag color={statusColors[status] || 'default'}>{statusLabels[status] || status}</Tag>;
+      },
     },
     {
       title: 'Created',
@@ -282,8 +292,12 @@ export default function TenantsPage() {
               {selectedTenant.contactPhone || '-'}
             </Descriptions.Item>
             <Descriptions.Item label="Status">
-              <Tag color={selectedTenant.isActive ? 'success' : 'default'}>
-                {selectedTenant.isActive ? 'Active' : 'Inactive'}
+              <Tag color={
+                selectedTenant.status === 'active' ? 'success' :
+                selectedTenant.status === 'trial' ? 'warning' : 'error'
+              }>
+                {selectedTenant.status === 'active' ? 'Active' :
+                 selectedTenant.status === 'trial' ? 'Trial' : 'Suspended'}
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Created">

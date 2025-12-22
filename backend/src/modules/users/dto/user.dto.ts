@@ -38,6 +38,11 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   unit?: string;
+
+  @ApiPropertyOptional({ enum: UserStatus, default: UserStatus.ACTIVE })
+  @IsEnum(UserStatus)
+  @IsOptional()
+  status?: UserStatus;
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {

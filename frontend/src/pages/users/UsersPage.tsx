@@ -30,7 +30,7 @@ interface User {
   firstName: string;
   lastName: string;
   role: string;
-  isActive: boolean;
+  status: 'active' | 'inactive' | 'pending';
   tenantId?: string;
   tenant?: { name: string };
   createdAt: string;
@@ -171,11 +171,21 @@ export default function UsersPage() {
     },
     {
       title: 'Status',
-      dataIndex: 'isActive',
-      key: 'isActive',
-      render: (isActive: boolean) => (
-        <Tag color={isActive ? 'success' : 'default'}>{isActive ? 'Active' : 'Inactive'}</Tag>
-      ),
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: string) => {
+        const statusColors: Record<string, string> = {
+          active: 'success',
+          inactive: 'default',
+          pending: 'warning',
+        };
+        const statusLabels: Record<string, string> = {
+          active: 'Active',
+          inactive: 'Inactive',
+          pending: 'Pending',
+        };
+        return <Tag color={statusColors[status] || 'default'}>{statusLabels[status] || status}</Tag>;
+      },
     },
     {
       title: 'Actions',
@@ -300,10 +310,11 @@ export default function UsersPage() {
             </Select>
           </Form.Item>
 
-          <Form.Item name="isActive" label="Status" initialValue={true}>
+          <Form.Item name="status" label="Status" initialValue="active">
             <Select>
-              <Select.Option value={true}>Active</Select.Option>
-              <Select.Option value={false}>Inactive</Select.Option>
+              <Select.Option value="active">Active</Select.Option>
+              <Select.Option value="inactive">Inactive</Select.Option>
+              <Select.Option value="pending">Pending</Select.Option>
             </Select>
           </Form.Item>
 

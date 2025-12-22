@@ -591,6 +591,22 @@ export class DevicesService {
       deviceIds.push(device.deviceId);
       this.logger.log(`Device ${device.deviceId} marked offline`);
 
+      // Also mark associated gate as offline
+      if (device.gateId) {
+        await this.gateRepo.update(device.gateId, { isOnline: false });
+        this.logger.log(`Gate ${device.gateId} marked offline (device disconnected)`);
+      }
+
+      // Also find gate by hardwareId (in case gateId is not set on device)
+      const normalizedDeviceId = this.normalizeDeviceId(device.deviceId);
+      const gateByHardwareId = await this.gateRepo.findOne({
+        where: { hardwareId: normalizedDeviceId },
+      });
+      if (gateByHardwareId && gateByHardwareId.id !== device.gateId) {
+        await this.gateRepo.update(gateByHardwareId.id, { isOnline: false });
+        this.logger.log(`Gate ${gateByHardwareId.id} marked offline by hardwareId`);
+      }
+
       // Emit device offline event
       this.gatewayService.broadcastDeviceOffline(
         device.tenantId,

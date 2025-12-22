@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateResidentDto {
@@ -28,9 +28,11 @@ export class CreateResidentDto {
   @IsString()
   unit: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Required for super_admin, auto-set for building_admin' })
+  @ValidateIf((o) => o.tenantId !== undefined && o.tenantId !== null && o.tenantId !== '')
   @IsUUID()
-  tenantId: string;
+  @IsOptional()
+  tenantId?: string;
 
   @ApiPropertyOptional()
   @IsBoolean()
@@ -65,6 +67,7 @@ export class UpdateResidentDto {
   unit?: string;
 
   @ApiPropertyOptional()
+  @ValidateIf((o) => o.tenantId !== undefined && o.tenantId !== null && o.tenantId !== '')
   @IsUUID()
   @IsOptional()
   tenantId?: string;

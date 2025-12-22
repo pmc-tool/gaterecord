@@ -316,4 +316,75 @@ export class EmailService {
       return false;
     }
   }
+
+  async sendWelcomeEmail(
+    userEmail: string,
+    userName: string,
+    buildingName: string,
+    loginUrl: string,
+  ): Promise<boolean> {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .header h1 { margin: 0; font-size: 28px; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+          .button { display: inline-block; background: #52c41a; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
+          .info-box { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #1890ff; }
+          .feature-list { list-style: none; padding: 0; }
+          .feature-list li { padding: 10px 0; border-bottom: 1px solid #eee; }
+          .feature-list li:last-child { border-bottom: none; }
+          .feature-list li::before { content: "✓"; color: #52c41a; font-weight: bold; margin-right: 10px; }
+          .footer { text-align: center; color: #888; font-size: 12px; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Welcome to GateRecord!</h1>
+            <p>Your account has been successfully created</p>
+          </div>
+          <div class="content">
+            <p>Hello <strong>${userName}</strong>,</p>
+            <p>Welcome to GateRecord! Your building <strong>${buildingName}</strong> is now set up and ready to use.</p>
+
+            <div class="info-box">
+              <p><strong>What's Next?</strong></p>
+              <ul class="feature-list">
+                <li>Add your gates and configure access points</li>
+                <li>Register residents and their RFID cards</li>
+                <li>Set up visitor management</li>
+                <li>Monitor access events in real-time</li>
+              </ul>
+            </div>
+
+            <div style="text-align: center;">
+              <a href="${loginUrl}" class="button">Go to Dashboard</a>
+            </div>
+
+            <div class="info-box">
+              <p><strong>Need Help?</strong></p>
+              <p>If you have any questions or need assistance getting started, please don't hesitate to contact our support team.</p>
+            </div>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from GateRecord.</p>
+            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: userEmail,
+      subject: `Welcome to GateRecord - ${buildingName}`,
+      html,
+    });
+  }
 }
