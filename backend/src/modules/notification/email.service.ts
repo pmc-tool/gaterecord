@@ -22,23 +22,28 @@ export class EmailService {
   private initializeTransporter() {
     const host = this.configService.get<string>('SMTP_HOST', 'localhost');
     const port = this.configService.get<number>('SMTP_PORT', 1025);
-    const secure = this.configService.get<boolean>('SMTP_SECURE', false);
+    const secure = this.configService.get<boolean>('SMTP_SECURE', false); // true for port 465, false for 587
     const user = this.configService.get<string>('SMTP_USER', '');
     const pass = this.configService.get<string>('SMTP_PASS', '');
+
+    // SMTP_SECURE=true  → SSL/TLS (port 465)
+    // SMTP_SECURE=false → STARTTLS (port 587) or plain (port 25/1025)
+    const isProduction = port === 587 || port === 465;
 
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure: false,
-      // Completely disable TLS/STARTTLS for local development servers like Mailpit
+      secure, // true = SSL on connect (465), false = STARTTLS or plain
+      requireTLS: !secure && isProduction, // Require STARTTLS upgrade for port 587
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: isProduction, // Verify certs in production
+        minVersion: 'TLSv1.2',
       },
       // Only include auth if credentials are provided
       ...(user && pass ? { auth: { user, pass } } : {}),
     } as nodemailer.TransportOptions);
 
-    this.logger.log(`Email transporter initialized: ${host}:${port}`);
+    this.logger.log(`Email transporter initialized: ${host}:${port} (secure: ${secure}, requireTLS: ${!secure && isProduction})`);
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
