@@ -1287,10 +1287,36 @@ void sendHeartbeat() {
 
 // ==================== RFID ====================
 void checkRfid() {
-  if (millis() - lastRfidRead < 2000) return;
+  static unsigned long lastRfidReset = 0;
 
-  if (!rfid.PICC_IsNewCardPresent()) return;
-  if (!rfid.PICC_ReadCardSerial()) return;
+  // Debounce - reduced from 2000ms to 1000ms for faster reads
+  if (millis() - lastRfidRead < 1000) return;
+
+  // Periodically reset RFID antenna for better detection (every 30 seconds)
+  if (millis() - lastRfidReset > 30000) {
+    rfid.PCD_AntennaOff();
+    delay(10);
+    rfid.PCD_AntennaOn();
+    rfid.PCD_SetAntennaGain(rfid.RxGain_max);
+    lastRfidReset = millis();
+  }
+
+  // Try to detect card (with retry)
+  bool cardPresent = false;
+  for (int i = 0; i < 3; i++) {
+    if (rfid.PICC_IsNewCardPresent()) {
+      cardPresent = true;
+      break;
+    }
+    delayMicroseconds(500);
+  }
+  if (!cardPresent) return;
+
+  // Try to read card serial
+  if (!rfid.PICC_ReadCardSerial()) {
+    rfid.PICC_HaltA();
+    return;
+  }
 
   String uid = "";
   for (byte i = 0; i < rfid.uid.size; i++) {
