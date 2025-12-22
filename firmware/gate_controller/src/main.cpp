@@ -80,8 +80,8 @@ const int SERVO_SPEED_DELAY = 15;
 const unsigned long AUTO_CLOSE_DELAY = 5000;
 const int OBSTACLE_DISTANCE_CM = 15;
 const int OBSTACLE_DEBOUNCE_COUNT = 3;
-const bool IR_SENSOR_ENABLED = true;
-const bool ULTRASONIC_ENABLED = true;
+const bool IR_SENSOR_ENABLED = false;   // Disabled - external barriers have their own sensors
+const bool ULTRASONIC_ENABLED = false;  // Disabled - external barriers have their own sensors
 
 // ==================== TIMING ====================
 const unsigned long HEARTBEAT_INTERVAL = 60000;  // 60 seconds
