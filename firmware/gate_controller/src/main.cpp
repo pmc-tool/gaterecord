@@ -81,6 +81,7 @@ const unsigned long AUTO_CLOSE_DELAY = 5000;
 const int OBSTACLE_DISTANCE_CM = 15;
 const int OBSTACLE_DEBOUNCE_COUNT = 3;
 const bool IR_SENSOR_ENABLED = true;    // IR sensor enabled
+const bool IR_SENSOR_ACTIVE_LOW = false; // true=LOW means obstacle, false=HIGH means obstacle
 const bool ULTRASONIC_ENABLED = false;  // Ultrasonic disabled
 
 // ==================== TIMING ====================
@@ -1346,7 +1347,9 @@ void checkObstacleSensors() {
   bool ultrasonicObstacle = false;
 
   if (IR_SENSOR_ENABLED) {
-    irObstacle = digitalRead(IR_SENSOR_PIN) == LOW;
+    // Some IR sensors output LOW when obstacle detected, others output HIGH
+    int reading = digitalRead(IR_SENSOR_PIN);
+    irObstacle = IR_SENSOR_ACTIVE_LOW ? (reading == LOW) : (reading == HIGH);
   }
 
   if (ULTRASONIC_ENABLED && millis() - lastUltrasonicRead > 100) {
