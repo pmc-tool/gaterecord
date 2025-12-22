@@ -35,11 +35,9 @@ async function bootstrap() {
     'https://gaterecord.com',
     'https://www.gaterecord.com',
   ];
-  const corsOrigins = process.env.CORS_ORIGIN
-    ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-    : defaultOrigins;
+
   app.enableCors({
-    origin: corsOrigins,
+    origin: defaultOrigins,
     credentials: true,
   });
 
