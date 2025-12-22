@@ -7,6 +7,7 @@ if (typeof globalThis.crypto === 'undefined') {
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as express from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -15,8 +16,8 @@ async function bootstrap() {
   });
 
   // Increase body size limit for firmware uploads (50MB)
-  app.use(require('express').json({ limit: '50mb' }));
-  app.use(require('express').urlencoded({ limit: '50mb', extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
