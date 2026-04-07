@@ -361,7 +361,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, payloadStr);
   if (error)
-  {
+  { 
     Serial.println("JSON parse error: " + String(error.c_str()));
     return;
   }

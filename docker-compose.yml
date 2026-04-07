@@ -18,16 +18,19 @@ services:
       timeout: 5s
       retries: 5
 
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: gate_mosquitto
+  redis:
+    image: redis:7-alpine
+    container_name: gate_redis
     ports:
-      - '1883:1883'
-      - '9001:9001'
+      - '6379:6379'
     volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   mailpit:
     image: axllent/mailpit
@@ -41,5 +44,4 @@ services:
 
 volumes:
   postgres_data:
-  mosquitto_data:
-  mosquitto_log:
+  redis_data:
