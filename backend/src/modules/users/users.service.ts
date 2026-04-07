@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -27,7 +32,10 @@ export class UsersService {
         throw new ForbiddenException('Cannot create user for another tenant');
       }
       // Building admin can only create certain roles
-      if (createUserDto.role === UserRole.SUPER_ADMIN || createUserDto.role === UserRole.BUILDING_ADMIN) {
+      if (
+        createUserDto.role === UserRole.SUPER_ADMIN ||
+        createUserDto.role === UserRole.BUILDING_ADMIN
+      ) {
         throw new ForbiddenException('Cannot create users with this role');
       }
     }
@@ -83,7 +91,10 @@ export class UsersService {
 
     // Prevent role escalation
     if (updateUserDto.role && currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (updateUserDto.role === UserRole.SUPER_ADMIN || updateUserDto.role === UserRole.BUILDING_ADMIN) {
+      if (
+        updateUserDto.role === UserRole.SUPER_ADMIN ||
+        updateUserDto.role === UserRole.BUILDING_ADMIN
+      ) {
         throw new ForbiddenException('Cannot assign this role');
       }
     }

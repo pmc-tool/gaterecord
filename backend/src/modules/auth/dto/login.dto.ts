@@ -81,7 +81,10 @@ export class SignupDto {
   @IsOptional()
   buildingAddress?: string;
 
-  @ApiProperty({ example: 'starter', description: 'Plan name: starter, professional, or enterprise' })
+  @ApiProperty({
+    example: 'starter',
+    description: 'Plan name: starter, professional, or enterprise',
+  })
   @IsString()
   @IsNotEmpty()
   planName: string;

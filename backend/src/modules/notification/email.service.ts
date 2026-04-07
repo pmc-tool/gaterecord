@@ -47,7 +47,9 @@ export class EmailService {
       logger: this.configService.get<string>('NODE_ENV') !== 'production', // Enable logging in dev
     } as nodemailer.TransportOptions);
 
-    this.logger.log(`Email transporter initialized: ${host}:${port} (secure: ${secure}, requireTLS: ${useTLS})`);
+    this.logger.log(
+      `Email transporter initialized: ${host}:${port} (secure: ${secure}, requireTLS: ${useTLS})`,
+    );
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
@@ -156,7 +158,10 @@ export class EmailService {
   }
 
   private stripHtml(html: string): string {
-    return html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    return html
+      .replace(/<[^>]*>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   async sendVisitorEntryNotification(

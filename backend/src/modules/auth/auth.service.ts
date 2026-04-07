@@ -1,4 +1,10 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -31,7 +37,11 @@ export class AuthService {
     private emailService: EmailService,
   ) {}
 
-  async login(loginDto: LoginDto, userAgent?: string, ipAddress?: string): Promise<LoginResponseDto> {
+  async login(
+    loginDto: LoginDto,
+    userAgent?: string,
+    ipAddress?: string,
+  ): Promise<LoginResponseDto> {
     const user = await this.userRepository.findOne({
       where: { email: loginDto.email.toLowerCase() },
       relations: ['tenant'],
@@ -64,16 +74,22 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role,
         tenantId: user.tenantId,
-        tenant: user.tenant ? {
-          id: user.tenant.id,
-          name: user.tenant.name,
-          slug: user.tenant.slug,
-        } : null,
+        tenant: user.tenant
+          ? {
+              id: user.tenant.id,
+              name: user.tenant.name,
+              slug: user.tenant.slug,
+            }
+          : null,
       },
     };
   }
 
-  async refreshTokens(refreshToken: string, userAgent?: string, ipAddress?: string): Promise<LoginResponseDto> {
+  async refreshTokens(
+    refreshToken: string,
+    userAgent?: string,
+    ipAddress?: string,
+  ): Promise<LoginResponseDto> {
     const tokenEntity = await this.refreshTokenRepository.findOne({
       where: { token: refreshToken, isRevoked: false },
       relations: ['user', 'user.tenant'],
@@ -102,27 +118,23 @@ export class AuthService {
         lastName: tokenEntity.user.lastName,
         role: tokenEntity.user.role,
         tenantId: tokenEntity.user.tenantId,
-        tenant: tokenEntity.user.tenant ? {
-          id: tokenEntity.user.tenant.id,
-          name: tokenEntity.user.tenant.name,
-          slug: tokenEntity.user.tenant.slug,
-        } : null,
+        tenant: tokenEntity.user.tenant
+          ? {
+              id: tokenEntity.user.tenant.id,
+              name: tokenEntity.user.tenant.name,
+              slug: tokenEntity.user.tenant.slug,
+            }
+          : null,
       },
     };
   }
 
   async logout(refreshToken: string): Promise<void> {
-    await this.refreshTokenRepository.update(
-      { token: refreshToken },
-      { isRevoked: true },
-    );
+    await this.refreshTokenRepository.update({ token: refreshToken }, { isRevoked: true });
   }
 
   async logoutAll(userId: string): Promise<void> {
-    await this.refreshTokenRepository.update(
-      { userId, isRevoked: false },
-      { isRevoked: true },
-    );
+    await this.refreshTokenRepository.update({ userId, isRevoked: false }, { isRevoked: true });
   }
 
   private async generateTokens(
@@ -192,7 +204,11 @@ export class AuthService {
     return bcrypt.compare(password, hash);
   }
 
-  async signup(signupDto: SignupDto, userAgent?: string, ipAddress?: string): Promise<LoginResponseDto> {
+  async signup(
+    signupDto: SignupDto,
+    userAgent?: string,
+    ipAddress?: string,
+  ): Promise<LoginResponseDto> {
     // Check if email already exists
     const existingUser = await this.userRepository.findOne({
       where: { email: signupDto.email.toLowerCase() },
@@ -213,7 +229,7 @@ export class AuthService {
 
     // Find subscription plan (case-insensitive)
     const plans = await this.subscriptionPlanRepository.find({ where: { isActive: true } });
-    const plan = plans.find(p => p.name.toLowerCase() === signupDto.planName.toLowerCase());
+    const plan = plans.find((p) => p.name.toLowerCase() === signupDto.planName.toLowerCase());
 
     if (!plan) {
       // Default to the first available plan if not found
@@ -276,14 +292,16 @@ export class AuthService {
 
     // Send welcome email (don't wait for it, don't fail signup if email fails)
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
-    this.emailService.sendWelcomeEmail(
-      savedUser.email,
-      `${savedUser.firstName} ${savedUser.lastName}`,
-      savedTenant.name,
-      `${frontendUrl}/dashboard`,
-    ).catch((error) => {
-      this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
-    });
+    this.emailService
+      .sendWelcomeEmail(
+        savedUser.email,
+        `${savedUser.firstName} ${savedUser.lastName}`,
+        savedTenant.name,
+        `${frontendUrl}/dashboard`,
+      )
+      .catch((error) => {
+        this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
+      });
 
     return {
       ...tokens,

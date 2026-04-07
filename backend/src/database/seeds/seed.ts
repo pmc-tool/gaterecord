@@ -5,7 +5,10 @@ import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Tenant, TenantStatus } from '../entities/tenant.entity';
 import { User, UserRole, UserStatus } from '../entities/user.entity';
 import { Gate, GateType, GateState } from '../entities/gate.entity';
-import { GateController as GateControllerEntity, ControllerStatus } from '../entities/gate-controller.entity';
+import {
+  GateController as GateControllerEntity,
+  ControllerStatus,
+} from '../entities/gate-controller.entity';
 import { SensorStatus, SensorType, SensorHealthStatus } from '../entities/sensor-status.entity';
 import { Vehicle, VehicleStatus } from '../entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '../entities/rfid-card.entity';

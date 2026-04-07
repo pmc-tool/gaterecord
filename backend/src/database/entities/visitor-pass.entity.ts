@@ -12,8 +12,8 @@ export enum VisitorPassStatus {
 }
 
 export enum RegistrationType {
-  SELF_SERVICE = 'self_service',    // Resident created pass for their visitor
-  ON_PREMISE = 'on_premise',         // Admin/Security registered visitor on-site
+  SELF_SERVICE = 'self_service', // Resident created pass for their visitor
+  ON_PREMISE = 'on_premise', // Admin/Security registered visitor on-site
 }
 
 @Entity('visitor_passes')
@@ -70,7 +70,7 @@ export class VisitorPass extends BaseEntity {
     type: 'enum',
     enum: RegistrationType,
     name: 'registration_type',
-    default: RegistrationType.SELF_SERVICE
+    default: RegistrationType.SELF_SERVICE,
   })
   registrationType: RegistrationType;
 

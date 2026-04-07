@@ -14,7 +14,11 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { VisitorPassService } from './visitor-pass.service';
-import { CreateVisitorPassDto, UpdateVisitorPassDto, VisitorPassQueryDto } from './dto/visitor-pass.dto';
+import {
+  CreateVisitorPassDto,
+  UpdateVisitorPassDto,
+  VisitorPassQueryDto,
+} from './dto/visitor-pass.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { Public } from '@common/decorators/public.decorator';
 import { User } from '@database/entities/user.entity';
@@ -36,7 +40,11 @@ export class VisitorPassController {
     private readonly configService: ConfigService,
   ) {}
 
-  private async sendPassNotification(pass: VisitorPass, currentUser: User, sendEmail: boolean): Promise<void> {
+  private async sendPassNotification(
+    pass: VisitorPass,
+    currentUser: User,
+    sendEmail: boolean,
+  ): Promise<void> {
     if (!sendEmail || !pass.visitorEmail) return;
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
@@ -86,7 +94,9 @@ export class VisitorPassController {
 
     // TODO: WhatsApp integration via Twilio
     if (createDto.sendWhatsApp && createDto.visitorPhone) {
-      this.logger.log(`WhatsApp notification requested for ${createDto.visitorPhone} - not yet implemented`);
+      this.logger.log(
+        `WhatsApp notification requested for ${createDto.visitorPhone} - not yet implemented`,
+      );
     }
 
     return pass;

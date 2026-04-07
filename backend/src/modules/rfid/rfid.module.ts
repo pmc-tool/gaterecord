@@ -9,10 +9,7 @@ import { GatewayModule } from '../gateway/gateway.module';
 
 @Global()
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([RfidCard, Vehicle]),
-    forwardRef(() => GatewayModule),
-  ],
+  imports: [TypeOrmModule.forFeature([RfidCard, Vehicle]), forwardRef(() => GatewayModule)],
   controllers: [RfidRegistrationController, RfidCardsController],
   providers: [RfidRegistrationService],
   exports: [RfidRegistrationService],

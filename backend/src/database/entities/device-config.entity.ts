@@ -48,11 +48,11 @@ export class DeviceConfig extends BaseEntity {
   @Column({ name: 'wifi_ssid', type: 'varchar', nullable: true })
   wifiSsid: string | null;
 
-  @Column({ name: 'mqtt_username', type: 'varchar', nullable: true })
-  mqttUsername: string | null;
+  @Column({ name: 'api_key', type: 'varchar', nullable: true })
+  apiKey: string | null;
 
-  @Column({ name: 'mqtt_password_hash', type: 'varchar', nullable: true })
-  mqttPasswordHash: string | null;
+  @Column({ name: 'api_key_hash', type: 'varchar', nullable: true })
+  apiKeyHash: string | null;
 
   @Column({ name: 'firmware_version', type: 'varchar', nullable: true })
   firmwareVersion: string | null;

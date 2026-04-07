@@ -1,9 +1,21 @@
-import { Injectable, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Gate, GateState, GateType } from '@database/entities/gate.entity';
-import { GateController as GateControllerEntity, ControllerStatus } from '@database/entities/gate-controller.entity';
-import { SensorStatus, SensorType, SensorHealthStatus } from '@database/entities/sensor-status.entity';
+import {
+  GateController as GateControllerEntity,
+  ControllerStatus,
+} from '@database/entities/gate-controller.entity';
+import {
+  SensorStatus,
+  SensorType,
+  SensorHealthStatus,
+} from '@database/entities/sensor-status.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
@@ -82,8 +94,16 @@ export class GatesService {
       { controllerId, sensorType: SensorType.ESP32_CONTROLLER, status: SensorHealthStatus.UNKNOWN },
       { controllerId, sensorType: SensorType.SERVO_ACTUATOR, status: SensorHealthStatus.UNKNOWN },
       { controllerId, sensorType: SensorType.IR_OBSTACLE, status: SensorHealthStatus.UNKNOWN },
-      { controllerId, sensorType: SensorType.LIMIT_SWITCH_OPEN, status: SensorHealthStatus.UNKNOWN },
-      { controllerId, sensorType: SensorType.LIMIT_SWITCH_CLOSE, status: SensorHealthStatus.UNKNOWN },
+      {
+        controllerId,
+        sensorType: SensorType.LIMIT_SWITCH_OPEN,
+        status: SensorHealthStatus.UNKNOWN,
+      },
+      {
+        controllerId,
+        sensorType: SensorType.LIMIT_SWITCH_CLOSE,
+        status: SensorHealthStatus.UNKNOWN,
+      },
       { controllerId, sensorType: SensorType.OLED_DISPLAY, status: SensorHealthStatus.UNKNOWN },
       { controllerId, sensorType: SensorType.LED_BUZZER, status: SensorHealthStatus.UNKNOWN },
     ];
@@ -107,7 +127,9 @@ export class GatesService {
     await this.sensorRepository.save(sensors);
   }
 
-  async findAll(currentUser: User): Promise<(Gate & { deviceName?: string; deviceStatus?: string })[]> {
+  async findAll(
+    currentUser: User,
+  ): Promise<(Gate & { deviceName?: string; deviceStatus?: string })[]> {
     const query = this.gateRepository.createQueryBuilder('gate');
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
@@ -117,7 +139,7 @@ export class GatesService {
     const gates = await query.leftJoinAndSelect('gate.controller', 'controller').getMany();
 
     // Fetch device info for gates with hardware IDs
-    const hardwareIds = gates.filter(g => g.hardwareId).map(g => g.hardwareId);
+    const hardwareIds = gates.filter((g) => g.hardwareId).map((g) => g.hardwareId);
 
     if (hardwareIds.length > 0) {
       const devices = await this.deviceConfigRepository
@@ -125,9 +147,11 @@ export class GatesService {
         .where('device.device_id IN (:...ids)', { ids: hardwareIds })
         .getMany();
 
-      const deviceMap = new Map(devices.map(d => [d.deviceId, { name: d.deviceName, status: d.status }]));
+      const deviceMap = new Map(
+        devices.map((d) => [d.deviceId, { name: d.deviceName, status: d.status }]),
+      );
 
-      return gates.map(gate => {
+      return gates.map((gate) => {
         const deviceInfo = gate.hardwareId ? deviceMap.get(gate.hardwareId) : undefined;
         // Gate is only online if it has a connected device that is online
         const isReallyOnline = deviceInfo?.status === 'online';
@@ -141,7 +165,7 @@ export class GatesService {
     }
 
     // Gates without hardware IDs are offline
-    return gates.map(gate => ({
+    return gates.map((gate) => ({
       ...gate,
       isOnline: false,
       deviceStatus: undefined,
@@ -215,7 +239,9 @@ export class GatesService {
         })) || [],
       firmwareVersion: gate.controller?.firmwareVersion,
       wifiStrength: gate.controller?.wifiStrength,
-      uptimeSeconds: gate.controller?.uptimeSeconds ? Number(gate.controller.uptimeSeconds) : undefined,
+      uptimeSeconds: gate.controller?.uptimeSeconds
+        ? Number(gate.controller.uptimeSeconds)
+        : undefined,
     };
   }
 

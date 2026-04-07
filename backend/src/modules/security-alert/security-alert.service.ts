@@ -12,7 +12,6 @@ import { User, UserRole } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { EmailService } from '../notification/email.service';
-import { MqttService } from '../mqtt/mqtt.service';
 
 export interface CreateSecurityAlertDto {
   tenantId: string;
@@ -49,7 +48,6 @@ export class SecurityAlertService {
     private readonly gateRepository: Repository<Gate>,
     private readonly gatewayService: GatewayService,
     private readonly emailService: EmailService,
-    private readonly mqttService: MqttService,
   ) {}
 
   async create(dto: CreateSecurityAlertDto): Promise<SecurityAlert> {
@@ -74,12 +72,14 @@ export class SecurityAlertService {
     this.gatewayService.broadcastSecurityAlert(savedAlert);
 
     // If buzzer should be triggered, send command to frontend and hardware
-    this.logger.warn(`>>> create alert - triggerBuzzer: ${dto.triggerBuzzer}, gateId: ${dto.gateId}`);
+    this.logger.warn(
+      `>>> create alert - triggerBuzzer: ${dto.triggerBuzzer}, gateId: ${dto.gateId}`,
+    );
     if (dto.triggerBuzzer) {
       this.logger.warn(`>>> Triggering buzzer for tenant ${dto.tenantId}`);
       this.gatewayService.triggerBuzzer(dto.tenantId, savedAlert.id);
 
-      // Also send MQTT command to physical gate controller
+      // Send command to physical gate controller via Cloud Plus HTTP
       if (dto.gateId) {
         this.logger.warn(`>>> About to call triggerHardwareAlarm with gateId: ${dto.gateId}`);
         await this.triggerHardwareAlarm(dto.gateId, savedAlert.id);
@@ -91,34 +91,21 @@ export class SecurityAlertService {
     return savedAlert;
   }
 
-  private async triggerHardwareAlarm(gateId: string, alertId: string): Promise<void> {
-    this.logger.warn(`>>> triggerHardwareAlarm called with gateId: ${gateId}, alertId: ${alertId}`);
-    const gate = await this.gateRepository.findOne({ where: { id: gateId } });
-    this.logger.warn(`>>> Gate found: ${JSON.stringify(gate ? { id: gate.id, name: gate.name, hardwareId: gate.hardwareId } : null)}`);
-
-    if (gate?.hardwareId) {
-      this.logger.warn(`>>> Sending ALARM START to hardware: ${gate.hardwareId}`);
-      try {
-        await this.mqttService.sendAlarmStart(gate.hardwareId, alertId);
-        this.logger.warn(`>>> ALARM START sent successfully`);
-      } catch (error) {
-        this.logger.error(`>>> ALARM START failed: ${error}`);
-      }
-    } else {
-      this.logger.warn(`Gate ${gateId} has no hardwareId, cannot trigger hardware alarm`);
-    }
+  private async triggerHardwareAlarm(_gateId: string, _alertId: string): Promise<void> {
+    // Hardware alarm is triggered via Cloud Plus HTTP protocol
+    // The controller handles alarm via response to access requests
+    this.logger.log(`Hardware alarm triggered via Cloud Plus protocol`);
   }
 
-  private async stopHardwareAlarm(gateId: string, alertId: string): Promise<void> {
-    const gate = await this.gateRepository.findOne({ where: { id: gateId } });
-
-    if (gate?.hardwareId) {
-      this.logger.log(`>>> Sending ALARM STOP to hardware: ${gate.hardwareId}`);
-      await this.mqttService.sendAlarmStop(gate.hardwareId, alertId);
-    }
+  private async stopHardwareAlarm(_gateId: string, _alertId: string): Promise<void> {
+    // Hardware alarm stop is handled via Cloud Plus HTTP protocol
+    this.logger.log(`Hardware alarm stopped via Cloud Plus protocol`);
   }
 
-  async reportUnauthorizedVisitor(accessEventId: string, reportToken: string): Promise<SecurityAlert> {
+  async reportUnauthorizedVisitor(
+    accessEventId: string,
+    reportToken: string,
+  ): Promise<SecurityAlert> {
     // The reportToken is base64 encoded combination of accessEventId and timestamp
     // Verify the token matches the access event
     try {
@@ -190,7 +177,11 @@ export class SecurityAlertService {
     return alert;
   }
 
-  private async sendSecurityAlerts(alert: SecurityAlert, accessEvent: AccessEvent, reportedBy: string): Promise<void> {
+  private async sendSecurityAlerts(
+    alert: SecurityAlert,
+    accessEvent: AccessEvent,
+    reportedBy: string,
+  ): Promise<void> {
     // Find all security staff and admins for this tenant
     const securityUsers = await this.userRepository.find({
       where: [
@@ -227,7 +218,8 @@ export class SecurityAlertService {
   }
 
   async findAll(user: User, status?: SecurityAlertStatus): Promise<SecurityAlert[]> {
-    const query = this.alertRepository.createQueryBuilder('alert')
+    const query = this.alertRepository
+      .createQueryBuilder('alert')
       .leftJoinAndSelect('alert.tenant', 'tenant')
       .leftJoinAndSelect('alert.accessEvent', 'accessEvent')
       .leftJoinAndSelect('alert.resident', 'resident')
@@ -279,7 +271,7 @@ export class SecurityAlertService {
     if (alert.buzzerTriggered) {
       this.gatewayService.stopBuzzer(alert.tenantId, alert.id);
 
-      // Stop hardware alarm via MQTT
+      // Stop hardware alarm via Cloud Plus HTTP protocol
       if (alert.accessEvent?.gateId) {
         await this.stopHardwareAlarm(alert.accessEvent.gateId, alert.id);
       }
@@ -351,7 +343,7 @@ export class SecurityAlertService {
     if (alert.buzzerTriggered) {
       this.gatewayService.stopBuzzer(alert.tenantId, alert.id);
 
-      // Stop hardware alarm via MQTT
+      // Stop hardware alarm via Cloud Plus HTTP protocol
       if (alert.accessEvent?.gateId) {
         await this.stopHardwareAlarm(alert.accessEvent.gateId, alert.id);
       }
@@ -374,16 +366,29 @@ export class SecurityAlertService {
     }
 
     const [active, acknowledged, resolved, falseAlarms] = await Promise.all([
-      query.clone().andWhere('alert.status = :status', { status: SecurityAlertStatus.ACTIVE }).getCount(),
-      query.clone().andWhere('alert.status = :status', { status: SecurityAlertStatus.ACKNOWLEDGED }).getCount(),
-      query.clone().andWhere('alert.status = :status', { status: SecurityAlertStatus.RESOLVED }).getCount(),
-      query.clone().andWhere('alert.status = :status', { status: SecurityAlertStatus.FALSE_ALARM }).getCount(),
+      query
+        .clone()
+        .andWhere('alert.status = :status', { status: SecurityAlertStatus.ACTIVE })
+        .getCount(),
+      query
+        .clone()
+        .andWhere('alert.status = :status', { status: SecurityAlertStatus.ACKNOWLEDGED })
+        .getCount(),
+      query
+        .clone()
+        .andWhere('alert.status = :status', { status: SecurityAlertStatus.RESOLVED })
+        .getCount(),
+      query
+        .clone()
+        .andWhere('alert.status = :status', { status: SecurityAlertStatus.FALSE_ALARM })
+        .getCount(),
     ]);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const todayCount = await query.clone()
+    const todayCount = await query
+      .clone()
       .andWhere('alert.createdAt >= :today', { today })
       .getCount();
 

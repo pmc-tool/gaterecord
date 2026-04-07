@@ -17,7 +17,6 @@ import { User } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { GatesModule } from '../gates/gates.module';
 import { AccessEventsModule } from '../access-events/access-events.module';
-import { MqttModule } from '../mqtt/mqtt.module';
 import { SecurityAlertModule } from '../security-alert/security-alert.module';
 
 @Module({
@@ -43,7 +42,6 @@ import { SecurityAlertModule } from '../security-alert/security-alert.module';
     }),
     GatesModule,
     AccessEventsModule,
-    MqttModule,
     SecurityAlertModule,
   ],
   controllers: [SimulatorController],

@@ -33,7 +33,10 @@ export class TenantsController {
   // Super Admin Dashboard
   @Get('dashboard')
   @ApiOperation({ summary: 'Get super admin dashboard with financial and platform metrics' })
-  @ApiResponse({ status: 200, description: 'Dashboard data including MRR, platform stats, and alerts' })
+  @ApiResponse({
+    status: 200,
+    description: 'Dashboard data including MRR, platform stats, and alerts',
+  })
   getSuperAdminDashboard() {
     return this.tenantsService.getSuperAdminDashboard();
   }
@@ -71,10 +74,7 @@ export class TenantsController {
   @Patch('plans/:id')
   @ApiOperation({ summary: 'Update subscription plan' })
   @ApiResponse({ status: 200, description: 'Plan updated' })
-  updatePlan(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateSubscriptionPlanDto,
-  ) {
+  updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSubscriptionPlanDto) {
     return this.tenantsService.updatePlan(id, dto);
   }
 

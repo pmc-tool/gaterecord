@@ -39,7 +39,9 @@ export class SimulatorGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
-      const token = client.handshake.auth?.token || client.handshake.headers?.authorization?.replace('Bearer ', '');
+      const token =
+        client.handshake.auth?.token ||
+        client.handshake.headers?.authorization?.replace('Bearer ', '');
 
       if (!token) {
         client.emit('error', { code: 'AUTH_FAILED', message: 'No token provided' });
@@ -140,16 +142,20 @@ export class SimulatorGateway implements OnGatewayConnection, OnGatewayDisconnec
     });
   }
 
-  emitAccessEvent(gateId: string, tenantId: string, event: {
-    eventId: string;
-    gateName: string;
-    method: string;
-    subjectType: string;
-    subjectName: string;
-    result: string;
-    denialReason?: string;
-    operatorName?: string;
-  }) {
+  emitAccessEvent(
+    gateId: string,
+    tenantId: string,
+    event: {
+      eventId: string;
+      gateName: string;
+      method: string;
+      subjectType: string;
+      subjectName: string;
+      result: string;
+      denialReason?: string;
+      operatorName?: string;
+    },
+  ) {
     const payload = {
       ...event,
       gateId,
@@ -160,13 +166,17 @@ export class SimulatorGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.server.to(`tenant:${tenantId}`).emit('access:event', payload);
   }
 
-  emitHealthUpdate(gateId: string, tenantId: string, data: {
-    type: 'controller' | 'sensor';
-    sensorType?: string;
-    previousStatus: string;
-    newStatus: string;
-    notes?: string;
-  }) {
+  emitHealthUpdate(
+    gateId: string,
+    tenantId: string,
+    data: {
+      type: 'controller' | 'sensor';
+      sensorType?: string;
+      previousStatus: string;
+      newStatus: string;
+      notes?: string;
+    },
+  ) {
     const payload = {
       gateId,
       ...data,

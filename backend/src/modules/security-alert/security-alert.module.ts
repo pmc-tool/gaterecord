@@ -7,14 +7,9 @@ import { Gate } from '@database/entities/gate.entity';
 import { SecurityAlertService } from './security-alert.service';
 import { SecurityAlertController } from './security-alert.controller';
 import { GatewayModule } from '../gateway/gateway.module';
-import { MqttModule } from '../mqtt/mqtt.module';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([SecurityAlert, AccessEvent, User, Gate]),
-    GatewayModule,
-    MqttModule,
-  ],
+  imports: [TypeOrmModule.forFeature([SecurityAlert, AccessEvent, User, Gate]), GatewayModule],
   controllers: [SecurityAlertController],
   providers: [SecurityAlertService],
   exports: [SecurityAlertService],

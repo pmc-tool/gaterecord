@@ -1,3 +1,13 @@
+# Ignore everything except frontend and backend
+/*
+!/frontend/
+!/backend/
+!/.gitignore
+!/README.md
+!/docker-compose.yml
+!/docker-compose.prod.yml
+!/CLAUDE.md
+
 # Dependencies
 node_modules/
 
@@ -30,4 +40,3 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
-Cloud Plus TypeB SDK20231110/

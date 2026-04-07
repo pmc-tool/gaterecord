@@ -6,10 +6,7 @@ import { VisitorPassService } from './visitor-pass.service';
 import { VisitorPassController } from './visitor-pass.controller';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([VisitorPass]),
-    ConfigModule,
-  ],
+  imports: [TypeOrmModule.forFeature([VisitorPass]), ConfigModule],
   controllers: [VisitorPassController],
   providers: [VisitorPassService],
   exports: [VisitorPassService],

@@ -19,11 +19,7 @@ import {
   ClaimDeviceDto,
   ClaimResponseDto,
 } from './dto/setup-code.dto';
-import {
-  DeviceResponseDto,
-  UpdateDeviceDto,
-  UpdateCheckResponseDto,
-} from './dto/device.dto';
+import { DeviceResponseDto, UpdateDeviceDto, UpdateCheckResponseDto } from './dto/device.dto';
 import { FirmwareService } from './firmware.service';
 import { GatewayService } from '../gateway/gateway.service';
 
@@ -202,7 +198,7 @@ export class DevicesService {
       }
 
       // Same tenant - allow re-pairing (WiFi change scenario)
-      const mqttCreds = this.generateMqttCredentials(dto.deviceId);
+      const apiKey = this.generateApiKey(dto.deviceId);
 
       await this.deviceConfigRepo.update(existingDevice.id, {
         wifiSsid: dto.wifiSsid,
@@ -211,8 +207,8 @@ export class DevicesService {
         deviceName: setupCode.deviceName,
         status: DeviceStatus.ONLINE,
         lastSeenAt: new Date(),
-        mqttUsername: mqttCreds.username,
-        mqttPasswordHash: this.hashPassword(mqttCreds.password),
+        apiKey,
+        apiKeyHash: this.hashPassword(apiKey),
       });
 
       // Mark setup code as claimed
@@ -224,14 +220,16 @@ export class DevicesService {
 
       // Update gate hardware ID (normalized - no colons)
       if (setupCode.gateId) {
-        await this.gateRepo.update(setupCode.gateId, { hardwareId: this.normalizeDeviceId(dto.deviceId) });
+        await this.gateRepo.update(setupCode.gateId, {
+          hardwareId: this.normalizeDeviceId(dto.deviceId),
+        });
       }
 
-      return this.buildClaimResponse(setupCode, mqttCreds);
+      return this.buildClaimResponse(setupCode, apiKey);
     }
 
     // New device - create config
-    const mqttCreds = this.generateMqttCredentials(dto.deviceId);
+    const apiKey = this.generateApiKey(dto.deviceId);
 
     await this.deviceConfigRepo.save({
       tenantId: setupCode.tenantId,
@@ -244,8 +242,8 @@ export class DevicesService {
       status: DeviceStatus.ONLINE,
       lastSeenAt: new Date(),
       pairedAt: new Date(),
-      mqttUsername: mqttCreds.username,
-      mqttPasswordHash: this.hashPassword(mqttCreds.password),
+      apiKey,
+      apiKeyHash: this.hashPassword(apiKey),
     });
 
     // Mark setup code as claimed
@@ -257,7 +255,9 @@ export class DevicesService {
 
     // Update gate hardware ID (normalized - no colons)
     if (setupCode.gateId) {
-      await this.gateRepo.update(setupCode.gateId, { hardwareId: this.normalizeDeviceId(dto.deviceId) });
+      await this.gateRepo.update(setupCode.gateId, {
+        hardwareId: this.normalizeDeviceId(dto.deviceId),
+      });
     }
 
     this.logger.log(`Device ${dto.deviceId} claimed with code ${dto.code}`);
@@ -270,32 +270,30 @@ export class DevicesService {
       setupCode.gateId || undefined,
     );
 
-    return this.buildClaimResponse(setupCode, mqttCreds);
+    return this.buildClaimResponse(setupCode, apiKey);
   }
 
-  private generateMqttCredentials(deviceId: string): { username: string; password: string } {
+  private generateApiKey(deviceId: string): string {
     const sanitizedId = deviceId.replace(/:/g, '').toLowerCase();
-    return {
-      username: `device_${sanitizedId}`,
-      password: crypto.randomBytes(32).toString('base64'),
-    };
+    return crypto
+      .createHash('sha256')
+      .update(`${sanitizedId}-${Date.now()}`)
+      .digest('hex')
+      .substring(0, 32);
   }
 
   private hashPassword(password: string): string {
     return crypto.createHash('sha256').update(password).digest('hex');
   }
 
-  private buildClaimResponse(
-    setupCode: SetupCode,
-    mqttCreds: { username: string; password: string },
-  ): ClaimResponseDto {
-    // External MQTT URL for devices (different from internal Docker URL)
-    const mqttExternalHost = this.configService.get<string>('MQTT_EXTERNAL_HOST', 'mqtt.gaterecord.com');
-    const mqttExternalPort = this.configService.get<number>('MQTT_EXTERNAL_PORT', 18883);
+  private buildClaimResponse(setupCode: SetupCode, apiKey: string): ClaimResponseDto {
+    // HTTP server URL for Cloud Plus controllers
+    const httpServerUrl = this.configService.get<string>(
+      'HTTP_SERVER_URL',
+      'http://api.gaterecord.com',
+    );
+    const httpServerPort = this.configService.get<number>('HTTP_SERVER_PORT', 8001);
     const apiBaseUrl = this.configService.get<string>('API_BASE_URL', 'https://api.gaterecord.com');
-
-    const brokerHost = mqttExternalHost;
-    const brokerPort = mqttExternalPort;
 
     return {
       success: true,
@@ -303,10 +301,9 @@ export class DevicesService {
         tenantId: setupCode.tenantId,
         gateId: setupCode.gateId || undefined,
         deviceName: setupCode.deviceName,
-        mqttBroker: brokerHost,
-        mqttPort: brokerPort,
-        mqttUsername: mqttCreds.username,
-        mqttPassword: mqttCreds.password,
+        httpServerUrl,
+        httpServerPort,
+        apiKey,
         apiBaseUrl,
       },
     };
@@ -398,7 +395,9 @@ export class DevicesService {
       }
 
       // Update gate hardware ID (normalized - no colons)
-      await this.gateRepo.update(dto.gateId, { hardwareId: this.normalizeDeviceId(device.deviceId) });
+      await this.gateRepo.update(dto.gateId, {
+        hardwareId: this.normalizeDeviceId(device.deviceId),
+      });
 
       // Remove hardware ID from old gate
       if (device.gateId && device.gateId !== dto.gateId) {

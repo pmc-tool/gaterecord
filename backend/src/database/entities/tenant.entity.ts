@@ -53,7 +53,12 @@ export class Tenant extends BaseEntity {
   @Column({ name: 'subscription_started_at', nullable: true })
   subscriptionStartedAt: Date;
 
-  @Column({ type: 'enum', enum: BillingCycle, name: 'billing_cycle', default: BillingCycle.MONTHLY })
+  @Column({
+    type: 'enum',
+    enum: BillingCycle,
+    name: 'billing_cycle',
+    default: BillingCycle.MONTHLY,
+  })
   billingCycle: BillingCycle;
 
   @Column({ type: 'jsonb', nullable: true })

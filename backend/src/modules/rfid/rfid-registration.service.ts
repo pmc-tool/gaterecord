@@ -126,13 +126,17 @@ export class RfidRegistrationService {
 
     // Log all active sessions for debugging
     this.activeSessions.forEach((session, sessionId) => {
-      this.logger.log(`  Session ${sessionId}: tenant=${session.tenantId}, target=${session.targetType}:${session.targetId}`);
+      this.logger.log(
+        `  Session ${sessionId}: tenant=${session.tenantId}, target=${session.targetType}:${session.targetId}`,
+      );
     });
 
     const session = this.getActiveSessionForTenant(tenantId);
     if (!session) {
       this.logger.log(`NO REGISTRATION SESSION for tenant ${tenantId}`);
-      this.logger.log(`Available tenant sessions: ${JSON.stringify(Array.from(this.sessionsByTenant.keys()))}`);
+      this.logger.log(
+        `Available tenant sessions: ${JSON.stringify(Array.from(this.sessionsByTenant.keys()))}`,
+      );
       this.logger.log(`========================================`);
       return false;
     }

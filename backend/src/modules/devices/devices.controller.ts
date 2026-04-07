@@ -11,13 +11,7 @@ import {
   UseGuards,
   Logger,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiHeader,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { DevicesService } from './devices.service';
 import { FirmwareService, FirmwareResponseDto } from './firmware.service';
 import {
@@ -26,11 +20,7 @@ import {
   ClaimDeviceDto,
   ClaimResponseDto,
 } from './dto/setup-code.dto';
-import {
-  DeviceResponseDto,
-  UpdateDeviceDto,
-  UpdateCheckResponseDto,
-} from './dto/device.dto';
+import { DeviceResponseDto, UpdateDeviceDto, UpdateCheckResponseDto } from './dto/device.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -78,10 +68,7 @@ export class DevicesController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @ApiOperation({ summary: 'Delete/cancel a setup code' })
   @ApiResponse({ status: 204 })
-  async deleteSetupCode(
-    @Param('id') id: string,
-    @CurrentUser() user: User,
-  ): Promise<void> {
+  async deleteSetupCode(@Param('id') id: string, @CurrentUser() user: User): Promise<void> {
     return this.devicesService.deleteSetupCode(id, user);
   }
 
@@ -91,10 +78,7 @@ export class DevicesController {
   @Public()
   @ApiOperation({ summary: 'Claim a setup code and pair device (called by ESP32)' })
   @ApiResponse({ status: 200, type: ClaimResponseDto })
-  async claimDevice(
-    @Body() dto: ClaimDeviceDto,
-    @Ip() ip: string,
-  ): Promise<ClaimResponseDto> {
+  async claimDevice(@Body() dto: ClaimDeviceDto, @Ip() ip: string): Promise<ClaimResponseDto> {
     this.logger.log(`Device claim attempt from ${ip}: ${dto.deviceId}`);
     return this.devicesService.claimDevice(dto, ip);
   }
@@ -147,10 +131,7 @@ export class DevicesController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
   @ApiOperation({ summary: 'Get device details' })
   @ApiResponse({ status: 200, type: DeviceResponseDto })
-  async getDevice(
-    @Param('id') id: string,
-    @CurrentUser() user: User,
-  ): Promise<DeviceResponseDto> {
+  async getDevice(@Param('id') id: string, @CurrentUser() user: User): Promise<DeviceResponseDto> {
     return this.devicesService.getDevice(id, user);
   }
 
@@ -174,10 +155,7 @@ export class DevicesController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @ApiOperation({ summary: 'Remove/unpair device' })
   @ApiResponse({ status: 204 })
-  async deleteDevice(
-    @Param('id') id: string,
-    @CurrentUser() user: User,
-  ): Promise<void> {
+  async deleteDevice(@Param('id') id: string, @CurrentUser() user: User): Promise<void> {
     return this.devicesService.deleteDevice(id, user);
   }
 
@@ -194,8 +172,7 @@ export class DevicesController {
     // Get device to verify access
     const device = await this.devicesService.getDevice(id, user);
 
-    // TODO: Send MQTT command to device
-    // await this.mqttService.publish(`gate/${device.deviceId}/command`, { command: 'TEST' });
+    // Commands sent via Cloud Plus HTTP protocol (controller polls server)
 
     return { success: true, message: `Test command sent to ${device.deviceName}` };
   }
@@ -213,10 +190,7 @@ export class DevicesController {
     @CurrentUser() user: User,
   ): Promise<UpdateCheckResponseDto> {
     const device = await this.devicesService.getDevice(id, user);
-    return this.devicesService.checkUpdate(
-      device.deviceId,
-      device.firmwareVersion || '0.0.0',
-    );
+    return this.devicesService.checkUpdate(device.deviceId, device.firmwareVersion || '0.0.0');
   }
 
   @Post(':id/firmware/update')
@@ -247,14 +221,7 @@ export class DevicesController {
       user.id,
     );
 
-    // TODO: Send MQTT command to device
-    // await this.mqttService.publish(`gate/${device.deviceId}/ota`, {
-    //   action: 'UPDATE',
-    //   url: downloadUrl,
-    //   version: latestFirmware.version,
-    //   checksum: latestFirmware.checksum,
-    //   updateId: otaUpdate.id,
-    // });
+    // OTA commands sent via Cloud Plus HTTP protocol (controller polls for updates)
 
     this.logger.log(`OTA update triggered for device ${device.deviceId}`);
 

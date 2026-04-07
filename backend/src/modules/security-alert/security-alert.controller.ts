@@ -19,7 +19,6 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { User, UserRole } from '@database/entities/user.entity';
 import { SecurityAlertStatus } from '@database/entities/security-alert.entity';
-import { MqttService } from '../mqtt/mqtt.service';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -44,28 +43,7 @@ class ResolveAlertDto {
 export class SecurityAlertController {
   private readonly logger = new Logger(SecurityAlertController.name);
 
-  constructor(
-    private readonly securityAlertService: SecurityAlertService,
-    private readonly mqttService: MqttService,
-  ) {}
-
-  @Get('mqtt-status')
-  @Public()
-  @ApiOperation({ summary: 'Check MQTT connection status (debug endpoint)' })
-  getMqttStatus() {
-    const connected = this.mqttService.getConnectionStatus();
-    this.logger.warn(`MQTT status check - connected: ${connected}`);
-    return { mqttConnected: connected };
-  }
-
-  @Post('test-alarm/:hardwareId')
-  @Public()
-  @ApiOperation({ summary: 'Test alarm trigger (debug endpoint)' })
-  async testAlarm(@Param('hardwareId') hardwareId: string) {
-    this.logger.warn(`Testing alarm for hardware: ${hardwareId}`);
-    await this.mqttService.sendAlarmStart(hardwareId, 'test-alert-id');
-    return { success: true, message: `Alarm sent to ${hardwareId}` };
-  }
+  constructor(private readonly securityAlertService: SecurityAlertService) {}
 
   @Post('report-unauthorized')
   @Public()
@@ -91,10 +69,7 @@ export class SecurityAlertController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
   @ApiOperation({ summary: 'Get all security alerts' })
-  async findAll(
-    @Query('status') status: SecurityAlertStatus,
-    @Req() req: RequestWithUser,
-  ) {
+  async findAll(@Query('status') status: SecurityAlertStatus, @Req() req: RequestWithUser) {
     return this.securityAlertService.findAll(req.user, status);
   }
 

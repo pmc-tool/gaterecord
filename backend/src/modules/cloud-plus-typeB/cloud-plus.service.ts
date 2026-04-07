@@ -1,0 +1,748 @@
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import * as crypto from 'crypto';
+
+import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
+import { Gate, GateState } from '@database/entities/gate.entity';
+import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
+import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
+import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
+import {
+  AccessEvent,
+  AccessMethod,
+  AccessResult,
+  AccessSubjectType,
+} from '@database/entities/access-event.entity';
+import { GatewayService } from '../gateway/gateway.service';
+
+import {
+  SearchCardAcsRequestDto,
+  SearchCardAcsResponseDto,
+  GetStatusRequestDto,
+  GetStatusResponseDto,
+  CloudPlusCredentialType,
+  CloudPlusAuthResult,
+  ValidationResult,
+  RegisterCloudPlusDeviceDto,
+} from './dto/cloud-plus.dto';
+
+@Injectable()
+export class CloudPlusService {
+  private readonly logger = new Logger(CloudPlusService.name);
+
+  constructor(
+    @InjectRepository(DeviceConfig)
+    private deviceConfigRepository: Repository<DeviceConfig>,
+    @InjectRepository(Gate)
+    private gateRepository: Repository<Gate>,
+    @InjectRepository(Vehicle)
+    private vehicleRepository: Repository<Vehicle>,
+    @InjectRepository(RfidCard)
+    private rfidCardRepository: Repository<RfidCard>,
+    @InjectRepository(VisitorPass)
+    private visitorPassRepository: Repository<VisitorPass>,
+    @InjectRepository(AccessEvent)
+    private accessEventRepository: Repository<AccessEvent>,
+    private gatewayService: GatewayService,
+  ) {}
+
+  /**
+   * Process card/credential validation request from Cloud Plus controller
+   */
+  async processSearchCardAcs(
+    request: SearchCardAcsRequestDto,
+    clientIp?: string,
+  ): Promise<SearchCardAcsResponseDto> {
+    // Normalize request with defaults
+    const serial = request.Serial || '';
+    const card = request.Card || '';
+    const credType = request.type ?? 12;
+    const reader = request.Reader ?? 0;
+
+    this.logger.log(`=== Cloud Plus SearchCardAcs ===`);
+    this.logger.log(`Serial: ${serial}, Card: ${card}, Type: ${credType}`);
+
+    const timestamp = this.formatTimestamp(new Date());
+
+    try {
+      // Step 1: Find device by serial number
+      const device = await this.findDeviceBySerial(serial);
+
+      if (!device) {
+        this.logger.warn(`Unknown device: ${serial}`);
+        return this.buildDenyResponse(
+          card,
+          reader,
+          credType,
+          'Unknown Device',
+          'Unregistered device',
+          timestamp,
+        );
+      }
+
+      // Update device last seen
+      await this.updateDeviceStatus(device, clientIp);
+
+      // Step 2: Find associated gate
+      const gate = device.gate;
+      if (!gate) {
+        this.logger.warn(`Device ${serial} not assigned to any gate`);
+        return this.buildDenyResponse(
+          card,
+          reader,
+          credType,
+          'No Gate',
+          'Device not assigned to gate',
+          timestamp,
+        );
+      }
+
+      // Step 3: Process credential based on type
+      const credentialType = credType & 0xff;
+      let validationResult: ValidationResult;
+
+      switch (credentialType) {
+        case CloudPlusCredentialType.CARD:
+        case CloudPlusCredentialType.RFID_TAG:
+          validationResult = await this.validateRfidCredential(device.tenantId, card, gate);
+          break;
+
+        case CloudPlusCredentialType.QR_BASE64:
+        case CloudPlusCredentialType.RS232:
+          const decodedQr = this.decodeBase64Qr(card);
+          validationResult = await this.validateQrCode(device.tenantId, decodedQr, gate);
+          break;
+
+        case CloudPlusCredentialType.BUTTON:
+          // Exit button - always allow (or check exit policy)
+          validationResult = {
+            allowed: true,
+            name: 'Exit Request',
+            info: 'Button pressed',
+            subjectType: 'unknown',
+            subjectIdentifier: 'BUTTON',
+          };
+          break;
+
+        case CloudPlusCredentialType.PASSWORD:
+          validationResult = await this.validatePassword(device.tenantId, card, gate);
+          break;
+
+        case CloudPlusCredentialType.FACE:
+        case CloudPlusCredentialType.FACE_ALT:
+          // Face recognition - Card field contains face ID
+          validationResult = await this.validateFaceId(device.tenantId, card, gate);
+          break;
+
+        default:
+          this.logger.warn(`Unsupported credential type: ${credentialType}`);
+          validationResult = {
+            allowed: false,
+            name: 'Unknown',
+            info: 'Unsupported credential type',
+            subjectType: 'unknown',
+            subjectIdentifier: card,
+            denialReason: `Unsupported type: ${credentialType}`,
+          };
+      }
+
+      // Step 4: Log access event
+      await this.logAccessEvent(gate, validationResult, this.getAccessMethod(credentialType));
+
+      // Step 5: Notify frontend via WebSocket
+      this.notifyFrontend(gate, validationResult);
+
+      // Step 6: Build and return response
+      return this.buildAllowDenyResponse(validationResult, card, reader, credType, timestamp);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(`Error processing SearchCardAcs: ${err.message}`, err.stack);
+      return this.buildDenyResponse(
+        card,
+        reader,
+        credType,
+        'Error',
+        'Internal system error',
+        timestamp,
+      );
+    }
+  }
+
+  /**
+   * Process heartbeat/status request from Cloud Plus controller
+   */
+  async processGetStatus(
+    request: GetStatusRequestDto,
+    clientIp?: string,
+  ): Promise<GetStatusResponseDto> {
+    const key = request.Key || '';
+    this.logger.debug(`Heartbeat from: ${key}`);
+
+    // Update device last seen if Key is the serial number
+    const device = await this.findDeviceBySerial(key);
+    if (device) {
+      await this.updateDeviceStatus(device, clientIp);
+    }
+
+    return { Key: key };
+  }
+
+  /**
+   * Register a new Cloud Plus controller device
+   */
+  async registerDevice(dto: RegisterCloudPlusDeviceDto, tenantId: string): Promise<DeviceConfig> {
+    // Check if device already exists
+    const existing = await this.deviceConfigRepository.findOne({
+      where: { deviceId: dto.serial },
+    });
+
+    if (existing) {
+      throw new BadRequestException('Device already registered');
+    }
+
+    // Validate gate if provided
+    let gate: Gate | null = null;
+    if (dto.gateId) {
+      gate = await this.gateRepository.findOne({
+        where: { id: dto.gateId, tenantId },
+      });
+      if (!gate) {
+        throw new NotFoundException('Gate not found');
+      }
+    }
+
+    // Generate API key hash if provided
+    let apiKeyHash: string | null = null;
+    if (dto.apiKey) {
+      apiKeyHash = crypto.createHash('sha256').update(dto.apiKey).digest('hex');
+    }
+
+    // Create device config
+    const deviceConfig = this.deviceConfigRepository.create({
+      deviceId: dto.serial,
+      deviceName: dto.deviceName,
+      tenantId,
+      gateId: dto.gateId,
+      status: DeviceStatus.ONLINE,
+      apiKeyHash,
+      pairedAt: new Date(),
+    });
+
+    const saved = await this.deviceConfigRepository.save(deviceConfig);
+
+    // Update gate hardware ID if gate is assigned
+    if (gate) {
+      gate.hardwareId = dto.serial;
+      await this.gateRepository.save(gate);
+    }
+
+    this.logger.log(`Registered Cloud Plus device: ${dto.serial} for tenant ${tenantId}`);
+    return saved;
+  }
+
+  /**
+   * Get all Cloud Plus devices for a tenant
+   */
+  async getDevices(tenantId: string): Promise<DeviceConfig[]> {
+    return this.deviceConfigRepository.find({
+      where: { tenantId },
+      relations: ['gate'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  // ===================== Private Helper Methods =====================
+
+  private async findDeviceBySerial(serial: string): Promise<DeviceConfig | null> {
+    return this.deviceConfigRepository.findOne({
+      where: { deviceId: serial },
+      relations: ['gate', 'tenant'],
+    });
+  }
+
+  private async updateDeviceStatus(device: DeviceConfig, clientIp?: string): Promise<void> {
+    device.status = DeviceStatus.ONLINE;
+    device.lastSeenAt = new Date();
+    if (clientIp) {
+      device.ipAddress = clientIp;
+    }
+    await this.deviceConfigRepository.save(device);
+
+    // Update gate online status if assigned
+    if (device.gate) {
+      device.gate.isOnline = true;
+      device.gate.lastHeartbeatAt = new Date();
+      await this.gateRepository.save(device.gate);
+    }
+  }
+
+  /**
+   * Validate RFID credential against vehicles and RFID cards
+   */
+  private async validateRfidCredential(
+    tenantId: string,
+    rfidUid: string,
+    gate: Gate,
+  ): Promise<ValidationResult> {
+    const normalizedUid = rfidUid.toUpperCase().replace(/:/g, '');
+
+    // First, try to match as vehicle RFID
+    const vehicle = await this.vehicleRepository.findOne({
+      where: {
+        tenantId,
+        rfidUid: normalizedUid,
+        status: VehicleStatus.ACTIVE,
+      },
+      relations: ['owner'],
+    });
+
+    if (vehicle) {
+      return this.validateVehicleAccess(vehicle, normalizedUid);
+    }
+
+    // Try to match as human RFID card
+    const rfidCard = await this.rfidCardRepository.findOne({
+      where: {
+        tenantId,
+        uid: normalizedUid,
+        status: RfidCardStatus.ACTIVE,
+      },
+      relations: ['user'],
+    });
+
+    if (rfidCard) {
+      return this.validateRfidCardAccess(rfidCard, normalizedUid);
+    }
+
+    // No matching credential found
+    return {
+      allowed: false,
+      name: 'Unknown',
+      info: 'Card not registered',
+      subjectType: 'unknown',
+      subjectIdentifier: normalizedUid,
+      denialReason: 'Unregistered card',
+    };
+  }
+
+  private validateVehicleAccess(vehicle: Vehicle, rfidUid: string): ValidationResult {
+    const now = new Date();
+    const ownerName = `${vehicle.owner.firstName} ${vehicle.owner.lastName}`;
+
+    // Check validity period
+    if (vehicle.validFrom && vehicle.validFrom > now) {
+      return {
+        allowed: false,
+        name: ownerName,
+        info: vehicle.licensePlate,
+        subjectType: 'vehicle',
+        subjectId: vehicle.id,
+        subjectIdentifier: rfidUid,
+        denialReason: 'Not yet valid',
+      };
+    }
+
+    if (vehicle.validUntil && vehicle.validUntil < now) {
+      return {
+        allowed: false,
+        name: ownerName,
+        info: vehicle.licensePlate,
+        subjectType: 'vehicle',
+        subjectId: vehicle.id,
+        subjectIdentifier: rfidUid,
+        denialReason: 'Access expired',
+      };
+    }
+
+    // Access granted
+    return {
+      allowed: true,
+      name: ownerName,
+      info: vehicle.licensePlate,
+      subjectType: 'vehicle',
+      subjectId: vehicle.id,
+      subjectIdentifier: rfidUid,
+    };
+  }
+
+  private validateRfidCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {
+    const now = new Date();
+    const userName = `${rfidCard.user.firstName} ${rfidCard.user.lastName}`;
+
+    // Check validity period
+    if (rfidCard.validFrom && rfidCard.validFrom > now) {
+      return {
+        allowed: false,
+        name: userName,
+        info: 'Access Card',
+        subjectType: 'rfid_card',
+        subjectId: rfidCard.id,
+        subjectIdentifier: rfidUid,
+        denialReason: 'Not yet valid',
+      };
+    }
+
+    if (rfidCard.validUntil && rfidCard.validUntil < now) {
+      return {
+        allowed: false,
+        name: userName,
+        info: 'Access Card',
+        subjectType: 'rfid_card',
+        subjectId: rfidCard.id,
+        subjectIdentifier: rfidUid,
+        denialReason: 'Card expired',
+      };
+    }
+
+    // Access granted
+    return {
+      allowed: true,
+      name: userName,
+      info: 'Welcome',
+      subjectType: 'rfid_card',
+      subjectId: rfidCard.id,
+      subjectIdentifier: rfidUid,
+    };
+  }
+
+  /**
+   * Validate QR code against visitor passes
+   */
+  private async validateQrCode(
+    tenantId: string,
+    qrToken: string,
+    gate: Gate,
+  ): Promise<ValidationResult> {
+    const visitorPass = await this.visitorPassRepository.findOne({
+      where: {
+        tenantId,
+        qrToken,
+      },
+      relations: ['createdBy'],
+    });
+
+    if (!visitorPass) {
+      return {
+        allowed: false,
+        name: 'Unknown',
+        info: 'Invalid QR code',
+        subjectType: 'visitor_pass',
+        subjectIdentifier: qrToken,
+        denialReason: 'Invalid QR code',
+      };
+    }
+
+    const now = new Date();
+
+    // Check status
+    if (visitorPass.status === VisitorPassStatus.CANCELLED) {
+      return {
+        allowed: false,
+        name: visitorPass.visitorName,
+        info: 'Pass cancelled',
+        subjectType: 'visitor_pass',
+        subjectId: visitorPass.id,
+        subjectIdentifier: qrToken,
+        denialReason: 'Pass cancelled',
+      };
+    }
+
+    if (visitorPass.status === VisitorPassStatus.EXPIRED) {
+      return {
+        allowed: false,
+        name: visitorPass.visitorName,
+        info: 'Pass expired',
+        subjectType: 'visitor_pass',
+        subjectId: visitorPass.id,
+        subjectIdentifier: qrToken,
+        denialReason: 'Pass expired',
+      };
+    }
+
+    // Check validity period
+    if (visitorPass.validFrom > now) {
+      return {
+        allowed: false,
+        name: visitorPass.visitorName,
+        info: 'Not yet valid',
+        subjectType: 'visitor_pass',
+        subjectId: visitorPass.id,
+        subjectIdentifier: qrToken,
+        denialReason: 'Pass not yet valid',
+      };
+    }
+
+    if (visitorPass.validUntil < now) {
+      // Mark as expired
+      visitorPass.status = VisitorPassStatus.EXPIRED;
+      await this.visitorPassRepository.save(visitorPass);
+
+      return {
+        allowed: false,
+        name: visitorPass.visitorName,
+        info: 'Pass expired',
+        subjectType: 'visitor_pass',
+        subjectId: visitorPass.id,
+        subjectIdentifier: qrToken,
+        denialReason: 'Pass expired',
+      };
+    }
+
+    // Check max uses
+    if (visitorPass.useCount >= visitorPass.maxUses) {
+      visitorPass.status = VisitorPassStatus.USED;
+      await this.visitorPassRepository.save(visitorPass);
+
+      return {
+        allowed: false,
+        name: visitorPass.visitorName,
+        info: 'Max uses reached',
+        subjectType: 'visitor_pass',
+        subjectId: visitorPass.id,
+        subjectIdentifier: qrToken,
+        denialReason: 'Pass already used',
+      };
+    }
+
+    // Access granted - increment use count
+    visitorPass.useCount += 1;
+    if (visitorPass.useCount >= visitorPass.maxUses) {
+      visitorPass.status = VisitorPassStatus.USED;
+    } else {
+      visitorPass.status = VisitorPassStatus.ACTIVE;
+    }
+    await this.visitorPassRepository.save(visitorPass);
+
+    return {
+      allowed: true,
+      name: visitorPass.visitorName,
+      info: `Visitor - ${visitorPass.purpose || 'Welcome'}`,
+      subjectType: 'visitor_pass',
+      subjectId: visitorPass.id,
+      subjectIdentifier: qrToken,
+    };
+  }
+
+  /**
+   * Validate password/PIN (placeholder - implement based on requirements)
+   */
+  private async validatePassword(
+    tenantId: string,
+    password: string,
+    gate: Gate,
+  ): Promise<ValidationResult> {
+    // TODO: Implement password/PIN validation logic
+    // Could check against resident PINs, master codes, etc.
+    return {
+      allowed: false,
+      name: 'Unknown',
+      info: 'PIN access not configured',
+      subjectType: 'unknown',
+      subjectIdentifier: '***',
+      denialReason: 'PIN access not enabled',
+    };
+  }
+
+  /**
+   * Validate face ID (placeholder - implement based on requirements)
+   */
+  private async validateFaceId(
+    tenantId: string,
+    faceId: string,
+    gate: Gate,
+  ): Promise<ValidationResult> {
+    // TODO: Implement face ID validation logic
+    // Could map face IDs to residents
+    return {
+      allowed: false,
+      name: 'Unknown',
+      info: 'Face recognition not configured',
+      subjectType: 'unknown',
+      subjectIdentifier: faceId,
+      denialReason: 'Face recognition not enabled',
+    };
+  }
+
+  /**
+   * Decode Base64 QR code data
+   */
+  private decodeBase64Qr(encodedData: string): string {
+    try {
+      // Handle URL-safe base64 variants
+      let normalized = encodedData.replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
+
+      // Add padding if needed
+      const remainder = normalized.length % 4;
+      if (remainder === 2) normalized += '==';
+      if (remainder === 3) normalized += '=';
+
+      return Buffer.from(normalized, 'base64').toString('utf-8');
+    } catch (error) {
+      const err = error as Error;
+      this.logger.warn(`Failed to decode Base64 QR: ${err.message}`);
+      return encodedData; // Return as-is if decoding fails
+    }
+  }
+
+  /**
+   * Map credential type to access method
+   */
+  private getAccessMethod(credentialType: number): AccessMethod {
+    switch (credentialType) {
+      case CloudPlusCredentialType.CARD:
+      case CloudPlusCredentialType.RFID_TAG:
+        return AccessMethod.CAR_RFID; // Will be differentiated by subject type
+      case CloudPlusCredentialType.QR_BASE64:
+      case CloudPlusCredentialType.RS232:
+        return AccessMethod.QR;
+      case CloudPlusCredentialType.BUTTON:
+        return AccessMethod.MANUAL;
+      default:
+        return AccessMethod.MANUAL;
+    }
+  }
+
+  /**
+   * Log access event to database
+   */
+  private async logAccessEvent(
+    gate: Gate,
+    result: ValidationResult,
+    method: AccessMethod,
+  ): Promise<void> {
+    const subjectTypeMap: Record<string, AccessSubjectType> = {
+      vehicle: AccessSubjectType.VEHICLE,
+      rfid_card: AccessSubjectType.RFID_CARD,
+      visitor_pass: AccessSubjectType.VISITOR_PASS,
+      unknown: AccessSubjectType.UNKNOWN,
+    };
+
+    const accessEvent = this.accessEventRepository.create({
+      tenantId: gate.tenantId,
+      gateId: gate.id,
+      timestamp: new Date(),
+      method:
+        result.subjectType === 'vehicle'
+          ? AccessMethod.CAR_RFID
+          : result.subjectType === 'rfid_card'
+            ? AccessMethod.HUMAN_RFID
+            : method,
+      subjectType: subjectTypeMap[result.subjectType] || AccessSubjectType.UNKNOWN,
+      subjectId: result.subjectId,
+      subjectIdentifier: result.subjectIdentifier,
+      subjectName: result.name,
+      result: result.allowed ? AccessResult.ALLOWED : AccessResult.DENIED,
+      denialReason: result.denialReason,
+      metadata: {
+        source: 'cloud-plus-typeB',
+        info: result.info,
+      },
+    });
+
+    await this.accessEventRepository.save(accessEvent);
+  }
+
+  /**
+   * Notify frontend via WebSocket
+   */
+  private notifyFrontend(gate: Gate, result: ValidationResult): void {
+    const eventType = result.allowed ? 'access:granted' : 'access:denied';
+
+    this.gatewayService.broadcastToTenant(gate.tenantId, eventType, {
+      gateId: gate.id,
+      gateName: gate.name,
+      name: result.name,
+      info: result.info,
+      reason: result.denialReason,
+      source: 'cloud-plus',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Build deny response DTO
+   */
+  private buildDenyResponse(
+    card: string,
+    reader: number,
+    credType: number,
+    name: string,
+    reason: string,
+    timestamp: string,
+  ): SearchCardAcsResponseDto {
+    const typeName = this.getCredentialTypeName(credType);
+
+    return {
+      AcsRes: CloudPlusAuthResult.DENY,
+      ActIndex: String(reader & 0x01),
+      Time: '1',
+      Card: card,
+      Name: name,
+      Note: `${typeName} - ${reason}`,
+      Systime: timestamp,
+      Voice: 'Access Denied',
+    };
+  }
+
+  /**
+   * Build allow/deny response DTO based on validation result
+   */
+  private buildAllowDenyResponse(
+    result: ValidationResult,
+    card: string,
+    reader: number,
+    credType: number,
+    timestamp: string,
+  ): SearchCardAcsResponseDto {
+    const typeName = this.getCredentialTypeName(credType);
+
+    return {
+      AcsRes: result.allowed ? CloudPlusAuthResult.ALLOW : CloudPlusAuthResult.DENY,
+      ActIndex: String(reader & 0x01),
+      Time: '1',
+      Card: card,
+      Name: result.name,
+      Note: `${typeName} - ${result.allowed ? 'Access Granted' : result.denialReason || 'Access Denied'}`,
+      Systime: timestamp,
+      Voice: result.allowed ? `Welcome ${result.name}` : 'Access Denied',
+    };
+  }
+
+  /**
+   * Get credential type name
+   */
+  private getCredentialTypeName(credType: number): string {
+    const credentialTypeNames: Record<number, string> = {
+      [CloudPlusCredentialType.CARD]: 'Card',
+      [CloudPlusCredentialType.RS232]: 'Barcode',
+      [CloudPlusCredentialType.PASSWORD]: 'PIN',
+      [CloudPlusCredentialType.BUTTON]: 'Button',
+      [CloudPlusCredentialType.QR_BASE64]: 'QR Code',
+      [CloudPlusCredentialType.RFID_TAG]: 'RFID',
+      [CloudPlusCredentialType.FACE]: 'Face',
+      [CloudPlusCredentialType.FINGERPRINT]: 'Fingerprint',
+    };
+    return credentialTypeNames[credType & 0xff] || 'Unknown';
+  }
+
+  /**
+   * Format timestamp for response
+   */
+  private formatTimestamp(date: Date): string {
+    return date.toISOString().replace('T', ' ').substring(0, 19);
+  }
+
+  /**
+   * Verify device API key (for authenticated requests)
+   */
+  async verifyDeviceApiKey(serial: string, apiKey: string): Promise<boolean> {
+    const device = await this.findDeviceBySerial(serial);
+    if (!device || !device.apiKeyHash) {
+      return false;
+    }
+
+    const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    return device.apiKeyHash === apiKeyHash;
+  }
+}

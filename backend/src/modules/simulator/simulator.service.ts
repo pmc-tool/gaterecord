@@ -1,17 +1,39 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Gate, GateState } from '@database/entities/gate.entity';
-import { GateController as GateControllerEntity, ControllerStatus } from '@database/entities/gate-controller.entity';
-import { SensorStatus, SensorType, SensorHealthStatus } from '@database/entities/sensor-status.entity';
+import {
+  GateController as GateControllerEntity,
+  ControllerStatus,
+} from '@database/entities/gate-controller.entity';
+import {
+  SensorStatus,
+  SensorType,
+  SensorHealthStatus,
+} from '@database/entities/sensor-status.entity';
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
-import { AccessEvent, AccessMethod, AccessResult, AccessSubjectType } from '@database/entities/access-event.entity';
+import {
+  AccessEvent,
+  AccessMethod,
+  AccessResult,
+  AccessSubjectType,
+} from '@database/entities/access-event.entity';
 import { User, UserRole } from '@database/entities/user.entity';
-import { TriggerEventDto, SimulatorEvent, SimulatorFeedbackDto, UpdateSensorDto } from './dto/simulator.dto';
-import { MqttService } from '../mqtt/mqtt.service';
+import {
+  TriggerEventDto,
+  SimulatorEvent,
+  SimulatorFeedbackDto,
+  UpdateSensorDto,
+} from './dto/simulator.dto';
 import { EmailService } from '../notification/email.service';
 import { SecurityAlertService } from '../security-alert/security-alert.service';
 
@@ -21,7 +43,6 @@ export class SimulatorService {
   private stateTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(
-    private mqttService: MqttService,
     private emailService: EmailService,
     private securityAlertService: SecurityAlertService,
     private configService: ConfigService,
@@ -180,7 +201,12 @@ export class SimulatorService {
     });
 
     // Send GREEN LED feedback and welcome message
-    await this.sendHardwareFeedback(gate, 'SUCCESS', `Welcome ${vehicle.owner.firstName}`, vehicle.licensePlate);
+    await this.sendHardwareFeedback(
+      gate,
+      'SUCCESS',
+      `Welcome ${vehicle.owner.firstName}`,
+      vehicle.licensePlate,
+    );
 
     await this.transitionState(gate, GateState.OPENING);
 
@@ -287,7 +313,12 @@ export class SimulatorService {
       result: AccessResult.ALLOWED,
     });
 
-    await this.sendHardwareFeedback(gate, 'SUCCESS', `Welcome ${rfidCard.user.firstName}`, 'Access Granted');
+    await this.sendHardwareFeedback(
+      gate,
+      'SUCCESS',
+      `Welcome ${rfidCard.user.firstName}`,
+      'Access Granted',
+    );
 
     await this.transitionState(gate, GateState.OPENING);
 
@@ -434,12 +465,7 @@ export class SimulatorService {
 
     // Send visitor entry notification to resident
     if (residentEmail) {
-      this.sendVisitorEntryNotification(
-        event,
-        gate,
-        pass,
-        resident,
-      ).catch((err) => {
+      this.sendVisitorEntryNotification(event, gate, pass, resident).catch((err) => {
         this.logger.error('Failed to send visitor entry notification:', err);
       });
     }
@@ -547,7 +573,10 @@ export class SimulatorService {
 
     return {
       gateId: gate.id,
-      action: position === 'open' ? SimulatorEvent.LIMIT_OPEN_REACHED : SimulatorEvent.LIMIT_CLOSE_REACHED,
+      action:
+        position === 'open'
+          ? SimulatorEvent.LIMIT_OPEN_REACHED
+          : SimulatorEvent.LIMIT_CLOSE_REACHED,
       success: false,
       message: `Limit switch event ignored in state: ${gate.state}`,
       gateState: gate.state,
@@ -591,27 +620,25 @@ export class SimulatorService {
     gate.state = newState;
     await this.gateRepository.save(gate);
 
-    // Send MQTT command to real hardware if connected
+    // Gate commands are sent via Cloud Plus HTTP protocol
     if (gate.hardwareId) {
-      this.logger.log(`>>> Sending MQTT command to hardware: ${gate.hardwareId}, state: ${newState}`);
-      if (newState === GateState.OPENING) {
-        await this.mqttService.sendGateCommand(gate.hardwareId, 'OPEN');
-      } else if (newState === GateState.CLOSING) {
-        await this.mqttService.sendGateCommand(gate.hardwareId, 'CLOSE');
-      }
+      this.logger.log(
+        `>>> Gate state transition: ${gate.hardwareId}, state: ${newState} (via Cloud Plus HTTP)`,
+      );
     }
   }
 
   // Send LED feedback to hardware
-  private async sendHardwareFeedback(gate: Gate, type: 'SUCCESS' | 'ERROR' | 'WARNING', message1?: string, message2?: string): Promise<void> {
+  private async sendHardwareFeedback(
+    gate: Gate,
+    type: 'SUCCESS' | 'ERROR' | 'WARNING',
+    message1?: string,
+    _message2?: string,
+  ): Promise<void> {
     if (!gate.hardwareId) return;
 
-    this.logger.log(`>>> Sending ${type} feedback to hardware: ${gate.hardwareId}`);
-    await this.mqttService.sendFeedback(gate.hardwareId, type, true);
-
-    if (message1) {
-      await this.mqttService.sendDisplayMessage(gate.hardwareId, message1, message2 || '');
-    }
+    // Feedback is sent via Cloud Plus HTTP protocol response
+    this.logger.log(`>>> ${type} feedback for hardware: ${gate.hardwareId}, message: ${message1}`);
   }
 
   private scheduleAutoClose(gateId: string): void {
@@ -633,10 +660,7 @@ export class SimulatorService {
     this.stateTimeouts.set(gateId, timeout);
   }
 
-  private async createAccessEvent(
-    gate: Gate,
-    data: Partial<AccessEvent>,
-  ): Promise<AccessEvent> {
+  private async createAccessEvent(gate: Gate, data: Partial<AccessEvent>): Promise<AccessEvent> {
     const event = this.accessEventRepository.create({
       tenantId: gate.tenantId,
       gateId: gate.id,

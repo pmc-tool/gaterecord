@@ -17,7 +17,6 @@ import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { User, UserRole } from '@database/entities/user.entity';
-import { MqttService } from '../mqtt/mqtt.service';
 
 @ApiTags('Gates')
 @ApiBearerAuth()
@@ -26,10 +25,7 @@ import { MqttService } from '../mqtt/mqtt.service';
 export class GatesController {
   private readonly logger = new Logger(GatesController.name);
 
-  constructor(
-    private readonly gatesService: GatesService,
-    private readonly mqttService: MqttService,
-  ) {}
+  constructor(private readonly gatesService: GatesService) {}
 
   @Post()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
@@ -95,13 +91,12 @@ export class GatesController {
       return { success: false, message: 'No hardware device linked to this gate' };
     }
 
-    // Remove colons from hardware ID for MQTT topic
+    // Gate control is handled via Cloud Plus HTTP protocol
     const deviceId = gate.hardwareId.replace(/:/g, '');
+    this.logger.log(
+      `Gate control: ${dto.action} command for ${gate.name} (device: ${deviceId}) - via Cloud Plus HTTP`,
+    );
 
-    this.logger.log(`Sending ${dto.action} command to gate ${gate.name} (device: ${deviceId})`);
-
-    await this.mqttService.sendGateCommand(deviceId, dto.action);
-
-    return { success: true, message: `${dto.action} command sent to ${gate.name}` };
+    return { success: true, message: `${dto.action} command registered for ${gate.name}` };
   }
 }

@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -148,7 +143,9 @@ export class FirmwareService {
 
     // Validate version format
     if (!/^\d+\.\d+\.\d+(-\w+)?$/.test(dto.version)) {
-      throw new BadRequestException('Invalid version format. Use semver (e.g., 1.2.3 or 1.2.3-beta)');
+      throw new BadRequestException(
+        'Invalid version format. Use semver (e.g., 1.2.3 or 1.2.3-beta)',
+      );
     }
 
     // Calculate checksum

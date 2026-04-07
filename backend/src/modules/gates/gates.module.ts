@@ -9,7 +9,9 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Gate, GateControllerEntity, SensorStatus, Tenant, DeviceConfig])],
+  imports: [
+    TypeOrmModule.forFeature([Gate, GateControllerEntity, SensorStatus, Tenant, DeviceConfig]),
+  ],
   controllers: [GatesController],
   providers: [GatesService],
   exports: [GatesService],

@@ -8,7 +8,12 @@ import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
-import { CreateTenantDto, UpdateTenantDto, CreateSubscriptionPlanDto, UpdateSubscriptionPlanDto } from './dto/tenant.dto';
+import {
+  CreateTenantDto,
+  UpdateTenantDto,
+  CreateSubscriptionPlanDto,
+  UpdateSubscriptionPlanDto,
+} from './dto/tenant.dto';
 
 @Injectable()
 export class TenantsService {
@@ -36,9 +41,7 @@ export class TenantsService {
   }
 
   async findAllPlans(includeInactive = false): Promise<SubscriptionPlan[]> {
-    const query = includeInactive
-      ? {}
-      : { where: { isActive: true } };
+    const query = includeInactive ? {} : { where: { isActive: true } };
     return this.planRepository.find({
       ...query,
       order: { displayOrder: 'ASC', createdAt: 'ASC' },
@@ -79,7 +82,7 @@ export class TenantsService {
     // Check if any tenants are using this plan
     if (plan.tenants && plan.tenants.length > 0) {
       throw new ConflictException(
-        `Cannot delete plan. ${plan.tenants.length} tenant(s) are currently using this plan.`
+        `Cannot delete plan. ${plan.tenants.length} tenant(s) are currently using this plan.`,
       );
     }
 
@@ -277,10 +280,10 @@ export class TenantsService {
     const planBreakdown = plans.map((plan) => {
       const subscribers = tenants.filter((t) => t.subscriptionPlanId === plan.id);
       const monthlySubscribers = subscribers.filter(
-        (t) => t.billingCycle === BillingCycle.MONTHLY && t.status === TenantStatus.ACTIVE
+        (t) => t.billingCycle === BillingCycle.MONTHLY && t.status === TenantStatus.ACTIVE,
       );
       const yearlySubscribers = subscribers.filter(
-        (t) => t.billingCycle === BillingCycle.YEARLY && t.status === TenantStatus.ACTIVE
+        (t) => t.billingCycle === BillingCycle.YEARLY && t.status === TenantStatus.ACTIVE,
       );
 
       const monthlyRev = monthlySubscribers.length * Number(plan.monthlyPrice);
@@ -297,7 +300,7 @@ export class TenantsService {
         subscriberCount: subscribers.length,
         monthlySubscribers: monthlySubscribers.length,
         yearlySubscribers: yearlySubscribers.length,
-        revenue: monthlyRev + (yearlyRev / 12), // Normalize to monthly for comparison
+        revenue: monthlyRev + yearlyRev / 12, // Normalize to monthly for comparison
       };
     });
 
@@ -410,11 +413,11 @@ export class TenantsService {
     const planDistribution: { planName: string; count: number; revenue: number }[] = [];
 
     for (const plan of plans) {
-      const planTenants = tenants.filter(t => t.subscriptionPlanId === plan.id);
-      const activePlanTenants = planTenants.filter(t => t.status === TenantStatus.ACTIVE);
+      const planTenants = tenants.filter((t) => t.subscriptionPlanId === plan.id);
+      const activePlanTenants = planTenants.filter((t) => t.status === TenantStatus.ACTIVE);
 
       let planRevenue = 0;
-      activePlanTenants.forEach(t => {
+      activePlanTenants.forEach((t) => {
         if (t.billingCycle === BillingCycle.YEARLY) {
           planRevenue += Number(plan.yearlyPrice) / 12; // Convert to monthly
         } else {
@@ -431,25 +434,23 @@ export class TenantsService {
     }
 
     // Calculate tenant status counts
-    tenants.forEach(t => {
+    tenants.forEach((t) => {
       if (t.status === TenantStatus.ACTIVE) activeTenants++;
       if (t.status === TenantStatus.TRIAL) trialTenants++;
       if (t.status === TenantStatus.SUSPENDED) suspendedTenants++;
     });
 
     // New tenants this month
-    const newTenantsThisMonth = tenants.filter(
-      t => new Date(t.createdAt) >= startOfMonth
-    ).length;
+    const newTenantsThisMonth = tenants.filter((t) => new Date(t.createdAt) >= startOfMonth).length;
 
     // User and gate counts
     const totalUsers = await this.userRepository.count();
     const totalResidents = await this.userRepository.count({
-      where: { role: UserRole.RESIDENT }
+      where: { role: UserRole.RESIDENT },
     });
     const totalGates = await this.gateRepository.count();
     const onlineGates = await this.gateRepository.count({
-      where: { isOnline: true }
+      where: { isOnline: true },
     });
 
     // Event counts
@@ -464,7 +465,7 @@ export class TenantsService {
     const recentTenants = tenants
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 5)
-      .map(t => ({
+      .map((t) => ({
         id: t.id,
         name: t.name,
         planName: t.subscriptionPlan?.name || 'Unknown',
@@ -474,13 +475,13 @@ export class TenantsService {
 
     // Expiring trials (next 7 days)
     const expiringTrials = tenants
-      .filter(t => {
+      .filter((t) => {
         if (t.status !== TenantStatus.TRIAL) return false;
         if (!t.subscriptionExpiresAt) return false;
         const expiresAt = new Date(t.subscriptionExpiresAt);
         return expiresAt <= sevenDaysFromNow && expiresAt > now;
       })
-      .map(t => {
+      .map((t) => {
         const expiresAt = new Date(t.subscriptionExpiresAt!);
         const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
         return {
@@ -493,7 +494,13 @@ export class TenantsService {
       .sort((a, b) => a.daysLeft - b.daysLeft);
 
     // Tenants at limits (>80% usage)
-    const tenantsAtLimit: { id: string; name: string; limitType: string; current: number; max: number }[] = [];
+    const tenantsAtLimit: {
+      id: string;
+      name: string;
+      limitType: string;
+      current: number;
+      max: number;
+    }[] = [];
 
     for (const tenant of tenants) {
       if (!tenant.subscriptionPlan) continue;
@@ -525,7 +532,7 @@ export class TenantsService {
 
     // Estimate last month MRR for growth calculation (simplified)
     const lastMonthTenants = tenants.filter(
-      t => new Date(t.createdAt) < startOfMonth && t.status === TenantStatus.ACTIVE
+      (t) => new Date(t.createdAt) < startOfMonth && t.status === TenantStatus.ACTIVE,
     );
     for (const t of lastMonthTenants) {
       if (!t.subscriptionPlan) continue;
@@ -536,9 +543,7 @@ export class TenantsService {
       }
     }
 
-    const revenueGrowth = lastMonthMrr > 0
-      ? ((mrr - lastMonthMrr) / lastMonthMrr) * 100
-      : 0;
+    const revenueGrowth = lastMonthMrr > 0 ? ((mrr - lastMonthMrr) / lastMonthMrr) * 100 : 0;
 
     return {
       // Financial metrics

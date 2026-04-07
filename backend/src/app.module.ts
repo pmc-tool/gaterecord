@@ -10,12 +10,12 @@ import { SimulatorModule } from './modules/simulator/simulator.module';
 import { AccessEventsModule } from './modules/access-events/access-events.module';
 import { ResidentsModule } from './modules/residents/residents.module';
 import { VehiclesModule } from './modules/vehicles/vehicles.module';
-import { MqttModule } from './modules/mqtt/mqtt.module';
 import { RfidModule } from './modules/rfid/rfid.module';
 import { VisitorPassModule } from './modules/visitor-pass/visitor-pass.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { SecurityAlertModule } from './modules/security-alert/security-alert.module';
 import { DevicesModule } from './modules/devices/devices.module';
+import { CloudPlusModule } from './modules/cloud-plus-typeB/cloud-plus.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -29,9 +29,10 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         url: configService.get<string>('DATABASE_URL'),
-        ssl: configService.get<string>('DATABASE_SSL') === 'true'
-          ? { rejectUnauthorized: false }
-          : false,
+        ssl:
+          configService.get<string>('DATABASE_SSL') === 'true'
+            ? { rejectUnauthorized: false }
+            : false,
         autoLoadEntities: true,
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
         logging: configService.get<string>('NODE_ENV') === 'development',
@@ -46,12 +47,12 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     AccessEventsModule,
     ResidentsModule,
     VehiclesModule,
-    MqttModule,
     RfidModule,
     VisitorPassModule,
     NotificationModule,
     SecurityAlertModule,
     DevicesModule,
+    CloudPlusModule,
   ],
   controllers: [],
   providers: [

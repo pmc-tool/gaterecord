@@ -16,13 +16,7 @@ import { GatewayModule } from '../gateway/gateway.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      SetupCode,
-      DeviceConfig,
-      FirmwareVersion,
-      OtaUpdate,
-      Gate,
-    ]),
+    TypeOrmModule.forFeature([SetupCode, DeviceConfig, FirmwareVersion, OtaUpdate, Gate]),
     ScheduleModule.forRoot(),
     GatewayModule,
   ],

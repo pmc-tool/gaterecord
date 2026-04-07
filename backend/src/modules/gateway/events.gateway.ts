@@ -53,10 +53,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join:gate')
-  handleJoinGate(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { gateId: string },
-  ): void {
+  handleJoinGate(@ConnectedSocket() client: Socket, @MessageBody() data: { gateId: string }): void {
     const room = `gate:${data.gateId}`;
     client.join(room);
     this.logger.log(`Client ${client.id} joined gate room ${room}`);

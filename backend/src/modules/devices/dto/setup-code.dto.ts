@@ -62,10 +62,9 @@ export class ClaimResponseDto {
     tenantId: string;
     gateId?: string;
     deviceName: string;
-    mqttBroker: string;
-    mqttPort: number;
-    mqttUsername: string;
-    mqttPassword: string;
+    httpServerUrl: string;
+    httpServerPort: number;
+    apiKey?: string;
     apiBaseUrl: string;
   };
 

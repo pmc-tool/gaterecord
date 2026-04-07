@@ -1,9 +1,23 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
-import { VisitorPass, VisitorPassStatus, RegistrationType } from '@database/entities/visitor-pass.entity';
+import {
+  VisitorPass,
+  VisitorPassStatus,
+  RegistrationType,
+} from '@database/entities/visitor-pass.entity';
 import { User, UserRole } from '@database/entities/user.entity';
-import { CreateVisitorPassDto, UpdateVisitorPassDto, VisitorPassQueryDto, ValidityType } from './dto/visitor-pass.dto';
+import {
+  CreateVisitorPassDto,
+  UpdateVisitorPassDto,
+  VisitorPassQueryDto,
+  ValidityType,
+} from './dto/visitor-pass.dto';
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
 import { ConfigService } from '@nestjs/config';
@@ -34,9 +48,13 @@ export class VisitorPassService {
     const { validFrom, validUntil, maxUses } = this.calculateValidity(createDto);
 
     // Determine registration type based on user role
-    const isStaffRegistration = [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(currentUser.role);
+    const isStaffRegistration = [
+      UserRole.SUPER_ADMIN,
+      UserRole.BUILDING_ADMIN,
+      UserRole.SECURITY,
+    ].includes(currentUser.role);
     const registrationType = isStaffRegistration
-      ? (createDto.registrationType || RegistrationType.ON_PREMISE)
+      ? createDto.registrationType || RegistrationType.ON_PREMISE
       : RegistrationType.SELF_SERVICE;
 
     // Determine tenant ID
@@ -44,7 +62,9 @@ export class VisitorPassService {
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       // Super admin must specify tenant ID
       if (!createDto.tenantId) {
-        throw new BadRequestException('Super admin must specify a tenant ID when creating visitor passes');
+        throw new BadRequestException(
+          'Super admin must specify a tenant ID when creating visitor passes',
+        );
       }
       tenantId = createDto.tenantId;
     } else if (currentUser.tenantId) {
@@ -71,9 +91,12 @@ export class VisitorPassService {
       tenantId,
       // On-premise registration fields
       registrationType,
-      residentConfirmed: registrationType === RegistrationType.ON_PREMISE ? createDto.residentConfirmed : undefined,
-      confirmationNotes: registrationType === RegistrationType.ON_PREMISE ? createDto.confirmationNotes : undefined,
-      residentId: registrationType === RegistrationType.ON_PREMISE ? createDto.residentId : undefined,
+      residentConfirmed:
+        registrationType === RegistrationType.ON_PREMISE ? createDto.residentConfirmed : undefined,
+      confirmationNotes:
+        registrationType === RegistrationType.ON_PREMISE ? createDto.confirmationNotes : undefined,
+      residentId:
+        registrationType === RegistrationType.ON_PREMISE ? createDto.residentId : undefined,
     });
 
     const savedPass = await this.visitorPassRepository.save(pass);
@@ -82,7 +105,11 @@ export class VisitorPassService {
     return savedPass;
   }
 
-  private calculateValidity(dto: CreateVisitorPassDto): { validFrom: Date; validUntil: Date; maxUses: number } {
+  private calculateValidity(dto: CreateVisitorPassDto): {
+    validFrom: Date;
+    validUntil: Date;
+    maxUses: number;
+  } {
     const now = new Date();
     let validFrom = now;
     let validUntil: Date;
@@ -142,7 +169,9 @@ export class VisitorPassService {
         endDate: new Date(query.endDate),
       });
     } else if (query.startDate) {
-      queryBuilder.andWhere('pass.validFrom >= :startDate', { startDate: new Date(query.startDate) });
+      queryBuilder.andWhere('pass.validFrom >= :startDate', {
+        startDate: new Date(query.startDate),
+      });
     } else if (query.endDate) {
       queryBuilder.andWhere('pass.validFrom <= :endDate', { endDate: new Date(query.endDate) });
     }
@@ -161,10 +190,7 @@ export class VisitorPassService {
     }
 
     // Check access: user must be creator, or admin of same tenant
-    if (
-      pass.createdById !== currentUser.id &&
-      currentUser.role === 'resident'
-    ) {
+    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
@@ -188,7 +214,11 @@ export class VisitorPassService {
     return pass;
   }
 
-  async update(id: string, updateDto: UpdateVisitorPassDto, currentUser: User): Promise<VisitorPass> {
+  async update(
+    id: string,
+    updateDto: UpdateVisitorPassDto,
+    currentUser: User,
+  ): Promise<VisitorPass> {
     const pass = await this.findOne(id, currentUser);
 
     // Only creator can update (or admin)
@@ -255,8 +285,7 @@ export class VisitorPassService {
     cancelled: number;
     used: number;
   }> {
-    const queryBuilder = this.visitorPassRepository
-      .createQueryBuilder('pass');
+    const queryBuilder = this.visitorPassRepository.createQueryBuilder('pass');
 
     if (currentUser.tenantId) {
       queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: currentUser.tenantId });
@@ -270,10 +299,10 @@ export class VisitorPassService {
 
     return {
       total: passes.length,
-      active: passes.filter(p => p.status === VisitorPassStatus.ACTIVE).length,
-      expired: passes.filter(p => p.status === VisitorPassStatus.EXPIRED).length,
-      cancelled: passes.filter(p => p.status === VisitorPassStatus.CANCELLED).length,
-      used: passes.filter(p => p.status === VisitorPassStatus.USED).length,
+      active: passes.filter((p) => p.status === VisitorPassStatus.ACTIVE).length,
+      expired: passes.filter((p) => p.status === VisitorPassStatus.EXPIRED).length,
+      cancelled: passes.filter((p) => p.status === VisitorPassStatus.CANCELLED).length,
+      used: passes.filter((p) => p.status === VisitorPassStatus.USED).length,
     };
   }
 }

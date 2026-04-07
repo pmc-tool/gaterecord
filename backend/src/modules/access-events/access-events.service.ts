@@ -107,11 +107,7 @@ export class AccessEventsService {
     return stats;
   }
 
-  async getLiveEvents(
-    currentUser: User,
-    gateId?: string,
-    limit = 50,
-  ): Promise<AccessEvent[]> {
+  async getLiveEvents(currentUser: User, gateId?: string, limit = 50): Promise<AccessEvent[]> {
     const qb = this.accessEventRepository
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
@@ -124,16 +120,10 @@ export class AccessEventsService {
       qb.andWhere('event.gate_id = :gateId', { gateId });
     }
 
-    return qb
-      .orderBy('event.timestamp', 'DESC')
-      .take(limit)
-      .getMany();
+    return qb.orderBy('event.timestamp', 'DESC').take(limit).getMany();
   }
 
-  async exportToCsv(
-    query: AccessEventQueryDto,
-    currentUser: User,
-  ): Promise<string> {
+  async exportToCsv(query: AccessEventQueryDto, currentUser: User): Promise<string> {
     // Get all matching events (no pagination for export)
     const qb = this.accessEventRepository
       .createQueryBuilder('event')

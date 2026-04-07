@@ -1,4 +1,14 @@
-import { IsString, IsOptional, IsEnum, IsDateString, IsBoolean, IsNumber, Min, Max, IsUUID } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsBoolean,
+  IsNumber,
+  Min,
+  Max,
+  IsUUID,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { VisitorPassStatus, RegistrationType } from '@database/entities/visitor-pass.entity';
 
@@ -74,18 +84,22 @@ export class CreateVisitorPassDto {
   @ApiPropertyOptional({
     enum: RegistrationType,
     description: 'Registration type (self_service for residents, on_premise for staff)',
-    default: RegistrationType.SELF_SERVICE
+    default: RegistrationType.SELF_SERVICE,
   })
   @IsEnum(RegistrationType)
   @IsOptional()
   registrationType?: RegistrationType;
 
-  @ApiPropertyOptional({ description: 'Whether resident confirmed the visitor (for on-premise registration)' })
+  @ApiPropertyOptional({
+    description: 'Whether resident confirmed the visitor (for on-premise registration)',
+  })
   @IsBoolean()
   @IsOptional()
   residentConfirmed?: boolean;
 
-  @ApiPropertyOptional({ description: 'Notes about confirmation (e.g., "Confirmed via phone call")' })
+  @ApiPropertyOptional({
+    description: 'Notes about confirmation (e.g., "Confirmed via phone call")',
+  })
   @IsString()
   @IsOptional()
   confirmationNotes?: string;

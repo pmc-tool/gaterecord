@@ -1,16 +1,12 @@
-import {
-  Controller,
-  Get,
-  Query,
-  Res,
-  UseGuards,
-  ParseUUIDPipe,
-  Param,
-} from '@nestjs/common';
+import { Controller, Get, Query, Res, UseGuards, ParseUUIDPipe, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
 import { AccessEventsService } from './access-events.service';
-import { AccessEventQueryDto, AccessEventResponseDto, AccessEventStatsDto } from './dto/access-event.dto';
+import {
+  AccessEventQueryDto,
+  AccessEventResponseDto,
+  AccessEventStatsDto,
+} from './dto/access-event.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { User } from '@database/entities/user.entity';
@@ -54,12 +50,7 @@ export class AccessEventsController {
     @Query('gateId') gateId: string | undefined,
     @CurrentUser() user: User,
   ) {
-    return this.accessEventsService.getStats(
-      new Date(startDate),
-      new Date(endDate),
-      user,
-      gateId,
-    );
+    return this.accessEventsService.getStats(new Date(startDate), new Date(endDate), user, gateId);
   }
 
   @Get('export')

@@ -1,6 +1,10 @@
 import { IsEnum, IsOptional, IsDateString, IsUUID } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AccessMethod, AccessResult, AccessSubjectType } from '@database/entities/access-event.entity';
+import {
+  AccessMethod,
+  AccessResult,
+  AccessSubjectType,
+} from '@database/entities/access-event.entity';
 
 export class AccessEventQueryDto {
   @ApiPropertyOptional()
