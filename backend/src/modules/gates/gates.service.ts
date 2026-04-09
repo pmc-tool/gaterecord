@@ -37,13 +37,24 @@ export class GatesService {
   ) {}
 
   async create(dto: CreateGateDto, currentUser: User): Promise<Gate> {
-    if (!currentUser.tenantId) {
-      throw new ForbiddenException('User must belong to a tenant');
+    // Determine tenant ID
+    let tenantId: string;
+
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      if (!dto.tenantId) {
+        throw new ForbiddenException('Super Admin must specify tenantId');
+      }
+      tenantId = dto.tenantId;
+    } else {
+      if (!currentUser.tenantId) {
+        throw new ForbiddenException('User must belong to a tenant');
+      }
+      tenantId = currentUser.tenantId;
     }
 
     // Check tenant gate limit
     const tenant = await this.tenantRepository.findOne({
-      where: { id: currentUser.tenantId },
+      where: { id: tenantId },
       relations: ['subscriptionPlan', 'gates'],
     });
 
@@ -60,7 +71,7 @@ export class GatesService {
 
     // Check name uniqueness within tenant
     const existing = await this.gateRepository.findOne({
-      where: { tenantId: currentUser.tenantId, name: dto.name },
+      where: { tenantId, name: dto.name },
     });
     if (existing) {
       throw new ConflictException('Gate name already exists in this building');
@@ -68,7 +79,7 @@ export class GatesService {
 
     const gate = this.gateRepository.create({
       ...dto,
-      tenantId: currentUser.tenantId,
+      tenantId,
       state: GateState.CLOSED,
       isOnline: false,
     });
@@ -129,50 +140,73 @@ export class GatesService {
 
   async findAll(
     currentUser: User,
-  ): Promise<(Gate & { deviceName?: string; deviceStatus?: string })[]> {
+  ): Promise<
+    (Gate & { devices?: { id: string; deviceId: string; deviceName: string; status: string }[] })[]
+  > {
     const query = this.gateRepository.createQueryBuilder('gate');
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       query.where('gate.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
     }
 
-    const gates = await query.leftJoinAndSelect('gate.controller', 'controller').getMany();
+    const gates = await query
+      .leftJoinAndSelect('gate.controller', 'controller')
+      .leftJoinAndSelect('gate.tenant', 'tenant')
+      .getMany();
 
-    // Fetch device info for gates with hardware IDs
-    const hardwareIds = gates.filter((g) => g.hardwareId).map((g) => g.hardwareId);
+    // Fetch all devices that are assigned to any of these gates
+    const gateIds = gates.map((g) => g.id);
 
-    if (hardwareIds.length > 0) {
+    if (gateIds.length > 0) {
       const devices = await this.deviceConfigRepository
         .createQueryBuilder('device')
-        .where('device.device_id IN (:...ids)', { ids: hardwareIds })
+        .where('device.gate_id IN (:...ids)', { ids: gateIds })
         .getMany();
 
-      const deviceMap = new Map(
-        devices.map((d) => [d.deviceId, { name: d.deviceName, status: d.status }]),
-      );
+      // Group devices by gateId
+      const devicesByGateId = new Map<
+        string,
+        { id: string; deviceId: string; deviceName: string; status: string }[]
+      >();
+      for (const device of devices) {
+        if (device.gateId) {
+          const existing = devicesByGateId.get(device.gateId) || [];
+          existing.push({
+            id: device.id,
+            deviceId: device.deviceId,
+            deviceName: device.deviceName,
+            status: device.status,
+          });
+          devicesByGateId.set(device.gateId, existing);
+        }
+      }
 
       return gates.map((gate) => {
-        const deviceInfo = gate.hardwareId ? deviceMap.get(gate.hardwareId) : undefined;
-        // Gate is only online if it has a connected device that is online
-        const isReallyOnline = deviceInfo?.status === 'online';
+        const gateDevices = devicesByGateId.get(gate.id) || [];
+        // Gate is online if at least one device is online
+        const isReallyOnline = gateDevices.some((d) => d.status === 'online');
         return {
           ...gate,
           isOnline: isReallyOnline,
-          deviceName: deviceInfo?.name,
-          deviceStatus: deviceInfo?.status,
+          devices: gateDevices,
         };
       });
     }
 
-    // Gates without hardware IDs are offline
+    // Gates without any devices
     return gates.map((gate) => ({
       ...gate,
       isOnline: false,
-      deviceStatus: undefined,
+      devices: [],
     }));
   }
 
-  async findOne(id: string, currentUser: User): Promise<Gate> {
+  async findOne(
+    id: string,
+    currentUser: User,
+  ): Promise<
+    Gate & { devices: { id: string; deviceId: string; deviceName: string; status: string }[] }
+  > {
     const gate = await this.gateRepository.findOne({
       where: { id },
       relations: ['controller', 'controller.sensors', 'tenant'],
@@ -186,7 +220,26 @@ export class GatesService {
       throw new ForbiddenException('Access denied');
     }
 
-    return gate;
+    // Fetch devices for this gate
+    const devices = await this.deviceConfigRepository.find({
+      where: { gateId: id },
+    });
+
+    const gateDevices = devices.map((d) => ({
+      id: d.id,
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+      status: d.status,
+    }));
+
+    // Gate is online if at least one device is online
+    const isReallyOnline = gateDevices.some((d) => d.status === 'online');
+
+    return {
+      ...gate,
+      isOnline: isReallyOnline,
+      devices: gateDevices,
+    };
   }
 
   async update(id: string, dto: UpdateGateDto, currentUser: User): Promise<Gate> {

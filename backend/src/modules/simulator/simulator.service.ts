@@ -4,6 +4,8 @@ import {
   BadRequestException,
   ForbiddenException,
   Logger,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan, LessThan } from 'typeorm';
@@ -36,6 +38,7 @@ import {
 } from './dto/simulator.dto';
 import { EmailService } from '../notification/email.service';
 import { SecurityAlertService } from '../security-alert/security-alert.service';
+import { CloudPlusService } from '../cloud-plus-typeB/cloud-plus.service';
 
 @Injectable()
 export class SimulatorService {
@@ -46,6 +49,8 @@ export class SimulatorService {
     private emailService: EmailService,
     private securityAlertService: SecurityAlertService,
     private configService: ConfigService,
+    @Inject(forwardRef(() => CloudPlusService))
+    private cloudPlusService: CloudPlusService,
     @InjectRepository(Gate)
     private gateRepository: Repository<Gate>,
     @InjectRepository(GateControllerEntity)
@@ -84,9 +89,9 @@ export class SimulatorService {
 
     switch (dto.event) {
       case SimulatorEvent.CAR_RFID_DETECTED:
-        return this.handleCarRfid(gate, dto.rfidUid!, currentUser);
+        return this.handleCloudPlusCarRfid(gate, dto);
       case SimulatorEvent.HUMAN_RFID_DETECTED:
-        return this.handleHumanRfid(gate, dto.rfidUid!, currentUser);
+        return this.handleCloudPlusSearchCard(gate, dto);
       case SimulatorEvent.QR_VERIFIED:
         return this.handleQrVerified(gate, dto.qrToken!, currentUser);
       case SimulatorEvent.OBSTACLE_DETECTED:
@@ -218,6 +223,108 @@ export class SimulatorService {
       gateState: GateState.OPENING,
       eventId: event.id,
     };
+  }
+
+  /**
+   * Handle Car RFID via Cloud Plus TypeB SearchCardAcs
+   */
+  private async handleCloudPlusCarRfid(
+    gate: Gate,
+    dto: TriggerEventDto,
+  ): Promise<SimulatorFeedbackDto> {
+    // Build SearchCardAcs request from simulator DTO
+    const searchCardRequest = {
+      Serial: dto.Serial || gate.hardwareId || 'SIMULATOR',
+      Card: dto.rfidUid || '',
+      Reader: dto.Reader ? parseInt(dto.Reader, 10) : 0,
+      type: dto.type ? parseInt(dto.type, 10) : 12, // Default to RFID
+    };
+
+    try {
+      const response = await this.cloudPlusService.processSearchCardAcs(
+        searchCardRequest,
+        '',
+        'vehicle',
+        gate,
+      );
+
+      // Parse response to determine success/failure
+      const isAllowed = response.AcsRes === '1';
+
+      if (isAllowed) {
+        await this.transitionState(gate, GateState.OPENING);
+      }
+
+      return {
+        gateId: gate.id,
+        action: SimulatorEvent.CAR_RFID_DETECTED,
+        success: isAllowed,
+        message: isAllowed
+          ? `Access granted - Vehicle ${response.Name || 'Unknown'}`
+          : `Access denied - ${response.Note || 'Unknown vehicle'}`,
+        gateState: isAllowed ? GateState.OPENING : gate.state,
+      };
+    } catch (error) {
+      this.logger.error('Cloud Plus Car RFID error:', error);
+      return {
+        gateId: gate.id,
+        action: SimulatorEvent.CAR_RFID_DETECTED,
+        success: false,
+        message: 'Access denied - System error',
+        gateState: gate.state,
+      };
+    }
+  }
+
+  /**
+   * Handle Human RFID via Cloud Plus TypeB SearchCardAcs
+   */
+  private async handleCloudPlusSearchCard(
+    gate: Gate,
+    dto: TriggerEventDto,
+  ): Promise<SimulatorFeedbackDto> {
+    // Build SearchCardAcs request from simulator DTO
+    const searchCardRequest = {
+      Serial: dto.Serial || gate.hardwareId || 'SIMULATOR',
+      Card: dto.rfidUid || '',
+      Reader: dto.Reader ? parseInt(dto.Reader, 10) : 0,
+      type: dto.type ? parseInt(dto.type, 10) : 12, // Default to RFID
+    };
+
+    try {
+      const response = await this.cloudPlusService.processSearchCardAcs(
+        searchCardRequest,
+        '',
+        'human',
+        gate,
+      );
+
+      // Parse response to determine success/failure
+      const isAllowed = response.AcsRes === '1';
+
+      if (isAllowed) {
+        await this.transitionState(gate, GateState.OPENING);
+      }
+
+      return {
+        gateId: gate.id,
+        action: SimulatorEvent.HUMAN_RFID_DETECTED,
+        success: isAllowed,
+        message: isAllowed
+          ? `Access granted - ${response.Name || 'User'}`
+          : `Access denied - ${response.Note || 'Unknown'}`,
+        gateState: isAllowed ? GateState.OPENING : gate.state,
+      };
+    } catch (error) {
+      this.logger.error('Cloud Plus SearchCardAcs error:', error);
+      return {
+        gateId: gate.id,
+        action: SimulatorEvent.HUMAN_RFID_DETECTED,
+        success: false,
+        message: 'Access denied - System error',
+        gateState: gate.state,
+      };
+    }
   }
 
   private async handleHumanRfid(

@@ -13,7 +13,12 @@ import {
   Popconfirm,
   Badge,
   Tooltip,
+  Typography,
 } from 'antd';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
+
+const { Text } = Typography;
 import {
   PlusOutlined,
   EditOutlined,
@@ -24,15 +29,22 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
 
+interface GateDevice {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  status: string;
+}
+
 interface Gate {
   id: string;
   name: string;
   location: string;
   type: 'entry' | 'exit' | 'bidirectional';
-  status: string;
+  state: string;
   isOnline: boolean;
   hardwareId?: string;
-  deviceName?: string;
+  devices?: GateDevice[];
   tenantId: string;
   tenant?: { name: string };
   createdAt: string;
@@ -66,6 +78,8 @@ export default function GatesPage() {
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [form] = Form.useForm();
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
 
   const fetchGates = async () => {
     setLoading(true);
@@ -81,8 +95,13 @@ export default function GatesPage() {
 
   const fetchTenants = async () => {
     try {
-      const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      if (isSuperAdmin) {
+        const response = await api.get('/admin/tenants');
+        setTenants(response.data);
+      } else if (user?.tenant) {
+        // For building admin, use tenant from user profile
+        setTenants([{ id: user.tenant.id, name: user.tenant.name }]);
+      }
     } catch (error) {
       console.error('Failed to fetch tenants');
     }
@@ -117,16 +136,18 @@ export default function GatesPage() {
       const response = await api.get('/devices');
       const latestDevices = response.data as Device[];
       setDevices(latestDevices);
-      // Find the device linked to this gate
+      // Find the first device linked to this gate (for the dropdown)
       const linkedDevice = latestDevices.find((d: Device) => d.gateId === gate.id);
       form.setFieldsValue({
         ...gate,
-        deviceId: linkedDevice?.deviceId || gate.hardwareId,
+        deviceId: linkedDevice?.deviceId,
       });
     } catch {
+      // Use the first device from gate's devices array if available
+      const firstDevice = gate.devices?.[0];
       form.setFieldsValue({
         ...gate,
-        deviceId: gate.hardwareId,
+        deviceId: firstDevice?.deviceId,
       });
     }
     setModalVisible(true);
@@ -146,23 +167,22 @@ export default function GatesPage() {
     try {
       const { deviceId, ...gateValues } = values;
 
+      // For Building Admin, auto-set tenantId from user
+      if (!isSuperAdmin && user?.tenantId) {
+        gateValues.tenantId = user.tenantId;
+      }
+
       if (editingGate) {
         // Don't send tenantId on update - it's not allowed
         const { tenantId, ...updateValues } = gateValues;
         await api.patch(`/gates/${editingGate.id}`, updateValues);
 
-        // Handle device linking/unlinking
+        // Handle device linking - only link new device if selected
         if (deviceId) {
           // Find the device and link it to this gate
           const device = devices.find(d => d.deviceId === deviceId);
           if (device) {
             await api.patch(`/devices/${device.id}`, { gateId: editingGate.id });
-          }
-        } else if (editingGate.hardwareId) {
-          // Unlink the current device
-          const linkedDevice = devices.find(d => d.deviceId === editingGate.hardwareId);
-          if (linkedDevice) {
-            await api.patch(`/devices/${linkedDevice.id}`, { gateId: null });
           }
         }
 
@@ -214,36 +234,67 @@ export default function GatesPage() {
     },
     {
       title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: string) => (
-        <Tag color={gateStatusColors[status] || 'default'}>{status}</Tag>
+      dataIndex: 'state',
+      key: 'state',
+      render: (state: string) => (
+        <Tag color={gateStatusColors[state] || 'default'}>{state || '—'}</Tag>
       ),
     },
     {
       title: 'Online',
       dataIndex: 'isOnline',
       key: 'isOnline',
-      render: (isOnline: boolean) => (
-        <Badge status={isOnline ? 'success' : 'error'} text={isOnline ? 'Online' : 'Offline'} />
-      ),
+      render: (_: boolean, record: Gate) => {
+        const devs = record.devices || [];
+        if (devs.length === 0) {
+          return <span style={{ color: '#999' }}>—</span>;
+        }
+        const onlineCount = devs.filter((d) => d.status === 'online').length;
+        const totalCount = devs.length;
+        
+        if (totalCount === 1) {
+          // Single device - simple badge
+          return (
+            <Badge 
+              status={onlineCount > 0 ? 'success' : 'error'} 
+              text={onlineCount > 0 ? 'Online' : 'Offline'} 
+            />
+          );
+        }
+        
+        // Multiple devices - show count
+        const allOnline = onlineCount === totalCount;
+        const allOffline = onlineCount === 0;
+        return (
+          <Tooltip title={`${onlineCount} of ${totalCount} devices online`}>
+            <Tag color={allOnline ? 'green' : allOffline ? 'red' : 'orange'}>
+              {onlineCount}/{totalCount} Online
+            </Tag>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Device',
-      dataIndex: 'deviceName',
+      dataIndex: 'devices',
       key: 'device',
-      render: (_: unknown, record: Gate) =>
-        record.deviceName ? (
-          <Tooltip title={`Hardware ID: ${record.hardwareId}`}>
-            <Tag color="geekblue">{record.deviceName}</Tag>
-          </Tooltip>
-        ) : record.hardwareId ? (
-          <Tooltip title="Device registered but name not set">
-            <Tag color="orange">{record.hardwareId}</Tag>
-          </Tooltip>
-        ) : (
-          <Tag color="default">Not linked</Tag>
-        ),
+      render: (_: unknown, record: Gate) => {
+        const devs = record.devices || [];
+        if (devs.length === 0) {
+          return <Tag color="default">Not linked</Tag>;
+        }
+        return (
+          <Space size={[0, 4]} wrap>
+            {devs.map((d) => (
+              <Tooltip key={d.id} title={`ID: ${d.deviceId} | Status: ${d.status}`}>
+                <Tag color={d.status === 'online' ? 'green' : 'default'}>
+                  {d.deviceName}
+                </Tag>
+              </Tooltip>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: 'Building',
@@ -339,19 +390,25 @@ export default function GatesPage() {
             </Select>
           </Form.Item>
 
-          <Form.Item
-            name="tenantId"
-            label="Building"
-            rules={[{ required: true, message: 'Please select building' }]}
-          >
-            <Select placeholder="Select building">
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {isSuperAdmin ? (
+            <Form.Item
+              name="tenantId"
+              label="Building"
+              rules={[{ required: true, message: 'Please select building' }]}
+            >
+              <Select placeholder="Select building">
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            <Form.Item label="Building">
+              <Text strong>{user?.tenant?.name || tenants.find(t => t.id === user?.tenantId)?.name || '—'}</Text>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="deviceId"

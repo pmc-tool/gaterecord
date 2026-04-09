@@ -8,6 +8,8 @@ import {
   Modal,
   Form,
   Input,
+  Select,
+  Divider,
   message,
   Popconfirm,
   Tooltip,
@@ -20,10 +22,20 @@ import {
   ReloadOutlined,
   HomeOutlined,
   EyeOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import api from '../../services/api';
+
+interface SubscriptionPlan {
+  id: string;
+  name: string;
+  description?: string;
+  monthlyPrice: number;
+  maxGates: number;
+  maxUsers: number;
+}
 
 interface Tenant {
   id: string;
@@ -43,7 +55,9 @@ interface Tenant {
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [loading, setLoading] = useState(false);
+  const [plansLoading, setPlansLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
@@ -62,8 +76,21 @@ export default function TenantsPage() {
     }
   };
 
+  const fetchPlans = async () => {
+    setPlansLoading(true);
+    try {
+      const response = await api.get('/auth/plans');
+      setPlans(response.data);
+    } catch (error) {
+      message.error('Failed to fetch subscription plans');
+    } finally {
+      setPlansLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchTenants();
+    fetchPlans();
   }, []);
 
   const handleCreate = () => {
@@ -220,6 +247,7 @@ export default function TenantsPage() {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
+        width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item
@@ -256,6 +284,64 @@ export default function TenantsPage() {
           <Form.Item name="contactPhone" label="Contact Phone">
             <Input placeholder="+1 234 567 8900" />
           </Form.Item>
+
+          {/* Subscription Plan - only for creating new buildings */}
+          {!editingTenant && (
+            <>
+              <Divider orientation="left">Subscription Plan</Divider>
+              <Form.Item
+                name="subscriptionPlanId"
+                label="Select Plan"
+                rules={[{ required: true, message: 'Please select a subscription plan' }]}
+              >
+                <Select
+                  placeholder="Choose a subscription plan"
+                  loading={plansLoading}
+                  optionFilterProp="children"
+                  showSearch
+                >
+                  {plans.map((plan) => (
+                    <Select.Option key={plan.id} value={plan.id}>
+                      {plan.name} - ${plan.monthlyPrice}/mo (Max {plan.maxGates} gates, {plan.maxUsers} users)
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+
+              <Divider orientation="left">
+                <Space>
+                  <UserOutlined />
+                  Building Admin Account
+                </Space>
+              </Divider>
+              <Form.Item
+                name="adminEmail"
+                label="Admin Email"
+                rules={[
+                  { required: true, message: 'Please enter admin email' },
+                  { type: 'email', message: 'Please enter a valid email' },
+                ]}
+              >
+                <Input placeholder="admin@example.com" />
+              </Form.Item>
+
+              <Form.Item
+                name="adminFirstName"
+                label="Admin First Name"
+                rules={[{ required: true, message: 'Please enter admin first name' }]}
+              >
+                <Input placeholder="John" />
+              </Form.Item>
+
+              <Form.Item
+                name="adminLastName"
+                label="Admin Last Name"
+                rules={[{ required: true, message: 'Please enter admin last name' }]}
+              >
+                <Input placeholder="Doe" />
+              </Form.Item>
+            </>
+          )}
 
           <Form.Item className="mb-0 text-right">
             <Space>

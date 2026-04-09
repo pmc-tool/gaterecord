@@ -27,6 +27,21 @@ export class TriggerEventDto {
   @IsString()
   @IsOptional()
   qrToken?: string;
+
+  @ApiPropertyOptional({ example: 'ABC123456', description: 'Device Serial Number' })
+  @IsString()
+  @IsOptional()
+  Serial?: string;
+
+  @ApiPropertyOptional({ example: '0', description: 'Reader number (0 or 1)' })
+  @IsString()
+  @IsOptional()
+  Reader?: string;
+
+  @ApiPropertyOptional({ example: '12', description: 'Credential type (12=RFID, 16=QR)' })
+  @IsString()
+  @IsOptional()
+  type?: string;
 }
 
 export class SimulatorFeedbackDto {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -16,6 +17,8 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { SecurityAlertModule } from './modules/security-alert/security-alert.module';
 import { DevicesModule } from './modules/devices/devices.module';
 import { CloudPlusModule } from './modules/cloud-plus-typeB/cloud-plus.module';
+import { CloudPlusTcpModule } from './modules/cloud-plus-typeB-tcp/cloud-plus-tcp.module';
+import { StripeModule } from './modules/stripe/stripe.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -24,6 +27,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    EventEmitterModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -35,7 +39,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
             : false,
         autoLoadEntities: true,
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
-        logging: configService.get<string>('NODE_ENV') === 'development',
+        logging: configService.get<string>('TYPEORM_LOGGING') === 'true',
       }),
       inject: [ConfigService],
     }),
@@ -53,6 +57,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     SecurityAlertModule,
     DevicesModule,
     CloudPlusModule,
+    CloudPlusTcpModule,
+    StripeModule,
   ],
   controllers: [],
   providers: [

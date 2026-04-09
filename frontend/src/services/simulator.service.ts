@@ -5,6 +5,9 @@ export interface TriggerEventDto {
   event: SimulatorEvent;
   rfidUid?: string;
   qrToken?: string;
+  Serial?: string;
+  Reader?: string;
+  type?: string;
 }
 
 export interface UpdateSensorDto {

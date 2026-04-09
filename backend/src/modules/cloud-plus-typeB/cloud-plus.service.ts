@@ -53,16 +53,14 @@ export class CloudPlusService {
   async processSearchCardAcs(
     request: SearchCardAcsRequestDto,
     clientIp?: string,
+    handleType?: string,
+    gate?: Gate,
   ): Promise<SearchCardAcsResponseDto> {
     // Normalize request with defaults
     const serial = request.Serial || '';
     const card = request.Card || '';
     const credType = request.type ?? 12;
     const reader = request.Reader ?? 0;
-
-    this.logger.log(`=== Cloud Plus SearchCardAcs ===`);
-    this.logger.log(`Serial: ${serial}, Card: ${card}, Type: ${credType}`);
-
     const timestamp = this.formatTimestamp(new Date());
 
     try {
@@ -84,9 +82,9 @@ export class CloudPlusService {
       // Update device last seen
       await this.updateDeviceStatus(device, clientIp);
 
-      // Step 2: Find associated gate
-      const gate = device.gate;
-      if (!gate) {
+      // Step 2: Find associated gate from device
+      const deviceGate = device.gate;
+      if (!deviceGate) {
         this.logger.warn(`Device ${serial} not assigned to any gate`);
         return this.buildDenyResponse(
           card,
@@ -98,6 +96,26 @@ export class CloudPlusService {
         );
       }
 
+      // Validate gate ID matches if gate is provided
+      if (gate && gate.id !== deviceGate.id) {
+        this.logger.warn(
+          `Gate mismatch: provided gate ${gate.id} does not match device gate ${deviceGate.id}`,
+        );
+        return this.buildDenyResponse(
+          card,
+          reader,
+          credType,
+          'Gate Mismatch',
+          'Device not assigned to this gate',
+          timestamp,
+        );
+      }
+
+      // Use deviceGate for further processing
+      const activeGate = gate || deviceGate;
+
+      console.log(`Processing credential for gate: ${activeGate.name} (ID: ${activeGate.id})`);
+
       // Step 3: Process credential based on type
       const credentialType = credType & 0xff;
       let validationResult: ValidationResult;
@@ -105,17 +123,23 @@ export class CloudPlusService {
       switch (credentialType) {
         case CloudPlusCredentialType.CARD:
         case CloudPlusCredentialType.RFID_TAG:
-          validationResult = await this.validateRfidCredential(device.tenantId, card, gate);
+          validationResult = await this.validateRfidCredential(
+            device.tenantId,
+            card,
+            activeGate,
+            handleType,
+          );
           break;
 
         case CloudPlusCredentialType.QR_BASE64:
         case CloudPlusCredentialType.RS232:
           const decodedQr = this.decodeBase64Qr(card);
-          validationResult = await this.validateQrCode(device.tenantId, decodedQr, gate);
+          validationResult = await this.validateQrCode(device.tenantId, decodedQr, activeGate);
           break;
 
         case CloudPlusCredentialType.BUTTON:
           // Exit button - always allow (or check exit policy)
+          console.log(`Exit button pressed at gate ${activeGate.name}`);
           validationResult = {
             allowed: true,
             name: 'Exit Request',
@@ -126,13 +150,13 @@ export class CloudPlusService {
           break;
 
         case CloudPlusCredentialType.PASSWORD:
-          validationResult = await this.validatePassword(device.tenantId, card, gate);
+          validationResult = await this.validatePassword(device.tenantId, card, activeGate);
           break;
 
         case CloudPlusCredentialType.FACE:
         case CloudPlusCredentialType.FACE_ALT:
           // Face recognition - Card field contains face ID
-          validationResult = await this.validateFaceId(device.tenantId, card, gate);
+          validationResult = await this.validateFaceId(device.tenantId, card, activeGate);
           break;
 
         default:
@@ -148,10 +172,10 @@ export class CloudPlusService {
       }
 
       // Step 4: Log access event
-      await this.logAccessEvent(gate, validationResult, this.getAccessMethod(credentialType));
+      await this.logAccessEvent(activeGate, validationResult, this.getAccessMethod(credentialType));
 
       // Step 5: Notify frontend via WebSocket
-      this.notifyFrontend(gate, validationResult);
+      this.notifyFrontend(activeGate, validationResult);
 
       // Step 6: Build and return response
       return this.buildAllowDenyResponse(validationResult, card, reader, credType, timestamp);
@@ -284,37 +308,42 @@ export class CloudPlusService {
     tenantId: string,
     rfidUid: string,
     gate: Gate,
+    handleType?: string,
   ): Promise<ValidationResult> {
     const normalizedUid = rfidUid.toUpperCase().replace(/:/g, '');
 
     // First, try to match as vehicle RFID
-    const vehicle = await this.vehicleRepository.findOne({
-      where: {
-        tenantId,
-        rfidUid: normalizedUid,
-        status: VehicleStatus.ACTIVE,
-      },
-      relations: ['owner'],
-    });
+    if (handleType === 'vehicle') {
+      // If it's a card read event, we can prioritize vehicle check
+      const vehicle = await this.vehicleRepository.findOne({
+        where: {
+          tenantId,
+          rfidUid: normalizedUid,
+          status: VehicleStatus.ACTIVE,
+        },
+        relations: ['owner'],
+      });
 
-    if (vehicle) {
-      return this.validateVehicleAccess(vehicle, normalizedUid);
+      if (vehicle) {
+        return this.validateVehicleAccess(vehicle, normalizedUid);
+      }
+    } else {
+      // For other events, we can check RFID cards first
+
+      // Try to match as human RFID card
+      const rfidCard = await this.rfidCardRepository.findOne({
+        where: {
+          tenantId,
+          uid: normalizedUid,
+          status: RfidCardStatus.ACTIVE,
+        },
+        relations: ['user'],
+      });
+
+      if (rfidCard) {
+        return this.validateRfidCardAccess(rfidCard, normalizedUid);
+      }
     }
-
-    // Try to match as human RFID card
-    const rfidCard = await this.rfidCardRepository.findOne({
-      where: {
-        tenantId,
-        uid: normalizedUid,
-        status: RfidCardStatus.ACTIVE,
-      },
-      relations: ['user'],
-    });
-
-    if (rfidCard) {
-      return this.validateRfidCardAccess(rfidCard, normalizedUid);
-    }
-
     // No matching credential found
     return {
       allowed: false,
@@ -682,6 +711,8 @@ export class CloudPlusService {
       Note: `${typeName} - ${reason}`,
       Systime: timestamp,
       Voice: 'Access Denied',
+      LCD: '7', // LCD page 7 = deny/invalid
+      LCDTime: '5', // Show for 5 seconds
     };
   }
 
@@ -706,6 +737,8 @@ export class CloudPlusService {
       Note: `${typeName} - ${result.allowed ? 'Access Granted' : result.denialReason || 'Access Denied'}`,
       Systime: timestamp,
       Voice: result.allowed ? `Welcome ${result.name}` : 'Access Denied',
+      LCD: result.allowed ? '6' : '7', // LCD page 6 = pass, 7 = deny
+      LCDTime: '5', // Show for 5 seconds
     };
   }
 

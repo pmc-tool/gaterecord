@@ -10,11 +10,13 @@ import { User } from '@database/entities/user.entity';
 import { RefreshToken } from '@database/entities/refresh-token.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
+import { StripeModule } from '../stripe/stripe.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, RefreshToken, Tenant, SubscriptionPlan]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
+    StripeModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

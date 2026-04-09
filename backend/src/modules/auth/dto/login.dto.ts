@@ -1,4 +1,13 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsObject } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsString,
+  MinLength,
+  IsOptional,
+  IsObject,
+  IsBoolean,
+  IsIn,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class LoginDto {
@@ -89,11 +98,35 @@ export class SignupDto {
   @IsNotEmpty()
   planName: string;
 
+  @ApiPropertyOptional({
+    example: 'monthly',
+    description: 'Billing interval: monthly or yearly',
+  })
+  @IsString()
+  @IsIn(['monthly', 'yearly'])
+  @IsOptional()
+  billingInterval?: 'monthly' | 'yearly';
+
+  @ApiPropertyOptional({
+    description: 'Whether this signup requires payment (for paid plans)',
+  })
+  @IsBoolean()
+  @IsOptional()
+  requiresPayment?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Start a free trial without payment (for plans with trial days)',
+  })
+  @IsBoolean()
+  @IsOptional()
+  startTrial?: boolean;
+
   @ApiPropertyOptional({ description: 'Dummy payment info for now' })
   @IsObject()
   @IsOptional()
   paymentInfo?: {
     cardLast4?: string;
     cardBrand?: string;
+    cardholderName?: string;
   };
 }

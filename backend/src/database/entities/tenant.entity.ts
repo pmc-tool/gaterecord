@@ -13,11 +13,23 @@ export enum TenantStatus {
   ACTIVE = 'active',
   SUSPENDED = 'suspended',
   TRIAL = 'trial',
+  PENDING_PAYMENT = 'pending_payment', // Account created but waiting for Stripe payment
 }
 
 export enum BillingCycle {
   MONTHLY = 'monthly',
   YEARLY = 'yearly',
+}
+
+export enum SubscriptionStatus {
+  TRIALING = 'trialing',
+  ACTIVE = 'active',
+  PAST_DUE = 'past_due',
+  CANCELED = 'canceled',
+  INCOMPLETE = 'incomplete',
+  INCOMPLETE_EXPIRED = 'incomplete_expired',
+  UNPAID = 'unpaid',
+  PAUSED = 'paused',
 }
 
 @Entity('tenants')
@@ -63,6 +75,40 @@ export class Tenant extends BaseEntity {
 
   @Column({ type: 'jsonb', nullable: true })
   settings: Record<string, unknown>;
+
+  // Stripe Integration
+  @Column({ name: 'stripe_customer_id', nullable: true })
+  stripeCustomerId: string;
+
+  @Column({ name: 'stripe_subscription_id', nullable: true })
+  stripeSubscriptionId: string;
+
+  @Column({
+    type: 'enum',
+    enum: SubscriptionStatus,
+    name: 'subscription_status',
+    default: SubscriptionStatus.TRIALING,
+  })
+  subscriptionStatus: SubscriptionStatus;
+
+  @Column({ name: 'current_period_end', nullable: true })
+  currentPeriodEnd: Date;
+
+  @Column({ name: 'cancel_at_period_end', default: false })
+  cancelAtPeriodEnd: boolean;
+
+  // Subscription Pause
+  @Column({ name: 'is_paused', default: false })
+  isPaused: boolean;
+
+  @Column({ name: 'paused_at', nullable: true })
+  pausedAt: Date;
+
+  @Column({ name: 'pause_resumes_at', nullable: true })
+  pauseResumesAt: Date;
+
+  @Column({ name: 'pause_reason', nullable: true })
+  pauseReason: string;
 
   @OneToMany(() => User, (user) => user.tenant)
   users: User[];

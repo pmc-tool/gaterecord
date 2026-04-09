@@ -62,10 +62,17 @@ interface EventLog {
 export function GateSimulatorPage() {
   const { gates, fetchGates, selectedGate, fetchGateById, gateHealth, fetchGateHealth, updateGateState } = useGateStore();
   const [selectedGateId, setSelectedGateId] = useState<string | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [selectedDoor, setSelectedDoor] = useState<number>(0);
   const [rfidUid, setRfidUid] = useState('');
   const [qrToken, setQrToken] = useState('');
   const [eventLogs, setEventLogs] = useState<EventLog[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Cloud Plus TypeB parameters
+  const [serialNumber, setSerialNumber] = useState('');
+  const [readerNumber, setReaderNumber] = useState('0');
+  const [credentialType, setCredentialType] = useState('12');
 
   // Camera scanner state
   const [scannerModalOpen, setScannerModalOpen] = useState(false);
@@ -79,6 +86,10 @@ export function GateSimulatorPage() {
 
   useEffect(() => {
     if (selectedGateId) {
+      // Reset device and door selection when gate changes
+      setSelectedDeviceId(null);
+      setSelectedDoor(0);
+      
       fetchGateById(selectedGateId);
       fetchGateHealth(selectedGateId);
       socketService.joinGate(selectedGateId);
@@ -165,7 +176,12 @@ export function GateSimulatorPage() {
       message.error('Please enter RFID UID');
       return;
     }
-    triggerEvent(SimulatorEvent.CAR_RFID_DETECTED, { rfidUid: rfidUid.trim() });
+    triggerEvent(SimulatorEvent.CAR_RFID_DETECTED, {
+      rfidUid: rfidUid.trim(),
+      Serial: serialNumber || undefined,
+      Reader: readerNumber || undefined,
+      type: credentialType || undefined,
+    });
   };
 
   const handleHumanRfid = () => {
@@ -173,7 +189,12 @@ export function GateSimulatorPage() {
       message.error('Please enter RFID UID');
       return;
     }
-    triggerEvent(SimulatorEvent.HUMAN_RFID_DETECTED, { rfidUid: rfidUid.trim() });
+    triggerEvent(SimulatorEvent.HUMAN_RFID_DETECTED, {
+      rfidUid: rfidUid.trim(),
+      Serial: serialNumber || undefined,
+      Reader: readerNumber || undefined,
+      type: credentialType || undefined,
+    });
   };
 
   const handleQrVerify = (token?: string) => {
@@ -182,19 +203,35 @@ export function GateSimulatorPage() {
       message.error('Please enter QR Token');
       return;
     }
-    triggerEvent(SimulatorEvent.QR_VERIFIED, { qrToken: tokenToUse });
+    triggerEvent(SimulatorEvent.QR_VERIFIED, {
+      qrToken: tokenToUse,
+      Serial: serialNumber || undefined,
+      Reader: readerNumber || undefined,
+      type: '16', // QR type
+    });
   };
 
-  // Send real command to hardware via MQTT
+  // Send real command to hardware via TCP
   const sendHardwareCommand = async (action: 'OPEN' | 'CLOSE' | 'STOP') => {
     if (!selectedGateId) {
       message.error('Please select a gate first');
       return;
     }
 
+    if (!selectedDeviceId) {
+      message.error('Please select a device first');
+      return;
+    }
+
     setIsProcessing(true);
     try {
-      const response = await api.post(`/gates/${selectedGateId}/control`, { action });
+      // Map action to TCP endpoint action
+      const tcpAction = action === 'OPEN' ? 'open' : action === 'CLOSE' ? 'close' : 'close';
+      const response = await api.post(`/gates/${selectedGateId}/tcp/control`, { 
+        action: tcpAction,
+        deviceId: selectedDeviceId,
+        door: selectedDoor,
+      });
       if (response.data.success) {
         message.success(response.data.message);
         addEventLog({
@@ -216,8 +253,17 @@ export function GateSimulatorPage() {
           gateState: selectedGate?.state || GateState.CLOSED,
         });
       }
-    } catch (error) {
-      message.error('Failed to send hardware command');
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.message || 'Failed to send hardware command';
+      message.error(errorMsg);
+      addEventLog({
+        eventId: Date.now().toString(),
+        action: `HARDWARE_${action}`,
+        success: false,
+        message: errorMsg,
+        gateId: selectedGateId,
+        gateState: selectedGate?.state || GateState.CLOSED,
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -388,6 +434,38 @@ export function GateSimulatorPage() {
                 onChange={(e) => setRfidUid(e.target.value)}
                 addonBefore={<IdcardOutlined />}
               />
+
+              {/* Cloud Plus TypeB Parameters */}
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  placeholder="Serial Number"
+                  value={serialNumber}
+                  onChange={(e) => setSerialNumber(e.target.value)}
+                  size="small"
+                />
+                <Select
+                  placeholder="Reader"
+                  value={readerNumber}
+                  onChange={setReaderNumber}
+                  size="small"
+                  options={[
+                    { value: '0', label: 'Reader 0' },
+                    { value: '1', label: 'Reader 1' },
+                  ]}
+                />
+                <Select
+                  placeholder="Type"
+                  value={credentialType}
+                  onChange={setCredentialType}
+                  size="small"
+                  options={[
+                    { value: '12', label: 'RFID (12)' },
+                    { value: '16', label: 'QR (16)' },
+                    { value: '4', label: 'Button (4)' },
+                  ]}
+                />
+              </div>
+
               <Space className="w-full">
                 <Button
                   icon={<CarOutlined />}
@@ -440,17 +518,57 @@ export function GateSimulatorPage() {
 
           <Card title="Manual Controls" className="mb-4">
             <Space direction="vertical" className="w-full">
-              {/* Real Hardware Control - only show if gate has hardware linked */}
-              {selectedGate?.hardwareId && (
+              {/* Real Hardware Control - show if gate has devices */}
+              {selectedGate?.devices && selectedGate.devices.length > 0 && (
                 <>
                   <Text strong className="text-green-600">Hardware Control (Real Device)</Text>
+                  
+                  {/* Device Selection */}
+                  <Select
+                    placeholder="Select device to control"
+                    value={selectedDeviceId}
+                    onChange={(value) => {
+                      setSelectedDeviceId(value);
+                      setSelectedDoor(0); // Reset door when device changes
+                    }}
+                    className="w-full"
+                    options={selectedGate.devices.map((device) => ({
+                      value: device.deviceId,
+                      label: (
+                        <span>
+                          {device.deviceName || device.deviceId}
+                          <Tag 
+                            color={device.status === 'online' ? 'success' : 'default'} 
+                            className="ml-2"
+                          >
+                            {device.status}
+                          </Tag>
+                        </span>
+                      ),
+                    }))}
+                  />
+                  
+                  {/* Door Selection - Cloud Plus TypeB supports 2 doors */}
+                  {selectedDeviceId && (
+                    <Select
+                      placeholder="Select door"
+                      value={selectedDoor}
+                      onChange={setSelectedDoor}
+                      className="w-full"
+                      options={[
+                        { value: 0, label: 'Door 0 (Entry/Exit 1)' },
+                        { value: 1, label: 'Door 1 (Entry/Exit 2)' },
+                      ]}
+                    />
+                  )}
+                  
                   <Space className="w-full justify-center">
                     <Button
                       type="primary"
                       icon={<UpOutlined />}
                       onClick={() => sendHardwareCommand('OPEN')}
                       loading={isProcessing}
-                      disabled={!selectedGateId}
+                      disabled={!selectedGateId || !selectedDeviceId}
                       size="large"
                       style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
                     >
@@ -461,7 +579,7 @@ export function GateSimulatorPage() {
                       icon={<DownOutlined />}
                       onClick={() => sendHardwareCommand('CLOSE')}
                       loading={isProcessing}
-                      disabled={!selectedGateId}
+                      disabled={!selectedGateId || !selectedDeviceId}
                       size="large"
                     >
                       Close Gate
@@ -480,7 +598,7 @@ export function GateSimulatorPage() {
                   disabled={!selectedGateId}
                   size="large"
                 >
-                  {selectedGate?.hardwareId ? 'Simulate Open' : 'Manual Open'}
+                  {selectedGate?.devices && selectedGate.devices.length > 0 ? 'Simulate Open' : 'Manual Open'}
                 </Button>
                 <Button
                   danger
@@ -490,7 +608,7 @@ export function GateSimulatorPage() {
                   disabled={!selectedGateId}
                   size="large"
                 >
-                  {selectedGate?.hardwareId ? 'Simulate Close' : 'Manual Close'}
+                  {selectedGate?.devices && selectedGate.devices.length > 0 ? 'Simulate Close' : 'Manual Close'}
                 </Button>
               </Space>
             </Space>

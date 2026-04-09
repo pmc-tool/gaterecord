@@ -19,7 +19,12 @@ import {
   ClaimDeviceDto,
   ClaimResponseDto,
 } from './dto/setup-code.dto';
-import { DeviceResponseDto, UpdateDeviceDto, UpdateCheckResponseDto } from './dto/device.dto';
+import {
+  DeviceResponseDto,
+  UpdateDeviceDto,
+  UpdateCheckResponseDto,
+  CreateDeviceDto,
+} from './dto/device.dto';
 import { FirmwareService } from './firmware.service';
 import { GatewayService } from '../gateway/gateway.service';
 
@@ -332,6 +337,52 @@ export class DevicesService {
 
   // ==================== Device Management ====================
 
+  async createDevice(dto: CreateDeviceDto, user: User): Promise<DeviceResponseDto> {
+    // Only Super Admin can create devices directly
+    if (user.role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only Super Admin can create devices directly');
+    }
+
+    // Normalize device ID (remove colons if present)
+    const normalizedDeviceId = this.normalizeDeviceId(dto.deviceId);
+
+    // Check if device already exists
+    const existingDevice = await this.deviceConfigRepo.findOne({
+      where: { deviceId: normalizedDeviceId },
+    });
+
+    if (existingDevice) {
+      throw new BadRequestException('Device with this ID already exists');
+    }
+
+    // Validate gate belongs to tenant if provided
+    if (dto.gateId) {
+      const gate = await this.gateRepo.findOne({
+        where: { id: dto.gateId, tenantId: dto.tenantId },
+      });
+      if (!gate) {
+        throw new NotFoundException('Gate not found in the specified tenant');
+      }
+    }
+
+    // Create device config
+    const device = await this.deviceConfigRepo.save({
+      deviceName: dto.deviceName,
+      deviceId: normalizedDeviceId,
+      tenantId: dto.tenantId,
+      gateId: dto.gateId || null,
+      status: DeviceStatus.OFFLINE,
+    });
+
+    // Fetch with relations for response
+    const savedDevice = await this.deviceConfigRepo.findOne({
+      where: { id: device.id },
+      relations: ['gate'],
+    });
+
+    return this.mapDeviceToResponse(savedDevice!);
+  }
+
   async getDevices(user: User): Promise<DeviceResponseDto[]> {
     let devices: DeviceConfig[];
 
@@ -385,13 +436,27 @@ export class DevicesService {
       throw new ForbiddenException('Access denied');
     }
 
+    // Handle tenant change (Super Admin only)
+    let targetTenantId = device.tenantId;
+    if (dto.tenantId && user.role === UserRole.SUPER_ADMIN) {
+      targetTenantId = dto.tenantId;
+      device.tenantId = dto.tenantId;
+
+      // If tenant changed and gate is set, clear the gate (it belongs to old tenant)
+      if (dto.tenantId !== device.tenantId && device.gateId && !dto.gateId) {
+        // Remove hardware ID from old gate
+        await this.gateRepo.update(device.gateId, { hardwareId: null });
+        device.gateId = null;
+      }
+    }
+
     // Validate gate if provided
     if (dto.gateId) {
       const gate = await this.gateRepo.findOne({
-        where: { id: dto.gateId, tenantId: device.tenantId },
+        where: { id: dto.gateId, tenantId: targetTenantId },
       });
       if (!gate) {
-        throw new NotFoundException('Gate not found');
+        throw new NotFoundException('Gate not found in the specified tenant');
       }
 
       // Update gate hardware ID (normalized - no colons)
@@ -401,6 +466,11 @@ export class DevicesService {
 
       // Remove hardware ID from old gate
       if (device.gateId && device.gateId !== dto.gateId) {
+        await this.gateRepo.update(device.gateId, { hardwareId: null });
+      }
+    } else if (dto.gateId === null) {
+      // Explicitly clearing the gate
+      if (device.gateId) {
         await this.gateRepo.update(device.gateId, { hardwareId: null });
       }
     }

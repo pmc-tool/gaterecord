@@ -9,7 +9,7 @@ export class CreateVehicleDto {
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
-  make?: string;
+  brand?: string;
 
   @ApiPropertyOptional()
   @IsString()
@@ -48,7 +48,7 @@ export class UpdateVehicleDto {
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
-  make?: string;
+  brand?: string;
 
   @ApiPropertyOptional()
   @IsString()

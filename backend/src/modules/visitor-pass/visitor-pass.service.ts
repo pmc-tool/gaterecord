@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import { Repository } from 'typeorm';
 import {
   VisitorPass,
   VisitorPassStatus,
@@ -214,6 +214,55 @@ export class VisitorPassService {
     return pass;
   }
 
+  async findByTokenProtected(
+    qrToken: string,
+    currentUser: User,
+  ): Promise<{
+    pass: VisitorPass;
+    createdBy: {
+      id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      role: string;
+    } | null;
+    tenant: { id: string; name: string; address?: string } | null;
+  }> {
+    const pass = await this.visitorPassRepository.findOne({
+      where: { qrToken },
+      relations: ['createdBy', 'tenant', 'resident'],
+    });
+
+    if (!pass) {
+      throw new NotFoundException('Visitor pass not found');
+    }
+
+    // Check access: Super Admin can see all, others only their tenant
+    if (currentUser.role !== UserRole.SUPER_ADMIN && pass.tenantId !== currentUser.tenantId) {
+      throw new ForbiddenException('You do not have access to this visitor pass');
+    }
+
+    return {
+      pass,
+      createdBy: pass.createdBy
+        ? {
+            id: pass.createdBy.id,
+            firstName: pass.createdBy.firstName,
+            lastName: pass.createdBy.lastName,
+            email: pass.createdBy.email,
+            role: pass.createdBy.role,
+          }
+        : null,
+      tenant: pass.tenant
+        ? {
+            id: pass.tenant.id,
+            name: pass.tenant.name,
+            address: pass.tenant.address,
+          }
+        : null,
+    };
+  }
+
   async update(
     id: string,
     updateDto: UpdateVisitorPassDto,
@@ -266,14 +315,14 @@ export class VisitorPassService {
   async getQrCode(id: string, currentUser: User): Promise<string> {
     const pass = await this.findOne(id, currentUser);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const publicUrl = `${frontendUrl}/visitor-pass/${pass.qrToken}`;
+    const publicUrl = `${frontendUrl}/visitor-passes/${pass.qrToken}`;
     return QRCode.toDataURL(publicUrl);
   }
 
   async getQrCodeByToken(qrToken: string): Promise<string> {
     const pass = await this.findByToken(qrToken);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const publicUrl = `${frontendUrl}/visitor-pass/${pass.qrToken}`;
+    const publicUrl = `${frontendUrl}/visitor-passes/${pass.qrToken}`;
     return QRCode.toDataURL(publicUrl);
   }
 

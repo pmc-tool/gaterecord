@@ -81,6 +81,16 @@ export class SubscriptionPlan extends BaseEntity {
   @Column({ name: 'is_public', default: true })
   isPublic: boolean; // Show on pricing page
 
+  // Stripe Integration
+  @Column({ name: 'stripe_product_id', nullable: true })
+  stripeProductId: string;
+
+  @Column({ name: 'stripe_price_id_monthly', nullable: true })
+  stripePriceIdMonthly: string;
+
+  @Column({ name: 'stripe_price_id_yearly', nullable: true })
+  stripePriceIdYearly: string;
+
   @OneToMany(() => Tenant, (tenant) => tenant.subscriptionPlan)
   tenants: Tenant[];
 }

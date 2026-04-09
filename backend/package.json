@@ -20,7 +20,9 @@
     "migration:generate": "npm run typeorm -- migration:generate -d src/database/data-source.ts",
     "migration:run": "npm run typeorm -- migration:run -d src/database/data-source.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d src/database/data-source.ts",
-    "seed": "ts-node -r tsconfig-paths/register src/database/seeds/seed.ts"
+    "seed": "ts-node -r tsconfig-paths/register src/database/seeds/seed.ts",
+    "sim:tcp": "ts-node -r tsconfig-paths/register src/modules/simulator/tcp-client-simulator.ts",
+    "test:stripe": "ts-node -r tsconfig-paths/register scripts/test-stripe-integration.ts"
   },
   "keywords": [
     "gate-management",
@@ -34,6 +36,7 @@
     "@nestjs/common": "^10.4.20",
     "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.4.20",
+    "@nestjs/event-emitter": "^3.0.1",
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.20",
@@ -57,6 +60,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.1",
+    "stripe": "^17.5.0",
     "typeorm": "^0.3.28",
     "uuid": "^9.0.1"
   },

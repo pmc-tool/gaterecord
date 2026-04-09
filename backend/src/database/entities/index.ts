@@ -1,5 +1,6 @@
 export * from './base.entity';
 export * from './subscription-plan.entity';
+export * from './subscription-audit-log.entity';
 export * from './tenant.entity';
 export * from './user.entity';
 export * from './gate.entity';

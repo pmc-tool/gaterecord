@@ -22,6 +22,11 @@ export interface User {
   role: UserRole;
   status: UserStatus;
   tenantId?: string;
+  tenant?: {
+    id: string;
+    name: string;
+    slug: string;
+  };
   unit?: string;
   createdAt: string;
   updatedAt: string;
@@ -80,6 +85,13 @@ export enum GateState {
   MANUAL_OVERRIDE = 'MANUAL_OVERRIDE',
 }
 
+export interface GateDevice {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  status: string;
+}
+
 export interface Gate {
   id: string;
   name: string;
@@ -92,6 +104,7 @@ export interface Gate {
   tenantId: string;
   hardwareId?: string;
   deviceName?: string;
+  devices?: GateDevice[];
   createdAt: string;
   updatedAt: string;
 }

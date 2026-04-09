@@ -30,7 +30,7 @@ import { UserRole } from '../../types';
 interface Vehicle {
   id: string;
   licensePlate: string;
-  make?: string;
+  brand?: string;
   model?: string;
   color?: string;
   rfidUid: string;
@@ -64,11 +64,19 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   // RFID Registration state
   const [rfidModalVisible, setRfidModalVisible] = useState(false);
   const [rfidTargetVehicle, setRfidTargetVehicle] = useState<Vehicle | null>(null);
+
+  // Filter residents by selected building
+  const filteredResidents = selectedTenantId
+    ? residents.filter((r) => r.tenantId === selectedTenantId)
+    : isSuperAdmin
+      ? [] // Super admin must select a building first
+      : residents; // Building admin sees their own residents
 
   const fetchVehicles = async () => {
     setLoading(true);
@@ -111,12 +119,16 @@ export default function VehiclesPage() {
 
   const handleCreate = () => {
     setEditingVehicle(null);
+    setSelectedTenantId(null);
     form.resetFields();
+    // Clear owner when opening modal
+    form.setFieldValue('ownerId', undefined);
     setModalVisible(true);
   };
 
   const handleEdit = (vehicle: Vehicle) => {
     setEditingVehicle(vehicle);
+    setSelectedTenantId(vehicle.tenantId);
     form.setFieldsValue({
       ...vehicle,
       isActive: vehicle.status === 'active',
@@ -146,6 +158,7 @@ export default function VehiclesPage() {
         message.success('Vehicle created successfully');
       }
       setModalVisible(false);
+      setSelectedTenantId(null);
       fetchVehicles();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
@@ -193,10 +206,10 @@ export default function VehiclesPage() {
       key: 'vehicle',
       render: (_, record) => (
         <span>
-          {record.make || record.model || record.color ? (
+          {record.brand || record.model || record.color ? (
             <>
               {record.color && <span className="text-gray-500">{record.color} </span>}
-              {record.make} {record.model}
+              {record.brand} {record.model}
             </>
           ) : (
             <span className="text-gray-400">-</span>
@@ -314,7 +327,10 @@ export default function VehiclesPage() {
       <Modal
         title={editingVehicle ? 'Edit Vehicle' : 'Add Vehicle'}
         open={modalVisible}
-        onCancel={() => setModalVisible(false)}
+        onCancel={() => {
+          setModalVisible(false);
+          setSelectedTenantId(null);
+        }}
         footer={null}
         width={600}
       >
@@ -328,7 +344,7 @@ export default function VehiclesPage() {
           </Form.Item>
 
           <div className="grid grid-cols-3 gap-4">
-            <Form.Item name="make" label="Make">
+            <Form.Item name="brand" label="Brand">
               <Input placeholder="e.g., Toyota" />
             </Form.Item>
 
@@ -363,7 +379,14 @@ export default function VehiclesPage() {
               label="Building"
               rules={[{ required: true, message: 'Please select building' }]}
             >
-              <Select placeholder="Select building">
+              <Select
+                placeholder="Select building"
+                onChange={(value) => {
+                  setSelectedTenantId(value);
+                  // Clear owner when building changes
+                  form.setFieldValue('ownerId', undefined);
+                }}
+              >
                 {tenants.map((tenant) => (
                   <Select.Option key={tenant.id} value={tenant.id}>
                     {tenant.name}
@@ -378,11 +401,15 @@ export default function VehiclesPage() {
             label="Owner (Resident)"
             rules={[{ required: true, message: 'Please select owner' }]}
           >
-            <Select placeholder="Select resident" showSearch optionFilterProp="children">
-              {residents.map((resident) => (
+            <Select
+              placeholder={isSuperAdmin && !selectedTenantId ? 'Select building first' : 'Select resident'}
+              showSearch
+              optionFilterProp="children"
+              disabled={isSuperAdmin && !selectedTenantId && !editingVehicle}
+            >
+              {filteredResidents.map((resident) => (
                 <Select.Option key={resident.id} value={resident.id}>
                   {resident.firstName} {resident.lastName} - Unit {resident.unit}
-                  {isSuperAdmin && resident.tenant && ` (${resident.tenant.name})`}
                 </Select.Option>
               ))}
             </Select>

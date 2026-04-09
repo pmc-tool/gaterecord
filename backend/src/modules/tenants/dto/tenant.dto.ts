@@ -10,7 +10,7 @@ import {
   IsObject,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { TenantStatus, BillingCycle } from '@database/entities/tenant.entity';
+import { TenantStatus } from '@database/entities/tenant.entity';
 
 export class CreateTenantDto {
   @ApiProperty({ example: 'Sunrise Apartments' })

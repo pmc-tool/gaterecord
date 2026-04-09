@@ -20,6 +20,9 @@ import VisitorPassPage from './pages/public/VisitorPassPage';
 import ReportUnauthorizedPage from './pages/public/ReportUnauthorizedPage';
 import SecurityAlertsPage from './pages/security/SecurityAlertsPage';
 import SignupPage from './pages/signup/SignupPage';
+import SignupSuccessPage from './pages/signup/SignupSuccessPage';
+import BillingSettingsPage from './pages/billing/BillingSettingsPage';
+import PaymentsAdminPage from './pages/admin/PaymentsAdminPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -52,6 +55,12 @@ function App() {
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <SignupPage />}
         />
 
+        {/* Signup Success - after Stripe Checkout */}
+        <Route
+          path="/signup/success"
+          element={<SignupSuccessPage />}
+        />
+
         {/* Public visitor pass page (no auth required) */}
         <Route path="/visitor-pass/:qrToken" element={<VisitorPassPage />} />
 
@@ -78,8 +87,10 @@ function App() {
           <Route path="admin/firmware" element={<FirmwareManagementPage />} />
           <Route path="admin/residents" element={<ResidentsPage />} />
           <Route path="admin/vehicles" element={<VehiclesPage />} />
+          <Route path="admin/payments" element={<PaymentsAdminPage />} />
           <Route path="visitors" element={<MyVisitorsPage />} />
           <Route path="security-alerts" element={<SecurityAlertsPage />} />
+          <Route path="billing/settings" element={<BillingSettingsPage />} />
         </Route>
 
         {/* Catch all - redirect to landing */}

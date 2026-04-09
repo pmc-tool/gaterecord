@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -18,6 +18,7 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { GatesModule } from '../gates/gates.module';
 import { AccessEventsModule } from '../access-events/access-events.module';
 import { SecurityAlertModule } from '../security-alert/security-alert.module';
+import { CloudPlusModule } from '../cloud-plus-typeB/cloud-plus.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { SecurityAlertModule } from '../security-alert/security-alert.module';
     GatesModule,
     AccessEventsModule,
     SecurityAlertModule,
+    forwardRef(() => CloudPlusModule),
   ],
   controllers: [SimulatorController],
   providers: [SimulatorService, SimulatorGateway],

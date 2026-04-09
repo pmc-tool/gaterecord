@@ -15,14 +15,16 @@ import {
   DollarOutlined,
   AlertOutlined,
   DesktopOutlined,
-  CloudUploadOutlined,
+  CreditCardOutlined,
+  RocketOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
 import { socketService } from '../../services/socket.service';
+import { PlansModal } from '../billing/PlansModal';
 
-interface UserWithTenant extends User {
-  tenant?: { id: string; name: string; slug: string } | null;
+interface UserWithTenant extends Omit<User, 'tenant'> {
+  tenant?: { id: string; name: string; slug: string };
 }
 
 const { Header, Sider, Content } = Layout;
@@ -33,6 +35,7 @@ export function AppLayout() {
   const location = useLocation();
   const { user, logout, tokens } = useAuthStore();
   const [collapsed, setCollapsed] = useState(false);
+  const [plansModalOpen, setPlansModalOpen] = useState(false);
   const userWithTenant = user as UserWithTenant | null;
 
   useEffect(() => {
@@ -106,6 +109,11 @@ export function AppLayout() {
             label: 'Subscriptions',
           },
           {
+            key: '/admin/payments',
+            icon: <CreditCardOutlined />,
+            label: 'Payments',
+          },
+          {
             key: '/admin/plans',
             label: 'Plans',
           },
@@ -113,11 +121,11 @@ export function AppLayout() {
             key: '/admin/tenants',
             label: 'Buildings',
           },
-          {
-            key: '/admin/firmware',
-            icon: <CloudUploadOutlined />,
-            label: 'Firmware',
-          },
+          // {
+          //   key: '/admin/firmware',
+          //   icon: <CloudUploadOutlined />,
+          //   label: 'Firmware',
+          // },
         ] : []),
         {
           key: '/admin/devices',
@@ -134,7 +142,29 @@ export function AppLayout() {
         },
       ],
     },
+    // Billing Settings for building admins
+    {
+      key: '/billing/settings',
+      icon: <CreditCardOutlined />,
+      label: 'Billing',
+      roles: [UserRole.BUILDING_ADMIN],
+    },
+    // Upgrade for building admins
+    {
+      key: 'upgrade',
+      icon: <RocketOutlined />,
+      label: 'Upgrade',
+      roles: [UserRole.BUILDING_ADMIN],
+    },
   ].filter((item) => !item.roles || item.roles.includes(user?.role as UserRole));
+
+  const handleMenuClick = ({ key }: { key: string }) => {
+    if (key === 'upgrade') {
+      setPlansModalOpen(true);
+    } else {
+      navigate(key);
+    }
+  };
 
   const userMenu = {
     items: [
@@ -181,7 +211,7 @@ export function AppLayout() {
           mode="inline"
           selectedKeys={[location.pathname]}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={handleMenuClick}
           className="border-r-0"
         />
       </Sider>
@@ -208,6 +238,14 @@ export function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+      
+      {/* Plans Modal */}
+      {user?.role === UserRole.BUILDING_ADMIN && (
+        <PlansModal
+          open={plansModalOpen}
+          onClose={() => setPlansModalOpen(false)}
+        />
+      )}
     </Layout>
   );
 }

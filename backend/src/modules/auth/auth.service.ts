@@ -212,9 +212,40 @@ export class AuthService {
     // Check if email already exists
     const existingUser = await this.userRepository.findOne({
       where: { email: signupDto.email.toLowerCase() },
+      relations: ['tenant'],
     });
 
     if (existingUser) {
+      // If user exists but tenant is PENDING_PAYMENT, allow re-signup (resume checkout)
+      if (existingUser.tenant?.status === TenantStatus.PENDING_PAYMENT) {
+        this.logger.log(`Resuming signup for pending account: ${signupDto.email}`);
+
+        // Update password in case they changed it
+        const passwordHash = await bcrypt.hash(signupDto.password, 10);
+        await this.userRepository.update(existingUser.id, { passwordHash });
+
+        // Generate tokens and return (they can proceed to Stripe Checkout)
+        const tokens = await this.generateTokens(existingUser, userAgent, ipAddress);
+        return {
+          ...tokens,
+          user: {
+            id: existingUser.id,
+            email: existingUser.email,
+            firstName: existingUser.firstName,
+            lastName: existingUser.lastName,
+            role: existingUser.role,
+            tenantId: existingUser.tenantId,
+            tenant: existingUser.tenant
+              ? {
+                  id: existingUser.tenant.id,
+                  name: existingUser.tenant.name,
+                  slug: existingUser.tenant.slug,
+                }
+              : null,
+          },
+        };
+      }
+
       throw new ConflictException('Email already registered');
     }
 
@@ -224,7 +255,10 @@ export class AuthService {
     });
 
     if (existingTenant) {
-      throw new ConflictException('Building name already registered');
+      // Allow if the existing tenant is PENDING_PAYMENT (abandoned checkout)
+      if (existingTenant.status !== TenantStatus.PENDING_PAYMENT) {
+        throw new ConflictException('Building name already registered');
+      }
     }
 
     // Find subscription plan (case-insensitive)
@@ -250,6 +284,19 @@ export class AuthService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
 
+    // Calculate trial expiration based on plan's trial days
+    const trialDays = selectedPlan.trialDays || 14;
+    const trialExpiresAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
+
+    // Determine initial tenant status:
+    // - requiresPayment=true → PENDING_PAYMENT (waiting for Stripe checkout)
+    // - startTrial=true → TRIAL (free trial, no payment yet)
+    // - Free plan (monthlyPrice = 0) → TRIAL (no payment needed)
+    let tenantStatus = TenantStatus.TRIAL;
+    if (signupDto.requiresPayment) {
+      tenantStatus = TenantStatus.PENDING_PAYMENT;
+    }
+
     // Create tenant (building)
     const tenant = this.tenantRepository.create({
       name: signupDto.buildingName,
@@ -257,12 +304,15 @@ export class AuthService {
       contactEmail: signupDto.email.toLowerCase(),
       contactPhone: signupDto.phone,
       address: signupDto.buildingAddress,
-      status: TenantStatus.TRIAL, // Start with trial, payment would make it ACTIVE
+      status: tenantStatus,
       subscriptionPlanId: selectedPlan.id,
-      subscriptionExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14-day trial
+      subscriptionExpiresAt: trialExpiresAt,
       settings: {
         paymentInfo: signupDto.paymentInfo,
         signupDate: new Date().toISOString(),
+        startedAsTrial: signupDto.startTrial || false,
+        trialDays: trialDays,
+        requiresPayment: signupDto.requiresPayment || false,
       },
     });
 
@@ -326,5 +376,52 @@ export class AuthService {
       where: { isActive: true },
       order: { maxGates: 'ASC' },
     });
+  }
+
+  /**
+   * Login by tenant ID - used after payment verification
+   * Finds the building admin and generates tokens for them
+   */
+  async loginByTenantId(
+    tenantId: string,
+    userAgent?: string,
+    ipAddress?: string,
+  ): Promise<LoginResponseDto> {
+    const user = await this.userRepository.findOne({
+      where: {
+        tenantId,
+        role: UserRole.BUILDING_ADMIN,
+        status: UserStatus.ACTIVE,
+      },
+      relations: ['tenant'],
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('No active admin found for this building');
+    }
+
+    // Update last login
+    await this.userRepository.update(user.id, { lastLoginAt: new Date() });
+
+    const tokens = await this.generateTokens(user, userAgent, ipAddress);
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        tenantId: user.tenantId,
+        tenant: user.tenant
+          ? {
+              id: user.tenant.id,
+              name: user.tenant.name,
+              slug: user.tenant.slug,
+            }
+          : null,
+      },
+    };
   }
 }

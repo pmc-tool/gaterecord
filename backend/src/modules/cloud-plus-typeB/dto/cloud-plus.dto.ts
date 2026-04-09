@@ -94,16 +94,19 @@ export class SearchCardAcsRequestDto {
 
 /**
  * SearchCardAcs Response - Authorization result to controller
+ * All string values should be within specified byte limits for LCD display
  */
 export class SearchCardAcsResponseDto {
-  AcsRes: string; // Authorization result (1=Allow, 0=Deny, 2=Alarm, 3=Lock)
-  ActIndex: string; // Reader channel to control
+  AcsRes: string; // Authorization result (1=Allow, 0=Deny, 2=Alarm, 3=Lock, 4=Ignore)
+  ActIndex: string; // Reader channel to control (0-2)
   Time: string; // Gate hold time (use "1" for gate control)
-  Card: string; // Echo back the credential
-  Name: string; // Cardholder name (displayed on LCD)
-  Note: string; // Log note
-  Systime: string; // Server timestamp
-  Voice: string; // Voice prompt text (TTS)
+  Card: string; // Echo back the credential (max 16 bytes)
+  Name: string; // Cardholder name (displayed on LCD, max 16 bytes)
+  Note: string; // Log note (displayed on LCD, max 32 bytes)
+  Systime: string; // Server timestamp (max 20 bytes)
+  Voice: string; // Voice prompt text (TTS, max 40 bytes)
+  LCD?: string; // LCD display page: 6=pass, 7=deny, 0=standby (optional)
+  LCDTime?: string; // LCD display duration in seconds (optional)
 }
 
 /**

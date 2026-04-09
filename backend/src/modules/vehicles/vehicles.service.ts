@@ -123,7 +123,7 @@ export class VehiclesService {
 
     Object.assign(vehicle, {
       licensePlate: updateDto.licensePlate ?? vehicle.licensePlate,
-      make: updateDto.make ?? vehicle.make,
+      brand: updateDto.brand ?? vehicle.brand,
       model: updateDto.model ?? vehicle.model,
       color: updateDto.color ?? vehicle.color,
       rfidUid: updateDto.rfidUid ?? vehicle.rfidUid,

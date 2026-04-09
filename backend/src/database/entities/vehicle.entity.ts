@@ -19,7 +19,7 @@ export class Vehicle extends BaseEntity {
   licensePlate: string;
 
   @Column({ nullable: true })
-  make: string;
+  brand: string;
 
   @Column({ nullable: true })
   model: string;

@@ -1,6 +1,33 @@
-import { IsString, IsOptional, IsUUID, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsUUID, IsEnum, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeviceStatus } from '@database/entities/device-config.entity';
+
+export class CreateDeviceDto {
+  @ApiProperty({ example: 'Main Gate Controller' })
+  @IsString()
+  deviceName: string;
+
+  @ApiProperty({ example: '1Y3196', description: 'Device serial number from controller' })
+  @IsString()
+  deviceId: string;
+
+  @ApiPropertyOptional({ example: '00:04:A3:80:F0:7E', description: 'MAC address' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, {
+    message: 'MAC address must be in format XX:XX:XX:XX:XX:XX',
+  })
+  macAddress?: string;
+
+  @ApiProperty({ description: 'Tenant/Building ID' })
+  @IsUUID()
+  tenantId: string;
+
+  @ApiPropertyOptional({ description: 'Gate ID to assign' })
+  @IsOptional()
+  @IsUUID()
+  gateId?: string;
+}
 
 export class DeviceResponseDto {
   @ApiProperty()
@@ -54,6 +81,11 @@ export class UpdateDeviceDto {
   @IsOptional()
   @IsString()
   deviceName?: string;
+
+  @ApiPropertyOptional({ description: 'Tenant ID (Super Admin only)' })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

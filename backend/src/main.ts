@@ -10,7 +10,10 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    // Enable raw body for Stripe webhook signature verification
+    rawBody: true,
+  });
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
@@ -32,6 +35,8 @@ async function bootstrap() {
     'http://localhost:5173',
     'http://localhost:5174',
     'http://localhost:3000',
+    'http://192.168.88.8:5173',
+    'http://192.168.88.8:5174',
     'https://gaterecord.com',
     'https://www.gaterecord.com',
   ];

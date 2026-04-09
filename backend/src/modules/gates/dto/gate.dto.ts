@@ -26,6 +26,11 @@ export class CreateGateDto {
   @IsString()
   @IsOptional()
   hardwareId?: string;
+
+  @ApiPropertyOptional({ description: 'Required for Super Admin' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
 }
 
 export class UpdateGateDto extends PartialType(CreateGateDto) {

@@ -41,6 +41,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import api from '../../services/api';
+import { useAuthStore } from '../../store/authStore';
 
 dayjs.extend(relativeTime);
 
@@ -77,19 +78,36 @@ interface SetupCode {
 interface Gate {
   id: string;
   name: string;
+  tenantId?: string;
+}
+
+interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
 }
 
 export default function DevicesPage() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'super_admin';
+  
   const [devices, setDevices] = useState<Device[]>([]);
   const [setupCodes, setSetupCodes] = useState<SetupCode[]>([]);
   const [gates, setGates] = useState<Gate[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantGates, setTenantGates] = useState<Gate[]>([]);
   const [loading, setLoading] = useState(false);
   const [setupCodeModalVisible, setSetupCodeModalVisible] = useState(false);
+  const [addDeviceModalVisible, setAddDeviceModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  const [editTenantId, setEditTenantId] = useState<string | null>(null);
+  const [editTenantGates, setEditTenantGates] = useState<Gate[]>([]);
   const [form] = Form.useForm();
+  const [addDeviceForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
   const fetchDevices = useCallback(async () => {
@@ -122,11 +140,36 @@ export default function DevicesPage() {
     }
   }, []);
 
+  const fetchTenants = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get('/admin/tenants');
+      setTenants(response.data);
+    } catch (error) {
+      console.error('Failed to fetch tenants', error);
+    }
+  }, [isSuperAdmin]);
+
+  const fetchGatesByTenant = useCallback(async (tenantId: string) => {
+    try {
+      const response = await api.get('/gates');
+      // Filter gates by tenant - the API returns all gates for super admin
+      const filtered = response.data.filter((g: Gate) => g.tenantId === tenantId);
+      setTenantGates(filtered);
+    } catch (error) {
+      console.error('Failed to fetch gates for tenant', error);
+      setTenantGates([]);
+    }
+  }, []);
+
   useEffect(() => {
     fetchDevices();
     fetchSetupCodes();
     fetchGates();
-  }, [fetchDevices, fetchSetupCodes, fetchGates]);
+    if (isSuperAdmin) {
+      fetchTenants();
+    }
+  }, [fetchDevices, fetchSetupCodes, fetchGates, fetchTenants, isSuperAdmin]);
 
   const handleGenerateCode = async (values: { deviceName: string; gateId?: string }) => {
     try {
@@ -136,6 +179,37 @@ export default function DevicesPage() {
       fetchSetupCodes();
     } catch (error) {
       message.error('Failed to generate setup code');
+    }
+  };
+
+  const handleCreateDevice = async (values: {
+    deviceName: string;
+    deviceId: string;
+    macAddress?: string;
+    tenantId: string;
+    gateId?: string;
+  }) => {
+    try {
+      await api.post('/devices', values);
+      message.success('Device created successfully!');
+      setAddDeviceModalVisible(false);
+      addDeviceForm.resetFields();
+      setSelectedTenantId(null);
+      setTenantGates([]);
+      fetchDevices();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { message?: string } } };
+      message.error(err.response?.data?.message || 'Failed to create device');
+    }
+  };
+
+  const handleTenantChange = (tenantId: string) => {
+    setSelectedTenantId(tenantId);
+    addDeviceForm.setFieldValue('gateId', undefined);
+    if (tenantId) {
+      fetchGatesByTenant(tenantId);
+    } else {
+      setTenantGates([]);
     }
   };
 
@@ -149,21 +223,57 @@ export default function DevicesPage() {
     }
   };
 
-  const handleEditDevice = (device: Device) => {
+  const handleEditDevice = async (device: Device) => {
     setSelectedDevice(device);
-    editForm.setFieldsValue({
-      deviceName: device.deviceName,
-      gateId: device.gateId,
-    });
+    
+    if (isSuperAdmin) {
+      // Set the tenant and load its gates
+      setEditTenantId(device.tenantId);
+      try {
+        const response = await api.get('/gates');
+        const filtered = response.data.filter((g: Gate) => g.tenantId === device.tenantId);
+        setEditTenantGates(filtered);
+      } catch (error) {
+        setEditTenantGates([]);
+      }
+      editForm.setFieldsValue({
+        deviceName: device.deviceName,
+        tenantId: device.tenantId,
+        gateId: device.gateId,
+      });
+    } else {
+      editForm.setFieldsValue({
+        deviceName: device.deviceName,
+        gateId: device.gateId,
+      });
+    }
     setEditModalVisible(true);
   };
 
-  const handleUpdateDevice = async (values: { deviceName?: string; gateId?: string }) => {
+  const handleEditTenantChange = async (tenantId: string) => {
+    setEditTenantId(tenantId);
+    editForm.setFieldValue('gateId', undefined);
+    if (tenantId) {
+      try {
+        const response = await api.get('/gates');
+        const filtered = response.data.filter((g: Gate) => g.tenantId === tenantId);
+        setEditTenantGates(filtered);
+      } catch (error) {
+        setEditTenantGates([]);
+      }
+    } else {
+      setEditTenantGates([]);
+    }
+  };
+
+  const handleUpdateDevice = async (values: { deviceName?: string; tenantId?: string; gateId?: string }) => {
     if (!selectedDevice) return;
     try {
       await api.patch(`/devices/${selectedDevice.id}`, values);
       message.success('Device updated');
       setEditModalVisible(false);
+      setEditTenantId(null);
+      setEditTenantGates([]);
       fetchDevices();
     } catch (error) {
       message.error('Failed to update device');
@@ -193,6 +303,9 @@ export default function DevicesPage() {
       message.error('Failed to trigger OTA update');
     }
   };
+
+  // Use handleTriggerOta to prevent unused variable warning
+  void handleTriggerOta;
 
   const handleTestDevice = async (device: Device) => {
     try {
@@ -346,6 +459,7 @@ export default function DevicesPage() {
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEditDevice(record)} />
           </Tooltip>
+          {/* Update Firmware button - hidden for now
           <Tooltip title="Update Firmware">
             <Button
               icon={<CloudUploadOutlined />}
@@ -354,6 +468,7 @@ export default function DevicesPage() {
               disabled={record.status !== 'online'}
             />
           </Tooltip>
+          */}
           <Popconfirm
             title="Remove this device?"
             description="The device will need to be re-paired."
@@ -500,17 +615,32 @@ export default function DevicesPage() {
             <Button icon={<ReloadOutlined />} onClick={fetchDevices}>
               Refresh
             </Button>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setGeneratedCode(null);
-                form.resetFields();
-                setSetupCodeModalVisible(true);
-              }}
-            >
-              Add Device
-            </Button>
+            {isSuperAdmin ? (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  addDeviceForm.resetFields();
+                  setSelectedTenantId(null);
+                  setTenantGates([]);
+                  setAddDeviceModalVisible(true);
+                }}
+              >
+                Add Device
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setGeneratedCode(null);
+                  form.resetFields();
+                  setSetupCodeModalVisible(true);
+                }}
+              >
+                Add Device
+              </Button>
+            )}
           </Space>
         }
       >
@@ -612,25 +742,61 @@ export default function DevicesPage() {
       <Modal
         title="Edit Device"
         open={editModalVisible}
-        onCancel={() => setEditModalVisible(false)}
+        onCancel={() => {
+          setEditModalVisible(false);
+          setEditTenantId(null);
+          setEditTenantGates([]);
+        }}
         footer={null}
+        width={500}
       >
         <Form form={editForm} layout="vertical" onFinish={handleUpdateDevice}>
           <Form.Item name="deviceName" label="Device Name">
             <Input />
           </Form.Item>
+
+          {isSuperAdmin && (
+            <Form.Item
+              name="tenantId"
+              label="Building / Tenant"
+              rules={[{ required: true, message: 'Please select a building' }]}
+            >
+              <Select
+                placeholder="Select a building"
+                onChange={handleEditTenantChange}
+                showSearch
+                optionFilterProp="children"
+              >
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
+
           <Form.Item name="gateId" label="Assign to Gate">
-            <Select placeholder="Select a gate" allowClear>
-              {gates.map((gate) => (
+            <Select 
+              placeholder={isSuperAdmin && !editTenantId ? 'Select a building first' : 'Select a gate'} 
+              allowClear
+              disabled={isSuperAdmin && !editTenantId}
+            >
+              {(isSuperAdmin ? editTenantGates : gates).map((gate) => (
                 <Select.Option key={gate.id} value={gate.id}>
                   {gate.name}
                 </Select.Option>
               ))}
             </Select>
           </Form.Item>
+
           <Form.Item className="mb-0 text-right">
             <Space>
-              <Button onClick={() => setEditModalVisible(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setEditModalVisible(false);
+                setEditTenantId(null);
+                setEditTenantGates([]);
+              }}>Cancel</Button>
               <Button type="primary" htmlType="submit">
                 Update
               </Button>
@@ -694,6 +860,101 @@ export default function DevicesPage() {
             </Descriptions.Item>
           </Descriptions>
         )}
+      </Modal>
+
+      {/* Add Device Modal (Super Admin) */}
+      <Modal
+        title="Add New Device"
+        open={addDeviceModalVisible}
+        onCancel={() => {
+          setAddDeviceModalVisible(false);
+          setSelectedTenantId(null);
+          setTenantGates([]);
+        }}
+        footer={null}
+        width={550}
+      >
+        <Form form={addDeviceForm} layout="vertical" onFinish={handleCreateDevice}>
+          <Alert
+            message="Cloud Plus TypeB Controller"
+            description="Enter the device serial number from your Cloud Plus TypeB controller settings. The serial number uniquely identifies each controller."
+            type="info"
+            showIcon
+            className="mb-4"
+          />
+          
+          <Form.Item
+            name="deviceId"
+            label="Device Serial Number"
+            rules={[{ required: true, message: 'Please enter the device serial number' }]}
+            tooltip="Found in the controller settings (e.g., 1Y3196)"
+          >
+            <Input placeholder="e.g., 1Y3196" />
+          </Form.Item>
+
+          <Form.Item
+            name="deviceName"
+            label="Device Name"
+            rules={[{ required: true, message: 'Please enter a device name' }]}
+          >
+            <Input placeholder="e.g., Main Gate Controller" />
+          </Form.Item>
+
+          <Form.Item
+            name="macAddress"
+            label="MAC Address (Optional)"
+            tooltip="The controller's MAC address in format XX:XX:XX:XX:XX:XX"
+          >
+            <Input placeholder="e.g., 00:04:A3:80:F0:7E" />
+          </Form.Item>
+
+          <Divider orientation="left">Assignment</Divider>
+
+          <Form.Item
+            name="tenantId"
+            label="Building / Tenant"
+            rules={[{ required: true, message: 'Please select a building' }]}
+          >
+            <Select
+              placeholder="Select a building"
+              onChange={handleTenantChange}
+              showSearch
+              optionFilterProp="children"
+            >
+              {tenants.map((tenant) => (
+                <Select.Option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="gateId"
+            label="Assign to Gate (Optional)"
+          >
+            <Select
+              placeholder={selectedTenantId ? 'Select a gate' : 'Select a building first'}
+              allowClear
+              disabled={!selectedTenantId}
+            >
+              {tenantGates.map((gate) => (
+                <Select.Option key={gate.id} value={gate.id}>
+                  {gate.name}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item className="mb-0 text-right">
+            <Space>
+              <Button onClick={() => setAddDeviceModalVisible(false)}>Cancel</Button>
+              <Button type="primary" htmlType="submit" icon={<PlusOutlined />}>
+                Create Device
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

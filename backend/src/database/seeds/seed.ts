@@ -264,7 +264,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-A1B2C3D4',
     licensePlate: 'ABC-1234',
-    make: 'Toyota',
+    brand: 'Toyota',
     model: 'Camry',
     color: 'White',
     status: VehicleStatus.ACTIVE,
@@ -275,7 +275,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-E5F6G7H8',
     licensePlate: 'DEF-5678',
-    make: 'Honda',
+    brand: 'Honda',
     model: 'CR-V',
     color: 'Silver',
     status: VehicleStatus.ACTIVE,
@@ -287,7 +287,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-I9J0K1L2',
     licensePlate: 'GHI-9012',
-    make: 'BMW',
+    brand: 'BMW',
     model: 'X5',
     color: 'Black',
     status: VehicleStatus.ACTIVE,
@@ -299,7 +299,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-M3N4O5P6',
     licensePlate: 'JKL-3456',
-    make: 'Ford',
+    brand: 'Ford',
     model: 'F-150',
     color: 'Blue',
     status: VehicleStatus.ACTIVE,
@@ -311,7 +311,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-Q7R8S9T0',
     licensePlate: 'MNO-7890',
-    make: 'Tesla',
+    brand: 'Tesla',
     model: 'Model 3',
     color: 'Red',
     status: VehicleStatus.ACTIVE,
@@ -323,7 +323,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-U1V2W3X4',
     licensePlate: 'PQR-1234',
-    make: 'Mercedes',
+    brand: 'Mercedes',
     model: 'C300',
     color: 'Gray',
     status: VehicleStatus.ACTIVE,
@@ -334,7 +334,7 @@ async function seed() {
   await vehicleRepo.save({
     rfidUid: 'VH-Y5Z6A7B8',
     licensePlate: 'STU-5678',
-    make: 'Audi',
+    brand: 'Audi',
     model: 'Q7',
     color: 'White',
     status: VehicleStatus.ACTIVE,

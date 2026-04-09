@@ -20,7 +20,12 @@ import {
   ClaimDeviceDto,
   ClaimResponseDto,
 } from './dto/setup-code.dto';
-import { DeviceResponseDto, UpdateDeviceDto, UpdateCheckResponseDto } from './dto/device.dto';
+import {
+  DeviceResponseDto,
+  UpdateDeviceDto,
+  UpdateCheckResponseDto,
+  CreateDeviceDto,
+} from './dto/device.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -114,6 +119,19 @@ export class DevicesController {
   }
 
   // ==================== Device Management ====================
+
+  @Post()
+  @ApiBearerAuth()
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a device directly (Super Admin only)' })
+  @ApiResponse({ status: 201, type: DeviceResponseDto })
+  async createDevice(
+    @Body() dto: CreateDeviceDto,
+    @CurrentUser() user: User,
+  ): Promise<DeviceResponseDto> {
+    return this.devicesService.createDevice(dto, user);
+  }
 
   @Get()
   @ApiBearerAuth()

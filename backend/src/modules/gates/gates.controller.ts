@@ -93,8 +93,12 @@ export class GatesController {
 
     // Gate control is handled via Cloud Plus HTTP protocol
     const deviceId = gate.hardwareId.replace(/:/g, '');
-    this.logger.log(
-      `Gate control: ${dto.action} command for ${gate.name} (device: ${deviceId}) - via Cloud Plus HTTP`,
+    // this.logger.log(
+    //   `Gate control: ${dto.action} command for ${gate.name} (device: ${deviceId}) - via Cloud Plus HTTP`,
+    // );
+
+    console.log(
+      `Simulating Cloud Plus command: ${dto.action} for device ${deviceId} (gate: ${gate.name})`,
     );
 
     return { success: true, message: `${dto.action} command registered for ${gate.name}` };

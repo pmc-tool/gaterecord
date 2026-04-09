@@ -89,6 +89,7 @@ export class VisitorPassController {
 
     // Send email notification if requested
     if (createDto.sendEmail && createDto.visitorEmail) {
+      console.log('Sending email notification for new visitor pass...');
       await this.sendPassNotification(fullPass, req.user, true);
     }
 
@@ -116,6 +117,18 @@ export class VisitorPassController {
   @ApiOperation({ summary: 'Get visitor pass statistics' })
   async getStats(@Req() req: RequestWithUser) {
     return this.visitorPassService.getStats(req.user);
+  }
+
+  @Get('lookup/:qrToken')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Lookup visitor pass by QR token (protected)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Full visitor pass details with creator and tenant info',
+  })
+  async lookupByToken(@Param('qrToken') qrToken: string, @Req() req: RequestWithUser) {
+    return this.visitorPassService.findByTokenProtected(qrToken, req.user);
   }
 
   @Get('public/:qrToken')
@@ -159,6 +172,7 @@ export class VisitorPassController {
     return { qrCode: qrCodeDataUrl };
   }
 
+  // protected routes for fetch qr code and details by qr_token
   @Get(':id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)

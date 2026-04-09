@@ -1,4 +1,14 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards, Get } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Req,
+  UseGuards,
+  Get,
+  BadRequestException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AuthService } from './auth.service';
@@ -7,11 +17,16 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { User } from '@database/entities/user.entity';
+import { StripeService } from '../stripe/stripe.service';
+import { SignupCheckoutDto } from '../stripe/dto';
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly stripeService: StripeService,
+  ) {}
 
   @Post('login')
   @Public()
@@ -90,6 +105,44 @@ export class AuthController {
     const userAgent = req.headers['user-agent'];
     const ipAddress = req.ip;
     return this.authService.signup(signupDto, userAgent, ipAddress);
+  }
+
+  @Post('signup-checkout')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Create Stripe checkout session for paid signup (payment-first flow)' })
+  @ApiResponse({ status: 200, description: 'Checkout session created' })
+  @ApiResponse({ status: 409, description: 'Email or building name already exists' })
+  @ApiResponse({ status: 400, description: 'Plan not found or not active' })
+  async signupCheckout(@Body() dto: SignupCheckoutDto) {
+    return this.stripeService.createSignupCheckoutSession(dto);
+  }
+
+  @Post('verify-payment')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify payment and activate account after Stripe Checkout' })
+  @ApiResponse({ status: 200, description: 'Payment verified, account activated' })
+  @ApiResponse({ status: 400, description: 'Payment verification failed' })
+  async verifyPayment(
+    @Body() body: { sessionId: string },
+    @Req() req: Request,
+  ): Promise<LoginResponseDto> {
+    if (!body.sessionId) {
+      throw new BadRequestException('Session ID is required');
+    }
+
+    const result = await this.stripeService.verifyCheckoutSession(body.sessionId);
+
+    if (!result.success || !result.tenantId) {
+      throw new BadRequestException(result.message || 'Payment verification failed');
+    }
+
+    // Generate tokens for the user associated with this tenant
+    const userAgent = req.headers['user-agent'];
+    const ipAddress = req.ip;
+
+    return this.authService.loginByTenantId(result.tenantId, userAgent, ipAddress);
   }
 
   @Get('plans')
