@@ -91,12 +91,21 @@ export default function PlansManagementPage() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
   const [form] = Form.useForm();
+  const [searchText, setSearchText] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0 });
 
-  const fetchPlans = async () => {
+  const fetchPlans = async (page = 1, limit = 10, status?: string, search?: string) => {
     setLoading(true);
     try {
-      const response = await api.get('/admin/plans');
-      setPlans(response.data);
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      if (status) params.append('status', status);
+      if (search) params.append('search', search);
+      const response = await api.get(`/admin/plans?${params.toString()}`);
+      setPlans(response.data.data);
+      setPagination({ page: response.data.page, limit: response.data.limit, total: response.data.total });
     } catch (error) {
       message.error('Failed to fetch subscription plans');
     } finally {
@@ -139,7 +148,7 @@ export default function PlansManagementPage() {
     try {
       await api.delete(`/admin/plans/${id}`);
       message.success('Subscription plan deleted successfully');
-      fetchPlans();
+      fetchPlans(pagination.page, pagination.limit, statusFilter, searchText);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
       message.error(err.response?.data?.message || 'Failed to delete plan');
@@ -163,7 +172,7 @@ export default function PlansManagementPage() {
         message.success('Subscription plan created successfully');
       }
       setModalVisible(false);
-      fetchPlans();
+      fetchPlans(pagination.page, pagination.limit, statusFilter, searchText);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
       message.error(err.response?.data?.message || 'Failed to save plan');
@@ -174,7 +183,7 @@ export default function PlansManagementPage() {
     try {
       await api.patch(`/admin/plans/${plan.id}`, { isActive: !plan.isActive });
       message.success(`Plan ${plan.isActive ? 'deactivated' : 'activated'} successfully`);
-      fetchPlans();
+      fetchPlans(pagination.page, pagination.limit, statusFilter, searchText);
     } catch (error) {
       message.error('Failed to update plan status');
     }
@@ -325,7 +334,7 @@ export default function PlansManagementPage() {
       <div className="flex justify-between items-center">
         <Title level={3}>Subscription Plans</Title>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchPlans}>
+          <Button icon={<ReloadOutlined />} onClick={() => fetchPlans(pagination.page, pagination.limit, statusFilter, searchText)}>
             Refresh
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
@@ -335,12 +344,60 @@ export default function PlansManagementPage() {
       </div>
 
       <Card>
+        <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+          <Row gutter={16} align="middle">
+            <Col>
+              <Input
+                placeholder="Search plan name"
+                allowClear
+                className="w-48"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                className="w-36"
+                value={statusFilter}
+                onChange={(value) => setStatusFilter(value)}
+                options={[
+                  { label: 'Active', value: 'active' },
+                  { label: 'Inactive', value: 'inactive' },
+                ]}
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={() => fetchPlans(1, pagination.limit, statusFilter, searchText)}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setSearchText('');
+                  setStatusFilter(undefined);
+                  fetchPlans(1, pagination.limit, undefined, undefined);
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
         <Table
           columns={columns}
           dataSource={plans}
           rowKey="id"
           loading={loading}
-          pagination={false}
+          pagination={{
+            current: pagination.page,
+            pageSize: pagination.limit,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} plans`,
+            onChange: (page, pageSize) => fetchPlans(page, pageSize, statusFilter, searchText),
+          }}
         />
       </Card>
 
@@ -473,7 +530,7 @@ export default function PlansManagementPage() {
                           <InputNumber min={0} max={90} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
-                      <Col span={12}>
+                      {/* <Col span={12}>
                         <Form.Item
                           name="trialRequiresCard"
                           label="Require Card for Trial"
@@ -481,7 +538,7 @@ export default function PlansManagementPage() {
                         >
                           <Switch />
                         </Form.Item>
-                      </Col>
+                      </Col> */}
                     </Row>
                     <Text type="secondary">
                       Set trial days to 0 to disable trial for this plan.
@@ -552,7 +609,7 @@ export default function PlansManagementPage() {
                     <Form.Item name={['features', 'api_access']} valuePropName="checked">
                       <Checkbox>API Access</Checkbox>
                     </Form.Item>
-                    <Form.Item name={['features', 'custom_branding']} valuePropName="checked">
+                    {/* <Form.Item name={['features', 'custom_branding']} valuePropName="checked">
                       <Checkbox>Custom Branding</Checkbox>
                     </Form.Item>
                     <Form.Item name={['features', 'priority_support']} valuePropName="checked">
@@ -563,7 +620,7 @@ export default function PlansManagementPage() {
                     </Form.Item>
                     <Form.Item name={['features', 'multi_building']} valuePropName="checked">
                       <Checkbox>Multi-Building Support</Checkbox>
-                    </Form.Item>
+                    </Form.Item> */}
                     <Form.Item name={['features', 'webhook_notifications']} valuePropName="checked">
                       <Checkbox>Webhook Notifications</Checkbox>
                     </Form.Item>

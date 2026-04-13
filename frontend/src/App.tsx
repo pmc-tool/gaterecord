@@ -3,6 +3,9 @@ import { useAuthStore } from './store/authStore';
 import AppLayout from './components/layout/AppLayout';
 import LandingPage from './pages/landing/LandingPage';
 import LoginPage from './pages/login/LoginPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import VerifyOtpPage from './pages/auth/VerifyOtpPage';
+import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import GatesPage from './pages/gates/GatesPage';
 import GateSimulatorPage from './pages/gates/GateSimulatorPage';
@@ -23,6 +26,8 @@ import SignupPage from './pages/signup/SignupPage';
 import SignupSuccessPage from './pages/signup/SignupSuccessPage';
 import BillingSettingsPage from './pages/billing/BillingSettingsPage';
 import PaymentsAdminPage from './pages/admin/PaymentsAdminPage';
+import ProfilePage from './pages/profile/ProfilePage';
+import SettingsPage from './pages/settings/SettingsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -47,6 +52,20 @@ function App() {
         <Route
           path="/login"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+        />
+
+        {/* Password Reset Flow */}
+        <Route
+          path="/forgot-password"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <ForgotPasswordPage />}
+        />
+        <Route
+          path="/verify-otp"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <VerifyOtpPage />}
+        />
+        <Route
+          path="/reset-password"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <ResetPasswordPage />}
         />
 
         {/* Signup */}
@@ -76,6 +95,8 @@ function App() {
           }
         >
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="profile" element={<ProfilePage />} />
+          <Route path="settings" element={<SettingsPage />} />
           <Route path="gates" element={<GatesPage />} />
           <Route path="simulator" element={<GateSimulatorPage />} />
           <Route path="events" element={<EventsPage />} />

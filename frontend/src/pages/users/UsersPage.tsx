@@ -12,6 +12,8 @@ import {
   message,
   Popconfirm,
   Tooltip,
+  Row,
+  Col,
 } from 'antd';
 import {
   PlusOutlined,
@@ -19,10 +21,12 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   UserOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 interface User {
   id: string;
@@ -58,11 +62,24 @@ export default function UsersPage() {
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
   const [form] = Form.useForm();
   const { user: currentUser } = useAuthStore();
+  const isSuperAdmin = currentUser?.role === UserRole.SUPER_ADMIN;
+  const [filters, setFilters] = useState({
+    search: undefined as string | undefined,
+    tenantId: undefined as string | undefined,
+    role: undefined as string | undefined,
+    status: undefined as string | undefined,
+  });
 
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const response = await api.get('/users');
+      const params = new URLSearchParams();
+      if (filters.search) params.append('search', filters.search);
+      if (filters.tenantId) params.append('tenantId', filters.tenantId);
+      if (filters.role) params.append('role', filters.role);
+      if (filters.status) params.append('status', filters.status);
+
+      const response = await api.get(`/users?${params.toString()}`);
       setUsers(response.data);
     } catch (error) {
       message.error('Failed to fetch users');
@@ -74,7 +91,7 @@ export default function UsersPage() {
   const fetchTenants = async () => {
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants');
     }
@@ -155,13 +172,6 @@ export default function UsersPage() {
       render: (role: string) => (
         <Tag color={roleColors[role]}>{roleLabels[role] || role}</Tag>
       ),
-      filters: [
-        { text: 'Super Admin', value: 'super_admin' },
-        { text: 'Building Admin', value: 'building_admin' },
-        { text: 'Security', value: 'security' },
-        { text: 'Resident', value: 'resident' },
-      ],
-      onFilter: (value, record) => record.role === value,
     },
     {
       title: 'Building',
@@ -232,12 +242,90 @@ export default function UsersPage() {
           </Space>
         }
       >
+        <div className="mb-4">
+          <Row gutter={[16, 16]} align="middle">
+            <Col>
+              <Input
+                placeholder="Search name or email"
+                allowClear
+                style={{ width: 200 }}
+                prefix={<SearchOutlined />}
+                value={filters.search}
+                onChange={(e) => setFilters({ ...filters, search: e.target.value || undefined })}
+              />
+            </Col>
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={filters.tenantId}
+                  onChange={(value) => setFilters({ ...filters, tenantId: value })}
+                  options={tenants.map(t => ({ value: t.id, label: t.name }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Role"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.role}
+                onChange={(value) => setFilters({ ...filters, role: value })}
+              >
+                <Select.Option value="super_admin">Super Admin</Select.Option>
+                <Select.Option value="building_admin">Building Admin</Select.Option>
+                <Select.Option value="security">Security</Select.Option>
+                <Select.Option value="resident">Resident</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                style={{ width: 120 }}
+                value={filters.status}
+                onChange={(value) => setFilters({ ...filters, status: value })}
+              >
+                <Select.Option value="active">Active</Select.Option>
+                <Select.Option value="inactive">Inactive</Select.Option>
+                <Select.Option value="pending">Pending</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={fetchUsers}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setFilters({
+                    search: undefined,
+                    tenantId: undefined,
+                    role: undefined,
+                    status: undefined,
+                  });
+                  fetchUsers();
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
+
         <Table
           columns={columns}
           dataSource={users}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} users`,
+          }}
         />
       </Card>
 

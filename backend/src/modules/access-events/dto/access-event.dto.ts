@@ -7,6 +7,11 @@ import {
 } from '@database/entities/access-event.entity';
 
 export class AccessEventQueryDto {
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
   @ApiPropertyOptional()
   @IsUUID()
   @IsOptional()
@@ -16,6 +21,11 @@ export class AccessEventQueryDto {
   @IsEnum(AccessMethod)
   @IsOptional()
   method?: AccessMethod;
+
+  @ApiPropertyOptional({ enum: AccessSubjectType })
+  @IsEnum(AccessSubjectType)
+  @IsOptional()
+  subjectType?: AccessSubjectType;
 
   @ApiPropertyOptional({ enum: AccessResult })
   @IsEnum(AccessResult)

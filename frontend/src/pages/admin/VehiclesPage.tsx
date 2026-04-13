@@ -12,6 +12,8 @@ import {
   message,
   Popconfirm,
   Tooltip,
+  Row,
+  Col,
 } from 'antd';
 import {
   PlusOutlined,
@@ -20,6 +22,7 @@ import {
   ReloadOutlined,
   CarOutlined,
   CreditCardOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
@@ -67,6 +70,18 @@ export default function VehiclesPage() {
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
+  // Filter state
+  const [searchFilter, setSearchFilter] = useState('');
+  const [tenantFilter, setTenantFilter] = useState<string | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+
+  // Pagination state
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 10,
+    total: 0,
+  });
+
   // RFID Registration state
   const [rfidModalVisible, setRfidModalVisible] = useState(false);
   const [rfidTargetVehicle, setRfidTargetVehicle] = useState<Vehicle | null>(null);
@@ -78,11 +93,30 @@ export default function VehiclesPage() {
       ? [] // Super admin must select a building first
       : residents; // Building admin sees their own residents
 
-  const fetchVehicles = async () => {
+  const fetchVehicles = async (page = pagination.current, pageSize = pagination.pageSize) => {
     setLoading(true);
     try {
-      const response = await api.get('/vehicles');
-      setVehicles(response.data);
+      const params: Record<string, unknown> = {
+        page,
+        limit: pageSize,
+      };
+      if (searchFilter) params.search = searchFilter;
+      if (tenantFilter) params.tenantId = tenantFilter;
+      if (statusFilter) params.status = statusFilter;
+
+      const response = await api.get('/vehicles', { params });
+      const data = response.data;
+      if (data.data) {
+        setVehicles(data.data);
+        setPagination({
+          current: data.page || page,
+          pageSize: data.limit || pageSize,
+          total: data.total || 0,
+        });
+      } else {
+        setVehicles(data);
+        setPagination((prev) => ({ ...prev, total: data.length }));
+      }
     } catch (error) {
       message.error('Failed to fetch vehicles');
     } finally {
@@ -90,10 +124,28 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleApplyFilters = () => {
+    fetchVehicles(1, pagination.pageSize);
+  };
+
+  const handleResetFilters = () => {
+    setSearchFilter('');
+    setTenantFilter(undefined);
+    setStatusFilter(undefined);
+    setPagination((prev) => ({ ...prev, current: 1 }));
+  };
+
+  useEffect(() => {
+    if (!searchFilter && !tenantFilter && !statusFilter) {
+      fetchVehicles(1, pagination.pageSize);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchFilter, tenantFilter, statusFilter]);
+
   const fetchResidents = async () => {
     try {
       const response = await api.get('/residents');
-      setResidents(response.data);
+      setResidents(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch residents');
     }
@@ -102,7 +154,7 @@ export default function VehiclesPage() {
   const fetchTenants = async () => {
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants');
     }
@@ -115,6 +167,7 @@ export default function VehiclesPage() {
     if (isSuperAdmin) {
       fetchTenants();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
   const handleCreate = () => {
@@ -302,11 +355,12 @@ export default function VehiclesPage() {
 
   return (
     <div>
+      <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 16 }}>Vehicles Management</h1>
       <Card
-        title="Vehicles Management"
+        title={null}
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchVehicles}>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchVehicles()}>
               Refresh
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
@@ -315,12 +369,71 @@ export default function VehiclesPage() {
           </Space>
         }
       >
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={24} sm={12} md={6}>
+            <Input
+              placeholder="Search plate or owner name"
+              prefix={<SearchOutlined />}
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              allowClear
+            />
+          </Col>
+          {isSuperAdmin && (
+            <Col xs={24} sm={12} md={6}>
+              <Select
+                placeholder="Filter by Building"
+                value={tenantFilter}
+                onChange={(value) => setTenantFilter(value)}
+                allowClear
+                style={{ width: '100%' }}
+              >
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Col>
+          )}
+          <Col xs={24} sm={12} md={6}>
+            <Select
+              placeholder="Filter by Status"
+              value={statusFilter}
+              onChange={(value) => setStatusFilter(value)}
+              allowClear
+              style={{ width: '100%' }}
+            >
+              <Select.Option value="active">Active</Select.Option>
+              <Select.Option value="inactive">Inactive</Select.Option>
+            </Select>
+          </Col>
+          <Col xs={24} sm={12} md={6}>
+            <Space>
+              <Button type="primary" onClick={handleApplyFilters}>
+                Apply
+              </Button>
+              <Button onClick={handleResetFilters}>Reset</Button>
+            </Space>
+          </Col>
+        </Row>
+
         <Table
           columns={columns}
           dataSource={vehicles}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} vehicles`,
+            onChange: (page, pageSize) => {
+              fetchVehicles(page, pageSize);
+            },
+          }}
         />
       </Card>
 

@@ -172,11 +172,13 @@ export function AppLayout() {
         key: 'profile',
         icon: <UserOutlined />,
         label: 'Profile',
+        onClick: () => navigate('/profile'),
       },
       {
         key: 'settings',
         icon: <SettingOutlined />,
         label: 'Settings',
+        onClick: () => navigate('/settings'),
       },
       {
         type: 'divider' as const,
@@ -226,7 +228,10 @@ export function AppLayout() {
 
           <Dropdown menu={userMenu} trigger={['click']}>
             <Space className="cursor-pointer">
-              <Avatar icon={<UserOutlined />} />
+              <Avatar 
+                src={user?.profileImageUrl} 
+                icon={!user?.profileImageUrl && <UserOutlined />} 
+              />
               <Text>
                 {user?.firstName} {user?.lastName}
               </Text>

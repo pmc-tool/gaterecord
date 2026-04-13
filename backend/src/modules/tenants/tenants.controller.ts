@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   ParseUUIDPipe,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { TenantsService } from './tenants.service';
@@ -17,6 +18,8 @@ import {
   CreateSubscriptionPlanDto,
   UpdateSubscriptionPlanDto,
   TenantResponseDto,
+  PlanQueryDto,
+  TenantQueryDto,
 } from './dto/tenant.dto';
 import { Roles } from '@common/decorators/roles.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -49,6 +52,36 @@ export class TenantsController {
     return this.tenantsService.getSubscriptionStats();
   }
 
+  // Professional SaaS Metrics
+  @Get('professional-metrics')
+  @ApiOperation({ summary: 'Get professional SaaS metrics (Netflix/Stripe level)' })
+  @ApiResponse({ status: 200, description: 'Comprehensive business intelligence metrics' })
+  getProfessionalMetrics() {
+    return this.tenantsService.getProfessionalMetrics();
+  }
+
+  // Subscriptions List with Pagination
+  @Get('subscriptions-list')
+  @ApiOperation({ summary: 'Get subscriptions with pagination and filters' })
+  @ApiResponse({ status: 200, description: 'Paginated subscriptions list' })
+  getSubscriptionsList(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('status') status?: string,
+    @Query('planId') planId?: string,
+  ) {
+    return this.tenantsService.getSubscriptionsList({
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 10,
+      startDate,
+      endDate,
+      status,
+      planId,
+    });
+  }
+
   // Subscription Plans
   @Post('plans')
   @ApiOperation({ summary: 'Create subscription plan' })
@@ -58,10 +91,10 @@ export class TenantsController {
   }
 
   @Get('plans')
-  @ApiOperation({ summary: 'Get all subscription plans (including inactive)' })
-  @ApiResponse({ status: 200, description: 'List of plans' })
-  findAllPlans() {
-    return this.tenantsService.findAllPlans(true); // Include inactive for admin
+  @ApiOperation({ summary: 'Get all subscription plans with optional filtering and pagination' })
+  @ApiResponse({ status: 200, description: 'List of plans with pagination' })
+  findAllPlans(@Query() query: PlanQueryDto) {
+    return this.tenantsService.findAllPlans(query);
   }
 
   @Get('plans/:id')
@@ -102,10 +135,10 @@ export class TenantsController {
   }
 
   @Get('tenants')
-  @ApiOperation({ summary: 'Get all tenants' })
-  @ApiResponse({ status: 200, description: 'List of tenants', type: [TenantResponseDto] })
-  findAll() {
-    return this.tenantsService.findAll();
+  @ApiOperation({ summary: 'Get all tenants with optional filtering and pagination' })
+  @ApiResponse({ status: 200, description: 'List of tenants with pagination' })
+  findAll(@Query() query: TenantQueryDto) {
+    return this.tenantsService.findAll(query);
   }
 
   @Get('tenants/:id')

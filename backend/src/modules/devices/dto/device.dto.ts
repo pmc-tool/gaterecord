@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsUUID, IsEnum, Matches } from 'class-validator';
+import { IsString, IsOptional, IsUUID, IsEnum, Matches, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeviceStatus } from '@database/entities/device-config.entity';
+import { Transform } from 'class-transformer';
 
 export class CreateDeviceDto {
   @ApiProperty({ example: 'Main Gate Controller' })
@@ -172,4 +173,38 @@ export class DeviceDiagnosticsDto {
 
   @ApiPropertyOptional()
   lastRebootReason?: string;
+}
+
+export class DeviceQueryDto {
+  @ApiPropertyOptional({ description: 'Search by device name' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by tenant ID' })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by gate ID' })
+  @IsOptional()
+  @IsUUID()
+  gateId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status', enum: DeviceStatus })
+  @IsOptional()
+  @IsEnum(DeviceStatus)
+  status?: DeviceStatus;
+
+  @ApiPropertyOptional({ description: 'Page number', default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Items per page', default: 10 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  limit?: number;
 }

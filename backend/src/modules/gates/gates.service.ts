@@ -19,7 +19,7 @@ import {
 import { Tenant } from '@database/entities/tenant.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
-import { CreateGateDto, UpdateGateDto, GateHealthDto } from './dto/gate.dto';
+import { CreateGateDto, UpdateGateDto, GateHealthDto, GateQueryDto } from './dto/gate.dto';
 
 @Injectable()
 export class GatesService {
@@ -62,10 +62,14 @@ export class GatesService {
       throw new NotFoundException('Tenant not found');
     }
 
+    if (!tenant.subscriptionPlan) {
+      throw new ForbiddenException('No subscription plan found. Please subscribe to a plan first.');
+    }
+
     const gateCount = tenant.gates?.length || 0;
     if (gateCount >= tenant.subscriptionPlan.maxGates) {
       throw new ForbiddenException(
-        `Gate limit reached. Your plan allows ${tenant.subscriptionPlan.maxGates} gates.`,
+        `Gate limit reached. Your plan allows ${tenant.subscriptionPlan.maxGates} gates. Please upgrade your plan to add more gates.`,
       );
     }
 
@@ -140,16 +144,31 @@ export class GatesService {
 
   async findAll(
     currentUser: User,
+    query: GateQueryDto = {},
   ): Promise<
     (Gate & { devices?: { id: string; deviceId: string; deviceName: string; status: string }[] })[]
   > {
-    const query = this.gateRepository.createQueryBuilder('gate');
+    const qb = this.gateRepository.createQueryBuilder('gate');
 
+    // Filter by tenant for non-super-admin users
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.where('gate.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+      qb.where('gate.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+    } else if (query.tenantId) {
+      // Super admin can filter by tenant
+      qb.where('gate.tenant_id = :tenantId', { tenantId: query.tenantId });
     }
 
-    const gates = await query
+    // Apply type filter
+    if (query.type) {
+      qb.andWhere('gate.type = :type', { type: query.type });
+    }
+
+    // Apply state filter
+    if (query.state) {
+      qb.andWhere('gate.state = :state', { state: query.state });
+    }
+
+    const gates = await qb
       .leftJoinAndSelect('gate.controller', 'controller')
       .leftJoinAndSelect('gate.tenant', 'tenant')
       .getMany();

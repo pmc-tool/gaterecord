@@ -19,6 +19,7 @@ import { DevicesModule } from './modules/devices/devices.module';
 import { CloudPlusModule } from './modules/cloud-plus-typeB/cloud-plus.module';
 import { CloudPlusTcpModule } from './modules/cloud-plus-typeB-tcp/cloud-plus-tcp.module';
 import { StripeModule } from './modules/stripe/stripe.module';
+import { SettingsModule } from './modules/settings/settings.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -59,6 +60,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     CloudPlusModule,
     CloudPlusTcpModule,
     StripeModule,
+    SettingsModule,
   ],
   controllers: [],
   providers: [

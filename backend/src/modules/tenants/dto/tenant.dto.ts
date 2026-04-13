@@ -11,6 +11,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { TenantStatus } from '@database/entities/tenant.entity';
+import { Transform } from 'class-transformer';
 
 export class CreateTenantDto {
   @ApiProperty({ example: 'Sunrise Apartments' })
@@ -95,9 +96,13 @@ export class CreateSubscriptionPlanDto {
   discountLabel?: string;
 
   @ApiPropertyOptional()
-  @IsDateString()
   @IsOptional()
-  discountValidUntil?: string;
+  @Transform(({ value }) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    return new Date(value);
+  })
+  discountValidUntil?: Date;
 
   // Trial
   @ApiPropertyOptional({ example: 14 })
@@ -215,4 +220,62 @@ export class TenantResponseDto {
 
   @ApiProperty()
   updatedAt: Date;
+}
+
+export class PlanQueryDto {
+  @ApiPropertyOptional({ description: 'Search by plan name' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status: active or inactive' })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'Page number', default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Items per page', default: 10 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  limit?: number;
+}
+
+export class TenantQueryDto {
+  @ApiPropertyOptional({ description: 'Search by tenant name, slug, or contact email' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status: active, suspended, or trial' })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by start date (created after)' })
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by end date (created before)' })
+  @IsOptional()
+  @IsString()
+  endDate?: string;
+
+  @ApiPropertyOptional({ description: 'Page number', default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Items per page', default: 10 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  limit?: number;
 }

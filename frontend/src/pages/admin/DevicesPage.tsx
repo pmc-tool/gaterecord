@@ -45,7 +45,7 @@ import { useAuthStore } from '../../store/authStore';
 
 dayjs.extend(relativeTime);
 
-const { Text, Paragraph } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 interface Device {
   id: string;
@@ -109,12 +109,30 @@ export default function DevicesPage() {
   const [form] = Form.useForm();
   const [addDeviceForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  
+  // Filter states
+  const [searchText, setSearchText] = useState<string>('');
+  const [filterTenantId, setFilterTenantId] = useState<string | undefined>(undefined);
+  const [filterGateId, setFilterGateId] = useState<string | undefined>(undefined);
+  const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined);
+  const [filterGates, setFilterGates] = useState<Gate[]>([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0 });
 
-  const fetchDevices = useCallback(async () => {
+  const fetchDevices = useCallback(async (page = 1, limit = 10, search?: string, tenantId?: string, gateId?: string, status?: string) => {
     setLoading(true);
     try {
-      const response = await api.get('/devices');
-      setDevices(response.data);
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      if (search) params.append('search', search);
+      if (tenantId) params.append('tenantId', tenantId);
+      if (gateId) params.append('gateId', gateId);
+      if (status) params.append('status', status);
+      const response = await api.get(`/devices?${params.toString()}`);
+      setDevices(response.data.data || response.data);
+      if (response.data.total !== undefined) {
+        setPagination({ page: response.data.page, limit: response.data.limit, total: response.data.total });
+      }
     } catch (error) {
       message.error('Failed to fetch devices');
     } finally {
@@ -144,7 +162,7 @@ export default function DevicesPage() {
     if (!isSuperAdmin) return;
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants', error);
     }
@@ -170,6 +188,13 @@ export default function DevicesPage() {
       fetchTenants();
     }
   }, [fetchDevices, fetchSetupCodes, fetchGates, fetchTenants, isSuperAdmin]);
+
+  // Initialize filter gates when gates are loaded
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setFilterGates(gates);
+    }
+  }, [gates, isSuperAdmin]);
 
   const handleGenerateCode = async (values: { deviceName: string; gateId?: string }) => {
     try {
@@ -544,6 +569,11 @@ export default function DevicesPage() {
 
   return (
     <div className="space-y-4">
+      {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Device Management</Title>
+      </div>
+
       {/* Stats Row */}
       <Row gutter={16}>
         <Col span={6}>
@@ -612,7 +642,7 @@ export default function DevicesPage() {
         title="Devices"
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchDevices}>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchDevices(pagination.page, pagination.limit, searchText, filterTenantId, filterGateId, filterStatus)}>
               Refresh
             </Button>
             {isSuperAdmin ? (
@@ -644,12 +674,97 @@ export default function DevicesPage() {
           </Space>
         }
       >
+        <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+          <Row gutter={16} align="middle">
+            <Col>
+              <Input
+                placeholder="Search device name"
+                allowClear
+                className="w-48"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </Col>
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  className="w-44"
+                  value={filterTenantId}
+                  onChange={(value) => {
+                    setFilterTenantId(value);
+                    setFilterGateId(undefined);
+                    if (value) {
+                      const filtered = gates.filter((g) => g.tenantId === value);
+                      setFilterGates(filtered);
+                    } else {
+                      setFilterGates(gates);
+                    }
+                  }}
+                  options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Select Gate"
+                allowClear
+                className="w-40"
+                value={filterGateId}
+                onChange={(value) => setFilterGateId(value)}
+                options={(isSuperAdmin ? filterGates : gates).map((g) => ({ label: g.name, value: g.id }))}
+                notFoundContent="No gates found"
+              />
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                className="w-32"
+                value={filterStatus}
+                onChange={(value) => setFilterStatus(value)}
+                options={[
+                  { label: 'Setup', value: 'setup' },
+                  { label: 'Online', value: 'online' },
+                  { label: 'Offline', value: 'offline' },
+                  { label: 'Updating', value: 'updating' },
+                ]}
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={() => fetchDevices(1, pagination.limit, searchText, filterTenantId, filterGateId, filterStatus)}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setSearchText('');
+                  setFilterTenantId(undefined);
+                  setFilterGateId(undefined);
+                  setFilterStatus(undefined);
+                  setFilterGates(gates);
+                  fetchDevices(1, pagination.limit, undefined, undefined, undefined, undefined);
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
         <Table
           columns={columns}
           dataSource={devices}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            current: pagination.page,
+            pageSize: pagination.limit,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} devices`,
+            onChange: (page, pageSize) => fetchDevices(page, pageSize, searchText, filterTenantId, filterGateId, filterStatus),
+          }}
         />
       </Card>
 

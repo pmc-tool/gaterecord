@@ -9,10 +9,11 @@ import {
   UseGuards,
   ParseUUIDPipe,
   Logger,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { GatesService } from './gates.service';
-import { CreateGateDto, UpdateGateDto, GateResponseDto, GateHealthDto } from './dto/gate.dto';
+import { CreateGateDto, UpdateGateDto, GateResponseDto, GateHealthDto, GateQueryDto } from './dto/gate.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -38,8 +39,8 @@ export class GatesController {
   @Get()
   @ApiOperation({ summary: 'Get all gates for tenant' })
   @ApiResponse({ status: 200, description: 'List of gates', type: [GateResponseDto] })
-  findAll(@CurrentUser() user: User) {
-    return this.gatesService.findAll(user);
+  findAll(@CurrentUser() user: User, @Query() query: GateQueryDto) {
+    return this.gatesService.findAll(user, query);
   }
 
   @Get(':id')

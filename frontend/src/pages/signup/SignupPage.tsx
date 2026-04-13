@@ -28,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
+import PasswordRequirements, { validatePassword as checkPassword } from '../../components/PasswordRequirements';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -44,6 +45,7 @@ interface Plan {
   maxVehicles: number;
   logRetentionDays: number;
   trialDays: number;
+  displayOrder?: number;
   badge?: string;
   badgeColor?: string;
   isFeatured?: boolean;
@@ -73,14 +75,15 @@ export default function SignupPage() {
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [trialLoading, setTrialLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [password, setPassword] = useState<string>('');
   const [form] = Form.useForm();
 
   // Combined loading state for disabling buttons
   const loading = paymentLoading || trialLoading;
 
-  // Sort plans by price (ascending)
+  // Sort plans by displayOrder (ascending)
   const sortedPlans = useMemo(() => {
-    return [...plans].sort((a, b) => a.monthlyPrice - b.monthlyPrice);
+    return [...plans].sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
   }, [plans]);
 
   useEffect(() => {
@@ -90,7 +93,7 @@ export default function SignupPage() {
         setPlans(response.data);
         // Auto-select first plan if none selected
         if (!selectedPlan && response.data.length > 0) {
-          const sorted = [...response.data].sort((a: Plan, b: Plan) => a.monthlyPrice - b.monthlyPrice);
+          const sorted = [...response.data].sort((a: Plan, b: Plan) => (a.displayOrder || 0) - (b.displayOrder || 0));
           setSelectedPlan(sorted[0]?.name?.toLowerCase() || '');
         }
       } catch (err) {
@@ -280,13 +283,34 @@ export default function SignupPage() {
         await form.validateFields(fieldsToValidate);
       }
 
-      // For paid plans with trial, redirect to Stripe Checkout (use trial period)
-      // Note: handleStripeCheckout will manage loading state internally
-      setTrialLoading(false); // Reset before handleStripeCheckout sets it
-      await handleStripeCheckout(false); // skipTrial = false for "Free Trial"
+      const allValues = form.getFieldsValue(true);
+
+      // Create account directly with free trial (no payment required)
+      const response = await axios.post(`${API_URL}/auth/signup`, {
+        firstName: allValues.firstName,
+        lastName: allValues.lastName,
+        email: allValues.email,
+        password: allValues.password,
+        phone: allValues.phone || '',
+        buildingName: allValues.buildingName,
+        buildingAddress: allValues.buildingAddress || '',
+        planName: selectedPlan,
+        billingInterval: billingInterval,
+        startTrial: true, // Start free trial without payment
+      });
+
+      // Auto-login with returned tokens
+      setAuth(response.data.user, {
+        accessToken: response.data.accessToken,
+        refreshToken: response.data.refreshToken,
+      });
+
+      message.success(`${selectedPlanDetails?.trialDays}-day free trial started!`);
+      navigate('/dashboard');
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } } };
       setError(error.response?.data?.message || 'Failed to start trial. Please try again.');
+    } finally {
       setTrialLoading(false);
     }
   };
@@ -374,7 +398,7 @@ export default function SignupPage() {
                 </div>
 
                 {/* Plan Cards Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-6">
                   {sortedPlans.map((plan) => {
                     const isSelected = selectedPlan === plan.name.toLowerCase();
                     const price = getPrice(plan);
@@ -605,10 +629,23 @@ export default function SignupPage() {
                   hasFeedback
                   rules={[
                     { required: true, message: 'Please enter a password' },
-                    { min: 8, message: 'Password must be at least 8 characters' },
+                    {
+                      validator: (_, value) => {
+                        if (!value) return Promise.resolve();
+                        const { isValid, errors } = checkPassword(value);
+                        if (!isValid) {
+                          return Promise.reject(new Error(errors[0]));
+                        }
+                        return Promise.resolve();
+                      },
+                    },
                   ]}
                 >
-                  <Input.Password prefix={<LockOutlined />} placeholder="Min 8 characters" />
+                  <Input.Password 
+                    prefix={<LockOutlined />} 
+                    placeholder="Min 8 characters" 
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
                 </Form.Item>
 
                 <Form.Item
@@ -630,6 +667,8 @@ export default function SignupPage() {
                 >
                   <Input.Password prefix={<LockOutlined />} placeholder="Confirm password" />
                 </Form.Item>
+
+                <PasswordRequirements password={password} />
               </div>
             )}
 
@@ -716,140 +755,156 @@ export default function SignupPage() {
                 ) : (
                   /* PAID PLAN - Payment required */
                   <>
-                    <Title level={4}>Payment Details</Title>
-                    <Paragraph type="secondary">
-                      {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0
-                        ? `Your card won't be charged during the ${selectedPlanDetails.trialDays}-day free trial period.`
-                        : 'Complete your subscription to get started.'}
-                    </Paragraph>
-
-                    {/* Order Summary */}
-                    <div className="bg-gray-50 p-5 rounded-xl mb-6">
-                      <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <Text className="text-gray-500 text-sm">Plan</Text>
-                          <div className="text-lg font-semibold text-gray-900 capitalize">{selectedPlan}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-2xl font-bold text-blue-600">
-                            ${formatPrice(pricing.price)}
-                          </div>
-                          <Text className="text-gray-500">/month</Text>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2 py-3 border-t border-b border-gray-200">
-                        <div className="flex justify-between text-sm">
-                          <Text>Billing cycle</Text>
-                          <Text strong className="capitalize">{billingInterval}</Text>
-                        </div>
-                        {billingInterval === 'yearly' && selectedPlanDetails && (
-                          <div className="flex justify-between text-sm">
-                            <Text>Yearly total</Text>
-                            <Text strong>${formatPrice(getTotalYearlyPrice(selectedPlanDetails))}</Text>
-                          </div>
-                        )}
-                        {billingInterval === 'yearly' && selectedPlanDetails && getYearlySavings(selectedPlanDetails) > 0 && (
-                          <div className="flex justify-between text-sm text-green-600">
-                            <Text className="text-green-600">You save</Text>
-                            <Text strong className="text-green-600">${formatPrice(getYearlySavings(selectedPlanDetails))}/year</Text>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex justify-between pt-3">
-                        <Text strong>
-                          {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0
-                            ? `Due today (${selectedPlanDetails.trialDays}-day free trial)`
-                            : 'Due today'}
-                        </Text>
-                        <Text strong className={selectedPlanDetails?.trialDays ? "text-green-600 text-lg" : "text-blue-600 text-lg"}>
-                          {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0
-                            ? '$0.00'
-                            : `$${billingInterval === 'yearly' ? getTotalYearlyPrice(selectedPlanDetails!) : pricing.price}`}
-                        </Text>
-                      </div>
+                    {/* Plan Summary Header */}
+                    <div className="text-center mb-6">
+                      <Title level={3} className="mb-2">
+                        Complete Your <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">{selectedPlan}</span> Plan
+                      </Title>
+                      <Text type="secondary">Choose how you'd like to get started</Text>
                     </div>
 
-                    {/* Stripe Checkout Info */}
-                    <div className="mb-6">
-                      {/* Features included */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4">
-                        <Text strong className="block mb-3 text-gray-700">What's included:</Text>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="flex items-center text-sm text-gray-600">
-                            <CheckOutlined className="text-green-500 mr-2" />
-                            Up to {selectedPlanDetails?.maxGates} gates
-                          </div>
-                          <div className="flex items-center text-sm text-gray-600">
-                            <CheckOutlined className="text-green-500 mr-2" />
-                            Up to {selectedPlanDetails?.maxUsers} users
-                          </div>
-                          <div className="flex items-center text-sm text-gray-600">
-                            <CheckOutlined className="text-green-500 mr-2" />
-                            {selectedPlanDetails?.logRetentionDays} days logs
-                          </div>
-                          {selectedPlanDetails?.features.api_access && (
-                            <div className="flex items-center text-sm text-gray-600">
-                              <CheckOutlined className="text-green-500 mr-2" />
-                              API Access
+                    {/* Two Option Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                      {/* FREE TRIAL Option */}
+                      {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0 && (
+                        <div className="relative bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-2xl p-6 hover:shadow-lg transition-all">
+                          <div className="text-center">
+                            <div className="w-16 h-16 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                              <GiftOutlined className="text-2xl text-white" />
                             </div>
-                          )}
-                          {selectedPlanDetails?.features.csv_export && (
-                            <div className="flex items-center text-sm text-gray-600">
-                              <CheckOutlined className="text-green-500 mr-2" />
-                              CSV Export
+                            
+                            <Title level={4} className="text-emerald-700 mb-1">Free Trial</Title>
+                            <div className="text-4xl font-bold text-emerald-600 mb-1">
+                              {selectedPlanDetails.trialDays} Days
                             </div>
-                          )}
-                          {selectedPlanDetails?.features.priority_support && (
-                            <div className="flex items-center text-sm text-gray-600">
-                              <CheckOutlined className="text-green-500 mr-2" />
-                              Priority Support
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Stripe Payment Info */}
-                      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-5">
-                        <div className="flex items-start">
-                          <div className="bg-white p-2 rounded-lg shadow-sm mr-4">
-                            <SafetyCertificateOutlined className="text-2xl text-indigo-600" />
-                          </div>
-                          <div className="flex-1">
-                            <Text strong className="block text-gray-800 mb-1">
-                              Secure Payment via Stripe
-                            </Text>
-                            <Text className="text-gray-600 text-sm block mb-3">
-                              You'll be redirected to Stripe's secure checkout page to complete your payment.
-                              We support all major credit cards, debit cards, and Stripe Link for faster checkout.
-                            </Text>
-                            <div className="flex items-center space-x-3">
-                              <img src="https://js.stripe.com/v3/fingerprinted/img/visa-729c05c240c4bdb47b03ac81d9945bfe.svg" alt="Visa" className="h-6" />
-                              <img src="https://js.stripe.com/v3/fingerprinted/img/mastercard-4d8844094130711885b5e41b28c9848f.svg" alt="Mastercard" className="h-6" />
-                              <img src="https://js.stripe.com/v3/fingerprinted/img/amex-a49b82f46c5cd6a96a6e418a6ca1717c.svg" alt="Amex" className="h-6" />
-                              <div className="bg-[#635BFF] text-white text-xs font-semibold px-2 py-1 rounded">
-                                Link
+                            <Text type="secondary" className="text-sm">No credit card required</Text>
+                            
+                            <Divider className="my-4" />
+                            
+                            <div className="space-y-2 text-left mb-4">
+                              <div className="flex items-center text-sm text-gray-600">
+                                <CheckCircleOutlined className="text-emerald-500 mr-2" />
+                                Full access to all features
+                              </div>
+                              <div className="flex items-center text-sm text-gray-600">
+                                <CheckCircleOutlined className="text-emerald-500 mr-2" />
+                                Cancel anytime, no obligation
+                              </div>
+                              <div className="flex items-center text-sm text-gray-600">
+                                <CheckCircleOutlined className="text-emerald-500 mr-2" />
+                                Automatic reminder before trial ends
                               </div>
                             </div>
+                            
+                            <Button
+                              block
+                              size="large"
+                              loading={trialLoading}
+                              disabled={paymentLoading}
+                              onClick={handleStartFreeTrial}
+                              className="h-12 font-semibold border-none hover:opacity-90"
+                              style={{
+                                background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 100%)',
+                                color: 'white',
+                              }}
+                            >
+                              {trialLoading ? 'Processing...' : 'Start Free Trial'}
+                            </Button>
                           </div>
+                        </div>
+                      )}
+
+                      {/* SUBSCRIBE NOW Option */}
+                      <div className={`relative bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-2xl p-6 hover:shadow-lg transition-all ${!(selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0) ? 'md:col-span-2 max-w-md mx-auto w-full' : ''}`}>
+                        <div className="text-center">
+                          <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                            <CreditCardOutlined className="text-2xl text-white" />
+                          </div>
+                          
+                          <Title level={4} className="text-indigo-700 mb-1">Subscribe Now</Title>
+                          <div className="flex items-baseline justify-center gap-1 mb-1">
+                            {billingInterval === 'yearly' ? (
+                              <>
+                                <span className="text-4xl font-bold text-indigo-600">
+                                  ${formatPrice(getTotalYearlyPrice(selectedPlanDetails!))}
+                                </span>
+                                <span className="text-gray-500">/year</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-4xl font-bold text-indigo-600">
+                                  ${formatPrice(pricing.price)}
+                                </span>
+                                <span className="text-gray-500">/month</span>
+                              </>
+                            )}
+                          </div>
+                          {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0 && (
+                            <Text type="secondary" className="text-sm">Skip trial, start immediately</Text>
+                          )}
+                          
+                          <Divider className="my-4" />
+                          
+                          <div className="space-y-2 text-left mb-4">
+                            <div className="flex items-center text-sm text-gray-600">
+                              <CheckCircleOutlined className="text-indigo-500 mr-2" />
+                              Up to {selectedPlanDetails?.maxGates} gates
+                            </div>
+                            <div className="flex items-center text-sm text-gray-600">
+                              <CheckCircleOutlined className="text-indigo-500 mr-2" />
+                              Up to {selectedPlanDetails?.maxUsers} users
+                            </div>
+                            <div className="flex items-center text-sm text-gray-600">
+                              <CheckCircleOutlined className="text-indigo-500 mr-2" />
+                              {selectedPlanDetails?.logRetentionDays} days log retention
+                            </div>
+                          </div>
+                          
+                          <Button
+                            block
+                            size="large"
+                            loading={paymentLoading}
+                            disabled={trialLoading}
+                            onClick={handleSubmit}
+                            className="h-12 font-semibold border-none hover:opacity-90"
+                            style={{
+                              background: 'linear-gradient(135deg, #6366f1 0%, #9333ea 100%)',
+                              color: 'white',
+                            }}
+                          >
+                            {paymentLoading ? 'Processing...' : 'Pay & Subscribe'}
+                          </Button>
                         </div>
                       </div>
                     </div>
 
-                    {/* Security badges */}
-                    <div className="flex items-center justify-center space-x-6 text-gray-400 text-xs">
-                      <div className="flex items-center">
-                        <LockOutlined className="mr-1" />
-                        256-bit SSL
+                    {/* Payment Security Info */}
+                    <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                      <div className="flex items-center justify-center mb-3">
+                        <SafetyCertificateOutlined className="text-xl text-gray-500 mr-2" />
+                        <Text strong className="text-gray-700">Secure Payment via Stripe</Text>
                       </div>
-                      <div className="flex items-center">
-                        <SafetyCertificateOutlined className="mr-1" />
-                        PCI Compliant
+                      <div className="flex items-center justify-center space-x-4 mb-3">
+                        <img src="https://js.stripe.com/v3/fingerprinted/img/visa-729c05c240c4bdb47b03ac81d9945bfe.svg" alt="Visa" className="h-8" />
+                        <img src="https://js.stripe.com/v3/fingerprinted/img/mastercard-4d8844094130711885b5e41b28c9848f.svg" alt="Mastercard" className="h-8" />
+                        <img src="https://js.stripe.com/v3/fingerprinted/img/amex-a49b82f46c5cd6a96a6e418a6ca1717c.svg" alt="Amex" className="h-8" />
+                        <div className="bg-[#635BFF] text-white text-xs font-semibold px-3 py-1.5 rounded">
+                          Link
+                        </div>
                       </div>
-                      <div className="flex items-center">
-                        <ThunderboltOutlined className="mr-1" />
-                        Instant Setup
+                      <div className="flex items-center justify-center space-x-6 text-gray-400 text-xs">
+                        <div className="flex items-center">
+                          <LockOutlined className="mr-1" />
+                          256-bit SSL
+                        </div>
+                        <div className="flex items-center">
+                          <SafetyCertificateOutlined className="mr-1" />
+                          PCI Compliant
+                        </div>
+                        <div className="flex items-center">
+                          <ThunderboltOutlined className="mr-1" />
+                          Instant Setup
+                        </div>
                       </div>
                     </div>
                   </>
@@ -866,72 +921,13 @@ export default function SignupPage() {
                 Previous
               </Button>
 
-              {currentStep < 3 ? (
+              {currentStep < 3 && (
                 <Button
                   type="primary"
                   onClick={handleNext}
                 >
                   Next
                 </Button>
-              ) : (
-                <div className="flex gap-3">
-                  {/* Free Trial Button - shown when plan has trial days */}
-                  {selectedPlanDetails?.trialDays && selectedPlanDetails.trialDays > 0 && !isFreePlan && (
-                    <Button
-                      loading={trialLoading}
-                      disabled={paymentLoading}
-                      onClick={handleStartFreeTrial}
-                      size="large"
-                      icon={!trialLoading ? <GiftOutlined /> : undefined}
-                      className="px-6 min-w-[180px] border-none text-white"
-                      style={{
-                        background: 'linear-gradient(to right, #22c55e, #059669)',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'linear-gradient(to right, #16a34a, #047857)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'linear-gradient(to right, #22c55e, #059669)';
-                      }}
-                    >
-                      {trialLoading ? 'Processing...' : `Start ${selectedPlanDetails.trialDays}-Day Trial`}
-                    </Button>
-                  )}
-                  
-                  {/* Payment / Create Account Button */}
-                  <Button
-                    type="primary"
-                    loading={paymentLoading}
-                    disabled={trialLoading}
-                    onClick={handleSubmit}
-                    size="large"
-                    icon={!isFreePlan && !paymentLoading ? <CreditCardOutlined /> : undefined}
-                    className="px-8 border-none min-w-[200px] text-white"
-                    style={{
-                      background: pricing.price === 0 
-                        ? 'linear-gradient(to right, #22c55e, #059669)' 
-                        : 'linear-gradient(to right, #4f46e5, #9333ea)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = pricing.price === 0 
-                        ? 'linear-gradient(to right, #16a34a, #047857)' 
-                        : 'linear-gradient(to right, #4338ca, #7e22ce)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = pricing.price === 0 
-                        ? 'linear-gradient(to right, #22c55e, #059669)' 
-                        : 'linear-gradient(to right, #4f46e5, #9333ea)';
-                    }}
-                  >
-                    {paymentLoading ? (
-                      <span>Processing...</span>
-                    ) : pricing.price === 0 ? (
-                      'Create Free Account'
-                    ) : (
-                      'Pay & Subscribe'
-                    )}
-                  </Button>
-                </div>
               )}
             </div>
           </Form>

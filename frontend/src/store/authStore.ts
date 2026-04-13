@@ -14,6 +14,7 @@ interface AuthStore {
   checkAuth: () => Promise<void>;
   clearError: () => void;
   setAuth: (user: User, tokens: AuthTokens) => void;
+  setUser: (user: User) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -93,5 +94,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       tokens,
       isAuthenticated: true,
     });
+  },
+
+  setUser: (user: User) => {
+    authService.saveUser(user);
+    set({ user });
   },
 }));

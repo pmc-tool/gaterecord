@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { OnEvent } from '@nestjs/event-emitter';
+import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 
 import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
 import { Gate, GateState } from '@database/entities/gate.entity';
@@ -59,6 +59,7 @@ export class CloudPlusTcpService {
     private tcpServer: CloudPlusTcpServer,
     private gatewayService: GatewayService,
     private cloudPlusService: CloudPlusService,
+    private eventEmitter: EventEmitter2,
     @InjectRepository(DeviceConfig)
     private deviceConfigRepository: Repository<DeviceConfig>,
     @InjectRepository(Gate)
@@ -378,6 +379,196 @@ export class CloudPlusTcpService {
     };
   }
 
+  // ==================== Security Alert Alarm Methods ====================
+
+  /**
+   * Trigger hardware alarm for a security alert
+   * Sends alarm command directly to controller by serial (no auth required - system initiated)
+   */
+  async triggerSecurityAlarm(
+    serial: string,
+    durationSeconds: number = 30,
+  ): Promise<{ success: boolean; serial: string }> {
+    if (!this.tcpServer.isConnected(serial)) {
+      this.logger.warn(`Cannot trigger alarm - controller ${serial} not connected`);
+      return { success: false, serial };
+    }
+
+    const command = buildSetAlarmCommand(true, durationSeconds);
+    const success = this.tcpServer.sendCommand(serial, command);
+
+    if (success) {
+      this.logger.warn(`>>> SECURITY ALARM TRIGGERED on controller ${serial} for ${durationSeconds}s`);
+    }
+
+    return { success, serial };
+  }
+
+  /**
+   * Stop hardware alarm on a controller
+   */
+  async stopSecurityAlarm(serial: string): Promise<{ success: boolean; serial: string }> {
+    if (!this.tcpServer.isConnected(serial)) {
+      this.logger.warn(`Cannot stop alarm - controller ${serial} not connected`);
+      return { success: false, serial };
+    }
+
+    const command = buildSetAlarmCommand(false, 0);
+    const success = this.tcpServer.sendCommand(serial, command);
+
+    if (success) {
+      this.logger.log(`Security alarm stopped on controller ${serial}`);
+    }
+
+    return { success, serial };
+  }
+
+  /**
+   * Trigger alarm on all controllers for a gate
+   * Used when creating security alerts related to a specific gate
+   */
+  async triggerGateAlarm(
+    gateId: string,
+    durationSeconds: number = 30,
+  ): Promise<{ successCount: number; totalDevices: number; serials: string[] }> {
+    const devices = await this.deviceConfigRepository.find({
+      where: { gateId },
+    });
+
+    if (devices.length === 0) {
+      return { successCount: 0, totalDevices: 0, serials: [] };
+    }
+
+    const command = buildSetAlarmCommand(true, durationSeconds);
+    const results: { serial: string; success: boolean }[] = [];
+
+    for (const device of devices) {
+      const serial = device.deviceId;
+      if (this.tcpServer.isConnected(serial)) {
+        const success = this.tcpServer.sendCommand(serial, command);
+        results.push({ serial, success });
+        if (success) {
+          this.logger.warn(`>>> SECURITY ALARM TRIGGERED on controller ${serial} (gate: ${gateId})`);
+        }
+      } else {
+        results.push({ serial, success: false });
+      }
+    }
+
+    const successSerials = results.filter((r) => r.success).map((r) => r.serial);
+
+    return {
+      successCount: successSerials.length,
+      totalDevices: devices.length,
+      serials: successSerials,
+    };
+  }
+
+  /**
+   * Stop alarm on all controllers for a gate
+   */
+  async stopGateAlarm(
+    gateId: string,
+  ): Promise<{ successCount: number; totalDevices: number; serials: string[] }> {
+    const devices = await this.deviceConfigRepository.find({
+      where: { gateId },
+    });
+
+    if (devices.length === 0) {
+      return { successCount: 0, totalDevices: 0, serials: [] };
+    }
+
+    const command = buildSetAlarmCommand(false, 0);
+    const results: { serial: string; success: boolean }[] = [];
+
+    for (const device of devices) {
+      const serial = device.deviceId;
+      if (this.tcpServer.isConnected(serial)) {
+        const success = this.tcpServer.sendCommand(serial, command);
+        results.push({ serial, success });
+        if (success) {
+          this.logger.log(`Security alarm stopped on controller ${serial} (gate: ${gateId})`);
+        }
+      } else {
+        results.push({ serial, success: false });
+      }
+    }
+
+    const successSerials = results.filter((r) => r.success).map((r) => r.serial);
+
+    return {
+      successCount: successSerials.length,
+      totalDevices: devices.length,
+      serials: successSerials,
+    };
+  }
+
+  /**
+   * Trigger alarm on all controllers for an entire tenant/building
+   * Used for building-wide emergencies
+   */
+  async triggerBuildingAlarm(
+    tenantId: string,
+    durationSeconds: number = 60,
+  ): Promise<{ successCount: number; totalDevices: number; serials: string[] }> {
+    const devices = await this.deviceConfigRepository.find({
+      where: { tenantId },
+    });
+
+    if (devices.length === 0) {
+      return { successCount: 0, totalDevices: 0, serials: [] };
+    }
+
+    const command = buildSetAlarmCommand(true, durationSeconds);
+    const results: { serial: string; success: boolean }[] = [];
+
+    for (const device of devices) {
+      const serial = device.deviceId;
+      if (this.tcpServer.isConnected(serial)) {
+        const success = this.tcpServer.sendCommand(serial, command);
+        results.push({ serial, success });
+        if (success) {
+          this.logger.warn(`>>> BUILDING ALARM TRIGGERED on controller ${serial} (tenant: ${tenantId})`);
+        }
+      }
+    }
+
+    return {
+      successCount: results.filter((r) => r.success).length,
+      totalDevices: devices.length,
+      serials: results.filter((r) => r.success).map((r) => r.serial),
+    };
+  }
+
+  /**
+   * Stop all alarms for a tenant/building
+   */
+  async stopBuildingAlarm(
+    tenantId: string,
+  ): Promise<{ successCount: number; totalDevices: number }> {
+    const devices = await this.deviceConfigRepository.find({
+      where: { tenantId },
+    });
+
+    if (devices.length === 0) {
+      return { successCount: 0, totalDevices: 0 };
+    }
+
+    const command = buildSetAlarmCommand(false, 0);
+    let successCount = 0;
+
+    for (const device of devices) {
+      if (this.tcpServer.isConnected(device.deviceId)) {
+        if (this.tcpServer.sendCommand(device.deviceId, command)) {
+          successCount++;
+        }
+      }
+    }
+
+    this.logger.log(`Building alarm stopped: ${successCount}/${devices.length} controllers`);
+    return { successCount, totalDevices: devices.length };
+  }
+
   /**
    * Sync time on controller
    * Sends command to ALL devices assigned to this gate
@@ -548,6 +739,14 @@ export class CloudPlusTcpService {
           gateName: device.gate.name,
           serial: payload.serial,
         });
+
+        // Emit event for SecurityAlertTriggerService to handle offline detection
+        this.eventEmitter.emit('tcp.controller.disconnected', {
+          serial: payload.serial,
+          gateId: device.gateId,
+          tenantId: device.tenantId,
+          reason: 'TCP connection lost',
+        });
       }
     }
   }
@@ -582,6 +781,16 @@ export class CloudPlusTcpService {
         'Access Denied',
       );
       this.tcpServer.sendEventResponse(socketId, response);
+
+      // Emit event for security alert pattern detection (unregistered device)
+      this.eventEmitter.emit('access.denied', {
+        accessEvent: null,
+        gate: null,
+        device: null,
+        credential: event.card,
+        credentialType: String(event.dataType),
+        reason: 'Device not registered',
+      });
       return;
     }
 
@@ -600,10 +809,12 @@ export class CloudPlusTcpService {
       device.gate,
     );
 
+    const isAllowed = result.AcsRes === '1';
+
     // Build TCP response
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const response = buildRequestEventAck(
-      result.AcsRes === '1',
+      isAllowed,
       event.reader,
       1,
       event.card,
@@ -614,6 +825,60 @@ export class CloudPlusTcpService {
     );
 
     this.tcpServer.sendEventResponse(socketId, response);
+
+    // Emit event for security alert pattern detection
+    if (!isAllowed) {
+      // Create access event record for denied access
+      const accessEvent = this.accessEventRepository.create({
+        tenantId: device.tenantId,
+        gateId: device.gateId || undefined,
+        timestamp: new Date(),
+        method: this.mapDataTypeToMethod(event.dataType),
+        subjectType: AccessSubjectType.UNKNOWN,
+        subjectIdentifier: event.card,
+        subjectName: result.Name || 'Unknown',
+        result: AccessResult.DENIED,
+        denialReason: result.Note || 'Access Denied',
+        metadata: {
+          source: 'tcp-controller',
+          controllerSerial: event.serial,
+          dataType: event.dataType,
+          reader: event.reader,
+        },
+      });
+      const savedAccessEvent = await this.accessEventRepository.save(accessEvent);
+
+      // Emit access.denied event for SecurityAlertTriggerService
+      this.eventEmitter.emit('access.denied', {
+        accessEvent: savedAccessEvent,
+        gate: device.gate,
+        device: device,
+        credential: event.card,
+        credentialType: String(event.dataType),
+      });
+    }
+  }
+
+  /**
+   * Map Cloud Plus data type to AccessMethod
+   */
+  private mapDataTypeToMethod(dataType: number): AccessMethod {
+    switch (dataType) {
+      case 0: // Card
+        return AccessMethod.HUMAN_RFID;
+      case 9: // Base64 QR
+      case 16: // QR
+        return AccessMethod.QR;
+      case 12: // RFID tag (vehicle)
+        return AccessMethod.CAR_RFID;
+      case 13: // Face
+      case 23: // Face v2
+        return AccessMethod.MANUAL; // Face not in enum, use manual
+      case 3: // Button
+        return AccessMethod.MANUAL;
+      default:
+        return AccessMethod.MANUAL;
+    }
   }
 
   // ==================== Private Helpers ====================

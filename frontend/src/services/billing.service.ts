@@ -301,10 +301,13 @@ export const adminBillingService = {
     page?: number;
     limit?: number;
     tenantId?: string;
+    planId?: string;
     status?: string;
     type?: string;
+    billingCycle?: string;
     startDate?: string;
     endDate?: string;
+    search?: string;
   }): Promise<{ success: boolean; payments: Payment[]; total: number; page: number; totalPages: number }> {
     const response = await api.get('/admin/stripe/payments', { params });
     return response.data;

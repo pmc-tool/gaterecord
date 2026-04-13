@@ -14,6 +14,7 @@ import {
   Badge,
   Alert,
   notification,
+  Select,
 } from 'antd';
 import {
   WarningOutlined,
@@ -26,6 +27,8 @@ import {
 import { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
 import { socketService } from '../../services/socket.service';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -73,21 +76,40 @@ const priorityColors: Record<string, string> = {
 };
 
 export function SecurityAlertsPage() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+  
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
   const [stats, setStats] = useState<AlertStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>('active');
   const [buzzerActive, setBuzzerActive] = useState(false);
+  const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
+  const [filters, setFilters] = useState({
+    tenantId: undefined as string | undefined,
+    status: 'active' as string | undefined,
+  });
+
+  const fetchTenants = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get('/admin/tenants');
+      setTenants(response.data.data || response.data);
+    } catch (error) {
+      console.error('Failed to fetch tenants');
+    }
+  };
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const params = statusFilter ? { status: statusFilter } : {};
+      const params: Record<string, string> = {};
+      if (filters.status) params.status = filters.status;
+      if (filters.tenantId) params.tenantId = filters.tenantId;
       const response = await api.get('/security-alerts', { params });
       setAlerts(response.data);
     } catch (error) {
       console.error('Failed to fetch alerts:', error);
     }
-  }, [statusFilter]);
+  }, [filters]);
 
   const fetchStats = async () => {
     try {
@@ -101,7 +123,7 @@ export function SecurityAlertsPage() {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchAlerts(), fetchStats()]);
+      await Promise.all([fetchAlerts(), fetchStats(), fetchTenants()]);
       setLoading(false);
     };
 
@@ -124,7 +146,7 @@ export function SecurityAlertsPage() {
       });
 
       // Add to list if matching filter or showing all
-      if (!statusFilter || statusFilter === 'active') {
+      if (!filters.status || filters.status === 'active') {
         setAlerts((prev) => [data, ...prev]);
       }
 
@@ -163,7 +185,7 @@ export function SecurityAlertsPage() {
       unsubBuzzerStart();
       unsubBuzzerStop();
     };
-  }, [statusFilter, fetchAlerts]);
+  }, [filters, fetchAlerts]);
 
   const playAlarmSound = () => {
     // Create alarm sound using Web Audio API
@@ -404,8 +426,8 @@ export function SecurityAlertsPage() {
           <Col xs={12} sm={6}>
             <Card
               hoverable
-              onClick={() => setStatusFilter('active')}
-              className={statusFilter === 'active' ? 'border-2 border-red-500' : ''}
+              onClick={() => setFilters({ ...filters, status: 'active' })}
+              className={filters.status === 'active' ? 'border-2 border-red-500' : ''}
             >
               <Statistic
                 title="Active Alerts"
@@ -418,8 +440,8 @@ export function SecurityAlertsPage() {
           <Col xs={12} sm={6}>
             <Card
               hoverable
-              onClick={() => setStatusFilter('acknowledged')}
-              className={statusFilter === 'acknowledged' ? 'border-2 border-orange-500' : ''}
+              onClick={() => setFilters({ ...filters, status: 'acknowledged' })}
+              className={filters.status === 'acknowledged' ? 'border-2 border-orange-500' : ''}
             >
               <Statistic
                 title="Acknowledged"
@@ -432,8 +454,8 @@ export function SecurityAlertsPage() {
           <Col xs={12} sm={6}>
             <Card
               hoverable
-              onClick={() => setStatusFilter('resolved')}
-              className={statusFilter === 'resolved' ? 'border-2 border-green-500' : ''}
+              onClick={() => setFilters({ ...filters, status: 'resolved' })}
+              className={filters.status === 'resolved' ? 'border-2 border-green-500' : ''}
             >
               <Statistic
                 title="Resolved"
@@ -446,8 +468,8 @@ export function SecurityAlertsPage() {
           <Col xs={12} sm={6}>
             <Card
               hoverable
-              onClick={() => setStatusFilter('')}
-              className={statusFilter === '' ? 'border-2 border-blue-500' : ''}
+              onClick={() => setFilters({ ...filters, status: undefined })}
+              className={filters.status === undefined ? 'border-2 border-blue-500' : ''}
             >
               <Statistic
                 title="Today"
@@ -460,12 +482,64 @@ export function SecurityAlertsPage() {
       )}
 
       <Card>
+        <div className="mb-4">
+          <Row gutter={[16, 16]} align="middle">
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={filters.tenantId}
+                  onChange={(value) => setFilters({ ...filters, tenantId: value })}
+                  options={tenants.map(t => ({ value: t.id, label: t.name }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.status}
+                onChange={(value) => setFilters({ ...filters, status: value })}
+              >
+                <Select.Option value="active">Active</Select.Option>
+                <Select.Option value="acknowledged">Acknowledged</Select.Option>
+                <Select.Option value="resolved">Resolved</Select.Option>
+                <Select.Option value="false_alarm">False Alarm</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={fetchAlerts}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setFilters({
+                    tenantId: undefined,
+                    status: 'active',
+                  });
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
+
         <Table
           columns={columns}
           dataSource={alerts}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} alerts`,
+          }}
           rowClassName={(record) =>
             record.status === 'active' && record.priority === 'critical'
               ? 'bg-red-50'

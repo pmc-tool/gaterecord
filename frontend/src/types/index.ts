@@ -28,6 +28,7 @@ export interface User {
     slug: string;
   };
   unit?: string;
+  profileImageUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

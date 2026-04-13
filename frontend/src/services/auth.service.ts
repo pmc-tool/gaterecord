@@ -7,6 +7,23 @@ export interface LoginResponse {
   user: User;
 }
 
+export interface ForgotPasswordResponse {
+  message: string;
+  email: string;
+  expiresIn: number;
+}
+
+export interface VerifyOtpResponse {
+  message: string;
+  token: string;
+  email: string;
+}
+
+export interface ResetPasswordResponse {
+  message: string;
+  success: boolean;
+}
+
 export const authService = {
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
     const response = await api.post<LoginResponse>('/auth/login', credentials);
@@ -56,5 +73,22 @@ export const authService = {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
+  },
+
+  // Password Reset Methods
+
+  async forgotPassword(email: string): Promise<ForgotPasswordResponse> {
+    const response = await api.post<ForgotPasswordResponse>('/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  async verifyOtp(email: string, otp: string): Promise<VerifyOtpResponse> {
+    const response = await api.post<VerifyOtpResponse>('/auth/verify-otp', { email, otp });
+    return response.data;
+  },
+
+  async resetPassword(email: string, token: string, newPassword: string): Promise<ResetPasswordResponse> {
+    const response = await api.post<ResetPasswordResponse>('/auth/reset-password', { email, token, newPassword });
+    return response.data;
   },
 };

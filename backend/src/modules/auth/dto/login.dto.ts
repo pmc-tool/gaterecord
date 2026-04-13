@@ -7,6 +7,7 @@ import {
   IsObject,
   IsBoolean,
   IsIn,
+  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -38,6 +39,7 @@ export class LoginResponseDto {
     lastName: string;
     role: string;
     tenantId: string | null;
+    profileImageUrl?: string;
     tenant: {
       id: string;
       name: string;
@@ -72,7 +74,11 @@ export class SignupDto {
   @ApiProperty({ example: 'Password123!' })
   @IsString()
   @IsNotEmpty()
-  @MinLength(8)
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @Matches(/[A-Z]/, { message: 'Password must contain at least one uppercase letter' })
+  @Matches(/[a-z]/, { message: 'Password must contain at least one lowercase letter' })
+  @Matches(/[0-9]/, { message: 'Password must contain at least one number' })
+  @Matches(/[@$!%*?&]/, { message: 'Password must contain at least one special character (@$!%*?&)' })
   password: string;
 
   @ApiPropertyOptional({ example: '+1234567890' })

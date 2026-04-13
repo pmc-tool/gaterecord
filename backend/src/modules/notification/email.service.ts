@@ -54,6 +54,7 @@ export class EmailService {
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
     const from = this.configService.get<string>('SMTP_FROM', 'GateRecord <noreply@gaterecord.com>');
+    const domain = this.configService.get<string>('APP_DOMAIN', 'gaterecord.com');
 
     try {
       const result = await this.transporter.sendMail({
@@ -62,6 +63,12 @@ export class EmailService {
         subject: options.subject,
         html: options.html,
         text: options.text || this.stripHtml(options.html),
+        headers: {
+          'X-Priority': '1',
+          'X-Mailer': 'GateRecord Notification Service',
+          'List-Unsubscribe': `<mailto:unsubscribe@${domain}>`,
+          'Precedence': 'bulk',
+        },
       });
 
       this.logger.log(`Email sent successfully to ${options.to}: ${result.messageId}`);
@@ -397,6 +404,174 @@ export class EmailService {
     return this.sendEmail({
       to: userEmail,
       subject: `Welcome to GateRecord - ${buildingName}`,
+      html,
+    });
+  }
+
+  /**
+   * Send credentials email to newly created user
+   */
+  async sendNewUserCredentialsEmail(
+    userEmail: string,
+    userName: string,
+    role: string,
+    temporaryPassword: string,
+    buildingName: string,
+    createdByName: string,
+    loginUrl: string,
+  ): Promise<boolean> {
+    const roleDisplayName = role
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #722ed1 0%, #531dab 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .header h1 { margin: 0; font-size: 28px; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+          .button { display: inline-block; background: #722ed1; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
+          .credentials-box { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; border: 2px solid #722ed1; }
+          .credentials-box h3 { margin-top: 0; color: #722ed1; }
+          .credential-item { background: #f5f5f5; padding: 12px 15px; margin: 10px 0; border-radius: 4px; font-family: monospace; font-size: 14px; word-break: break-all; }
+          .warning-box { background: #fff7e6; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #fa8c16; }
+          .warning-box h4 { color: #fa8c16; margin-top: 0; }
+          .role-badge { display: inline-block; background: #722ed1; color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; }
+          .footer { text-align: center; color: #888; font-size: 12px; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Welcome to GateRecord!</h1>
+            <p>Your account has been created</p>
+          </div>
+          <div class="content">
+            <p>Hello <strong>${userName}</strong>,</p>
+            <p>An account has been created for you by <strong>${createdByName}</strong> at <strong>${buildingName}</strong>.</p>
+
+            <p>Your assigned role: <span class="role-badge">${roleDisplayName}</span></p>
+
+            <div class="credentials-box">
+              <h3>🔐 Your Login Credentials</h3>
+              <p><strong>Email:</strong></p>
+              <div class="credential-item">${userEmail}</div>
+              <p><strong>Temporary Password:</strong></p>
+              <div class="credential-item">${temporaryPassword}</div>
+            </div>
+
+            <div class="warning-box">
+              <h4>⚠️ Important Security Notice</h4>
+              <p>For your security, please <strong>change your password immediately</strong> after your first login.</p>
+              <p>To change your password:</p>
+              <ol>
+                <li>Log in with the credentials above</li>
+                <li>Go to <strong>Settings → Security</strong></li>
+                <li>Click <strong>Change Password</strong></li>
+                <li>Create a strong, unique password</li>
+              </ol>
+            </div>
+
+            <div style="text-align: center;">
+              <a href="${loginUrl}" class="button">Login to GateRecord</a>
+            </div>
+
+            <p style="color: #888; font-size: 13px;">
+              <strong>Password Tips:</strong> Use at least 8 characters with uppercase, lowercase, numbers, and special characters.
+            </p>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from GateRecord.</p>
+            <p>If you did not expect this email, please contact your administrator.</p>
+            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: userEmail,
+      subject: `Your GateRecord Account - ${buildingName}`,
+      html,
+    });
+  }
+
+  async sendPasswordResetOtp(
+    userEmail: string,
+    userName: string,
+    otp: string,
+    expiresInSeconds: number = 60,
+  ): Promise<boolean> {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>Password Reset - GateRecord</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #5EBAB4 0%, #4AA8A2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+          .header p { margin: 10px 0 0; opacity: 0.9; }
+          .content { background: #ffffff; padding: 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          .otp-box { background: #f0faf9; padding: 30px; border-radius: 8px; margin: 25px 0; text-align: center; border: 2px solid #5EBAB4; }
+          .otp-code { font-size: 36px; font-weight: bold; letter-spacing: 10px; color: #5EBAB4; margin: 0; font-family: 'Courier New', monospace; }
+          .info-box { background: #f0faf9; padding: 15px 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #5EBAB4; }
+          .info-box p { margin: 5px 0; }
+          .warning { color: #666; font-size: 14px; margin-top: 20px; padding: 15px; background: #fafafa; border-radius: 5px; }
+          .footer { text-align: center; color: #888; font-size: 12px; margin-top: 25px; padding-top: 20px; border-top: 1px solid #eee; }
+          .footer p { margin: 5px 0; }
+          .logo { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">GateRecord</div>
+            <h1>Password Reset</h1>
+            <p>Your verification code</p>
+          </div>
+          <div class="content">
+            <p>Hello <strong>${userName}</strong>,</p>
+            <p>We received a request to reset your password for your GateRecord account. Use the verification code below to proceed:</p>
+
+            <div class="otp-box">
+              <p style="margin: 0 0 10px; color: #666; font-size: 14px;">Your verification code</p>
+              <p class="otp-code">${otp}</p>
+            </div>
+
+            <div class="info-box">
+              <p><strong>⏱️ This code will expire in ${expiresInSeconds} seconds.</strong></p>
+              <p>Enter this code on the password reset page to verify your identity.</p>
+            </div>
+
+            <div class="warning">
+              <p><strong>🔒 Security Notice:</strong> If you didn't request a password reset, please ignore this email. Your account is safe and no action is required.</p>
+            </div>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from GateRecord.</p>
+            <p>Please do not reply to this email.</p>
+            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: userEmail,
+      subject: 'Password Reset Code - GateRecord',
       html,
     });
   }

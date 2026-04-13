@@ -12,7 +12,7 @@ import {
   Tooltip,
   Button,
   notification,
-  Avatar,
+  Card,
 } from 'antd';
 import {
   GatewayOutlined,
@@ -401,6 +401,8 @@ interface SuperAdminDashboardData {
   mrr: number;
   arr: number;
   totalRevenue: number;
+  monthlySubscriptionsRevenue: number;
+  yearlySubscriptionsRevenue: number;
   revenueGrowth: number;
   totalTenants: number;
   activeTenants: number;
@@ -417,6 +419,31 @@ interface SuperAdminDashboardData {
   recentTenants: { id: string; name: string; planName: string; status: string; createdAt: string }[];
   expiringTrials: { id: string; name: string; expiresAt: string; daysLeft: number }[];
   tenantsAtLimit: { id: string; name: string; limitType: string; current: number; max: number }[];
+}
+
+interface SubscriptionStatsData {
+  totalSubscriptions: number;
+  activeSubscriptions: number;
+  trialSubscriptions: number;
+  monthlyRevenue: number;
+  yearlyRevenue: number;
+  totalRevenue: number;
+  planBreakdown: {
+    planId: string;
+    planName: string;
+    monthlyPrice: number;
+    yearlyPrice: number;
+    subscriberCount: number;
+    monthlySubscribers: number;
+    yearlySubscribers: number;
+    revenue: number;
+    // Lifetime revenue from actual payments
+    lifetimeMonthlyRevenue: number;
+    lifetimeYearlyRevenue: number;
+    lifetimeTotalRevenue: number;
+    monthlyPaymentCount: number;
+    yearlyPaymentCount: number;
+  }[];
 }
 
 // Dashboard Header Component
@@ -475,6 +502,7 @@ function SectionHeader({ icon, title, subtitle, action }: { icon: React.ReactNod
 function SuperAdminDashboard() {
   const { user } = useAuthStore();
   const [data, setData] = useState<SuperAdminDashboardData | null>(null);
+  const [subscriptionStats, setSubscriptionStats] = useState<SubscriptionStatsData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -483,8 +511,12 @@ function SuperAdminDashboard() {
 
   const loadDashboard = async () => {
     try {
-      const response = await api.get('/admin/dashboard');
-      setData(response.data);
+      const [dashboardRes, statsRes] = await Promise.all([
+        api.get('/admin/dashboard'),
+        api.get('/admin/subscription-stats'),
+      ]);
+      setData(dashboardRes.data);
+      setSubscriptionStats(statsRes.data);
     } catch (error) {
       console.error('Failed to load dashboard:', error);
     } finally {
@@ -504,12 +536,13 @@ function SuperAdminDashboard() {
     return <Alert type="error" message="Failed to load dashboard data" />;
   }
 
-  const statusColors: Record<string, string> = {
-    active: 'green',
-    trial: 'blue',
-    suspended: 'red',
-    expired: 'default',
-  };
+  // Commented out - used by commented Recent Buildings section
+  // const statusColors: Record<string, string> = {
+  //   active: 'green',
+  //   trial: 'blue',
+  //   suspended: 'red',
+  //   expired: 'default',
+  // };
 
   return (
     <div>
@@ -530,42 +563,44 @@ function SuperAdminDashboard() {
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
             <StatCard
-              title="Monthly Recurring Revenue"
-              value={data.mrr}
+              title="Monthly Subscriptions"
+              value={data.monthlySubscriptionsRevenue}
               prefix={<DollarOutlined />}
               color="text-green-600"
               bgColor="bg-green-100"
               precision={2}
+              suffix="/month"
             />
           </Col>
           <Col xs={24} sm={12} lg={6}>
             <StatCard
-              title="Annual Recurring Revenue"
-              value={data.arr}
+              title="Annual Subscriptions"
+              value={data.yearlySubscriptionsRevenue}
               prefix={<DollarOutlined />}
               color="text-blue-600"
               bgColor="bg-blue-100"
+              precision={2}
+              suffix="/year"
+            />
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <StatCard
+              title="Total Revenue"
+              value={data.totalRevenue}
+              prefix={<DollarOutlined />}
+              color="text-indigo-600"
+              bgColor="bg-indigo-100"
               precision={2}
             />
           </Col>
           <Col xs={24} sm={12} lg={6}>
             <StatCard
-              title="Revenue Growth"
-              value={`${data.revenueGrowth >= 0 ? '+' : ''}${data.revenueGrowth.toFixed(1)}%`}
-              prefix={data.revenueGrowth >= 0 ? <RiseOutlined /> : <FallOutlined />}
-              color={data.revenueGrowth >= 0 ? 'text-green-600' : 'text-red-600'}
-              bgColor={data.revenueGrowth >= 0 ? 'bg-green-100' : 'bg-red-100'}
-              suffix="vs last month"
-            />
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <StatCard
-              title="New Buildings"
-              value={data.newTenantsThisMonth}
+              title="Subscribed Buildings"
+              value={data.activeTenants}
               prefix={<BuildOutlined />}
-              color="text-purple-600"
-              bgColor="bg-purple-100"
-              suffix="this month"
+              color="text-green-600"
+              bgColor="bg-green-100"
+              suffix="active"
             />
           </Col>
         </Row>
@@ -664,64 +699,142 @@ function SuperAdminDashboard() {
         </Row>
       </div>
 
-      <Row gutter={[24, 24]}>
-        {/* Plan Distribution */}
-        <Col xs={24} lg={12}>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
-            <div className="p-5 border-b border-gray-100">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
-                  <DollarOutlined />
-                </div>
-                <div>
-                  <h3 className="text-base font-semibold text-gray-900">Revenue by Plan</h3>
-                  <p className="text-xs text-gray-500">Monthly recurring revenue breakdown</p>
-                </div>
-              </div>
+      {/* Commented out: Revenue by Plan - Full Width with Detailed Table */}
+      <Card
+        className="shadow-sm"
+        title={
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+              <DollarOutlined />
             </div>
-            <div className="p-5">
-              <Table
-                dataSource={data.planDistribution}
-                rowKey="planName"
-                pagination={false}
-                size="small"
-                className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
-                columns={[
-                  {
-                    title: 'PLAN',
-                    dataIndex: 'planName',
-                    key: 'planName',
-                    render: (name: string) => (
-                      <span className="font-medium text-gray-900">{name}</span>
-                    ),
-                  },
-                  {
-                    title: 'SUBSCRIBERS',
-                    dataIndex: 'count',
-                    key: 'count',
-                    align: 'center',
-                    render: (count: number) => (
-                      <Tag color="blue" className="rounded-full">{count}</Tag>
-                    ),
-                  },
-                  {
-                    title: 'MRR',
-                    dataIndex: 'revenue',
-                    key: 'revenue',
-                    align: 'right',
-                    render: (revenue: number) => (
-                      <span className="font-semibold text-green-600">
-                        ${revenue.toFixed(2)}
-                      </span>
-                    ),
-                  },
-                ]}
-              />
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-gray-900 m-0">Revenue by Plan</h3>
+                <Tag color="blue">{subscriptionStats?.planBreakdown?.length || 0} plans</Tag>
+              </div>
+              <p className="text-xs text-gray-500 m-0">Detailed subscription and revenue breakdown</p>
             </div>
           </div>
-        </Col>
+        }
+      >
+        <Table
+          dataSource={subscriptionStats?.planBreakdown || []}
+          rowKey="planId"
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} plans`,
+          }}
+          size="middle"
+          className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
+          columns={[
+            {
+              title: 'Plan',
+              dataIndex: 'planName',
+              key: 'planName',
+              render: (name: string) => (
+                <div className="flex items-center gap-2">
+                  <SafetyCertificateOutlined className="text-yellow-500" />
+                  <span className="font-semibold text-gray-900">{name}</span>
+                </div>
+              ),
+            },
+            {
+              title: 'Monthly Price',
+              dataIndex: 'monthlyPrice',
+              key: 'monthlyPrice',
+              render: (price: number) => (
+                <span className="text-gray-700">${price.toFixed(2)}/mo</span>
+              ),
+            },
+            {
+              title: 'Yearly Price',
+              dataIndex: 'yearlyPrice',
+              key: 'yearlyPrice',
+              render: (price: number) => (
+                <span className="text-gray-700">${price.toFixed(2)}/yr</span>
+              ),
+            },
+            {
+              title: 'Subscribers',
+              key: 'subscribers',
+              render: (_: unknown, record: SubscriptionStatsData['planBreakdown'][0]) => (
+                <div>
+                  <div className="font-medium text-gray-900">
+                    <span className={record.subscriberCount > 0 ? 'text-green-600' : 'text-orange-500'}>
+                      {record.subscriberCount} total
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {record.monthlySubscribers} monthly, {record.yearlySubscribers} yearly
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: 'Monthly Revenue',
+              dataIndex: 'revenue',
+              key: 'revenue',
+              align: 'right',
+              sorter: (a, b) => a.revenue - b.revenue,
+              render: (revenue: number) => (
+                <span className={`font-bold ${revenue > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                  ${revenue.toFixed(2)}
+                </span>
+              ),
+            },
+            {
+              title: 'Lifetime Monthly',
+              key: 'lifetimeMonthly',
+              align: 'right',
+              sorter: (a, b) => (a.lifetimeMonthlyRevenue || 0) - (b.lifetimeMonthlyRevenue || 0),
+              render: (_: unknown, record: SubscriptionStatsData['planBreakdown'][0]) => (
+                <div className="text-right">
+                  <div className={`font-bold ${(record.lifetimeMonthlyRevenue || 0) > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
+                    ${(record.lifetimeMonthlyRevenue || 0).toFixed(2)}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {record.monthlyPaymentCount || 0} payments
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: 'Lifetime Yearly',
+              key: 'lifetimeYearly',
+              align: 'right',
+              sorter: (a, b) => (a.lifetimeYearlyRevenue || 0) - (b.lifetimeYearlyRevenue || 0),
+              render: (_: unknown, record: SubscriptionStatsData['planBreakdown'][0]) => (
+                <div className="text-right">
+                  <div className={`font-bold ${(record.lifetimeYearlyRevenue || 0) > 0 ? 'text-purple-600' : 'text-gray-400'}`}>
+                    ${(record.lifetimeYearlyRevenue || 0).toFixed(2)}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {record.yearlyPaymentCount || 0} payments
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: 'Total Lifetime',
+              key: 'lifetimeTotal',
+              align: 'right',
+              sorter: (a, b) => (a.lifetimeTotalRevenue || 0) - (b.lifetimeTotalRevenue || 0),
+              render: (_: unknown, record: SubscriptionStatsData['planBreakdown'][0]) => (
+                <span className={`font-bold ${(record.lifetimeTotalRevenue || 0) > 0 ? 'text-green-700' : 'text-gray-400'}`}>
+                  ${(record.lifetimeTotalRevenue || 0).toFixed(2)}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </Card>
+     
 
-        {/* Recent Tenants */}
+      {/* Commented out: Recent Tenants and simple Revenue by Plan sections
+      <Row gutter={[24, 24]}>
         <Col xs={24} lg={12}>
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-full">
             <div className="p-5 border-b border-gray-100">
@@ -766,6 +879,7 @@ function SuperAdminDashboard() {
           </div>
         </Col>
       </Row>
+      */}
 
       {/* Alerts Section */}
       {(data.expiringTrials.length > 0 || data.tenantsAtLimit.length > 0) && (

@@ -27,6 +27,9 @@ export class AccessEventsService {
     // Tenant isolation
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+    } else if (query.tenantId) {
+      // Super admin can filter by tenant
+      qb.where('event.tenant_id = :tenantId', { tenantId: query.tenantId });
     }
 
     // Filters
@@ -36,6 +39,10 @@ export class AccessEventsService {
 
     if (query.method) {
       qb.andWhere('event.method = :method', { method: query.method });
+    }
+
+    if (query.subjectType) {
+      qb.andWhere('event.subject_type = :subjectType', { subjectType: query.subjectType });
     }
 
     if (query.result) {
@@ -131,6 +138,8 @@ export class AccessEventsService {
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+    } else if (query.tenantId) {
+      qb.where('event.tenant_id = :tenantId', { tenantId: query.tenantId });
     }
 
     if (query.gateId) {
@@ -139,6 +148,10 @@ export class AccessEventsService {
 
     if (query.method) {
       qb.andWhere('event.method = :method', { method: query.method });
+    }
+
+    if (query.subjectType) {
+      qb.andWhere('event.subject_type = :subjectType', { subjectType: query.subjectType });
     }
 
     if (query.result) {

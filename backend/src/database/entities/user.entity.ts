@@ -20,6 +20,13 @@ export enum UserStatus {
   PENDING = 'pending',
 }
 
+export interface NotificationSettings {
+  pushNotifications: boolean;
+  emailAlerts: boolean;
+  securityAlerts: boolean;
+  visitorNotifications: boolean;
+}
+
 @Entity('users')
 @Index(['email'], { unique: true })
 @Index(['tenantId', 'role'])
@@ -63,6 +70,9 @@ export class User extends BaseEntity {
 
   @Column({ name: 'must_change_password', default: false })
   mustChangePassword: boolean;
+
+  @Column({ name: 'notification_settings', type: 'jsonb', nullable: true })
+  notificationSettings: NotificationSettings;
 
   @OneToMany(() => Vehicle, (vehicle) => vehicle.owner)
   vehicles: Vehicle[];

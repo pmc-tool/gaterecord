@@ -99,7 +99,7 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="w-full max-w-4xl flex flex-col lg:flex-row gap-6">
+      <div className="w-full max-w-md flex flex-col lg:flex-row gap-6">
         {/* Login Form */}
         <Card className="flex-1 shadow-xl">
           <Space direction="vertical" size="large" className="w-full">
@@ -174,15 +174,22 @@ export function LoginPage() {
               </Form.Item>
             </Form>
 
-            <div className="text-center">
-              <Link to="/" className="text-blue-600 hover:text-blue-700">
-                ← Back to Home
-              </Link>
+            <div className="text-center space-y-2">
+              <div>
+                <Link to="/forgot-password" className="text-blue-600 hover:text-blue-700">
+                  Forgot Password?
+                </Link>
+              </div>
+              <div>
+                <Link to="/" className="text-gray-500 hover:text-gray-700">
+                  ← Back to Home
+                </Link>
+              </div>
             </div>
           </Space>
         </Card>
 
-        {/* Demo Credentials Table */}
+        {/* Demo Credentials Table - Hidden
         <Card
           className="flex-1 shadow-xl"
           title={
@@ -208,6 +215,7 @@ export function LoginPage() {
             </Text>
           </div>
         </Card>
+        */}
       </div>
     </div>
   );

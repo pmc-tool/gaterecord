@@ -508,6 +508,7 @@ export default function BillingSettingsPage() {
                 </Button>
               )}
 
+              {/* Refund Request button temporarily disabled
               {subscription.status === 'active' && (
                 <Button
                   type="default"
@@ -517,6 +518,7 @@ export default function BillingSettingsPage() {
                   Request Refund
                 </Button>
               )}
+              */}
             </Space>
           </Col>
         </Row>

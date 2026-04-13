@@ -383,26 +383,55 @@ export class DevicesService {
     return this.mapDeviceToResponse(savedDevice!);
   }
 
-  async getDevices(user: User): Promise<DeviceResponseDto[]> {
-    let devices: DeviceConfig[];
+  async getDevices(user: User, query: { search?: string; tenantId?: string; gateId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: DeviceResponseDto[]; total: number; page: number; limit: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
 
+    const qb = this.deviceConfigRepo.createQueryBuilder('device')
+      .leftJoinAndSelect('device.gate', 'gate')
+      .orderBy('device.createdAt', 'DESC');
+
+    // Apply tenant filter based on role
     if (user.role === UserRole.SUPER_ADMIN) {
-      devices = await this.deviceConfigRepo.find({
-        relations: ['gate'],
-        order: { createdAt: 'DESC' },
-      });
+      // Super admin can filter by tenant
+      if (query.tenantId) {
+        qb.andWhere('device.tenantId = :tenantId', { tenantId: query.tenantId });
+      }
     } else {
+      // Other users can only see their tenant's devices
       if (!user.tenantId) {
         throw new ForbiddenException('User must belong to a tenant');
       }
-      devices = await this.deviceConfigRepo.find({
-        where: { tenantId: user.tenantId },
-        relations: ['gate'],
-        order: { createdAt: 'DESC' },
-      });
+      qb.andWhere('device.tenantId = :tenantId', { tenantId: user.tenantId });
     }
 
-    return devices.map(this.mapDeviceToResponse);
+    // Search by device name
+    if (query.search) {
+      qb.andWhere('LOWER(device.deviceName) LIKE LOWER(:search)', { search: `%${query.search}%` });
+    }
+
+    // Filter by gate
+    if (query.gateId) {
+      qb.andWhere('device.gateId = :gateId', { gateId: query.gateId });
+    }
+
+    // Filter by status
+    if (query.status) {
+      qb.andWhere('device.status = :status', { status: query.status });
+    }
+
+    const [devices, total] = await qb
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      data: devices.map(this.mapDeviceToResponse),
+      total,
+      page,
+      limit,
+    };
   }
 
   async getDevice(id: string, user: User): Promise<DeviceResponseDto> {

@@ -1,0 +1,344 @@
+{
+  "info": {
+    "name": "Gate Management - Security Alerts API",
+    "_postman_id": "security-alerts-collection",
+    "description": "API collection for testing Security Alert system with Cloud Plus TypeB Controller integration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Login (Get Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.accessToken) {",
+                  "    pm.collectionVariables.set('accessToken', jsonData.accessToken);",
+                  "    console.log('Token saved successfully');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"admin@example.com\",\n    \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login to get JWT access token. Update email/password with valid credentials."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Test Endpoints",
+      "item": [
+        {
+          "name": "Get Alert Types (Available Options)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/types",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "types"]
+            },
+            "description": "Get all available alert types, priorities, and statuses for reference"
+          }
+        },
+        {
+          "name": "Create Test Alert - Forced Entry",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"type\": \"forced_entry\",\n    \"title\": \"Test Forced Entry Alert\",\n    \"description\": \"Test alert for forced entry detection\",\n    \"priority\": \"critical\",\n    \"triggerBuzzer\": true,\n    \"alarmDuration\": 15\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "create"]
+            },
+            "description": "Create a test forced entry alert with hardware buzzer"
+          }
+        },
+        {
+          "name": "Create Test Alert - Unauthorized Visitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"type\": \"unauthorized_visitor\",\n    \"title\": \"Unauthorized Visitor Detected\",\n    \"description\": \"Unknown person attempting entry without authorization\",\n    \"priority\": \"high\",\n    \"triggerBuzzer\": true,\n    \"alarmDuration\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "create"]
+            },
+            "description": "Create a test unauthorized visitor alert"
+          }
+        },
+        {
+          "name": "Create Test Alert - Door Held Open",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"type\": \"door_held_open\",\n    \"title\": \"Door Held Open Too Long\",\n    \"description\": \"Main entrance door has been held open for over 60 seconds\",\n    \"priority\": \"medium\",\n    \"triggerBuzzer\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "create"]
+            },
+            "description": "Create a door held open alert (no buzzer)"
+          }
+        },
+        {
+          "name": "Create Test Alert - Controller Offline",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"type\": \"controller_offline\",\n    \"title\": \"Gate Controller Disconnected\",\n    \"description\": \"Cloud Plus TypeB controller lost connection\",\n    \"priority\": \"high\",\n    \"controllerSerial\": \"CP-001\",\n    \"triggerBuzzer\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "create"]
+            },
+            "description": "Create a controller offline alert"
+          }
+        },
+        {
+          "name": "Simulate Repeated Denied Access",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"count\": 5\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/test/simulate-denied-access",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "test", "simulate-denied-access"]
+            },
+            "description": "Simulate multiple denied access attempts to trigger security alert with buzzer"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Alert Management",
+      "item": [
+        {
+          "name": "Get All Alerts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts"]
+            },
+            "description": "Get all security alerts for the tenant"
+          }
+        },
+        {
+          "name": "Get Active Alerts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/active",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "active"]
+            },
+            "description": "Get only active (unresolved) security alerts"
+          }
+        },
+        {
+          "name": "Get Alert Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", "stats"]
+            },
+            "description": "Get security alert statistics for the dashboard"
+          }
+        },
+        {
+          "name": "Filter Alerts by Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts?status=active",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "Options: active, acknowledged, resolved, false_alarm"
+                }
+              ]
+            },
+            "description": "Get alerts filtered by status"
+          }
+        },
+        {
+          "name": "Acknowledge Alert (Stops Buzzer)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/:alertId/acknowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", ":alertId", "acknowledge"],
+              "variable": [
+                {
+                  "key": "alertId",
+                  "value": "PASTE_ALERT_ID_HERE",
+                  "description": "UUID of the alert to acknowledge"
+                }
+              ]
+            },
+            "description": "Acknowledge an alert - this STOPS the hardware buzzer"
+          }
+        },
+        {
+          "name": "Resolve Alert",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"notes\": \"Issue resolved. Verified authorized person.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/:alertId/resolve",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", ":alertId", "resolve"],
+              "variable": [
+                {
+                  "key": "alertId",
+                  "value": "PASTE_ALERT_ID_HERE",
+                  "description": "UUID of the alert to resolve"
+                }
+              ]
+            },
+            "description": "Resolve an alert with optional notes"
+          }
+        },
+        {
+          "name": "Mark as False Alarm",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"notes\": \"False alarm - system malfunction\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/security-alerts/:alertId/false-alarm",
+              "host": ["{{baseUrl}}"],
+              "path": ["security-alerts", ":alertId", "false-alarm"],
+              "variable": [
+                {
+                  "key": "alertId",
+                  "value": "PASTE_ALERT_ID_HERE",
+                  "description": "UUID of the alert to mark as false alarm"
+                }
+              ]
+            },
+            "description": "Mark an alert as a false alarm"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -6,12 +6,15 @@ import {
   SecurityAlertType,
   SecurityAlertStatus,
   SecurityAlertPriority,
+  SecurityAlertSource,
 } from '@database/entities/security-alert.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
+import { DeviceConfig } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { EmailService } from '../notification/email.service';
+import { CloudPlusTcpService } from '../cloud-plus-typeB-tcp/cloud-plus-tcp.service';
 
 export interface CreateSecurityAlertDto {
   tenantId: string;
@@ -23,9 +26,13 @@ export interface CreateSecurityAlertDto {
   residentId?: string;
   reportedByEmail?: string;
   gateId?: string;
+  deviceId?: string;
   gateName?: string;
   priority?: SecurityAlertPriority;
+  source?: SecurityAlertSource;
+  controllerSerial?: string;
   triggerBuzzer?: boolean;
+  alarmDuration?: number;
 }
 
 export interface ReportUnauthorizedDto {
@@ -46,14 +53,21 @@ export class SecurityAlertService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Gate)
     private readonly gateRepository: Repository<Gate>,
+    @InjectRepository(DeviceConfig)
+    private readonly deviceRepository: Repository<DeviceConfig>,
     private readonly gatewayService: GatewayService,
     private readonly emailService: EmailService,
+    @Inject(forwardRef(() => CloudPlusTcpService))
+    private readonly tcpService: CloudPlusTcpService,
   ) {}
 
   async create(dto: CreateSecurityAlertDto): Promise<SecurityAlert> {
     const alert = this.alertRepository.create({
       tenantId: dto.tenantId,
+      gateId: dto.gateId,
+      deviceId: dto.deviceId,
       type: dto.type,
+      source: dto.source || SecurityAlertSource.SYSTEM,
       title: dto.title,
       description: dto.description,
       accessEventId: dto.accessEventId,
@@ -61,9 +75,11 @@ export class SecurityAlertService {
       residentId: dto.residentId,
       reportedByEmail: dto.reportedByEmail,
       gateName: dto.gateName,
+      controllerSerial: dto.controllerSerial,
       priority: dto.priority || SecurityAlertPriority.HIGH,
       status: SecurityAlertStatus.ACTIVE,
       buzzerTriggered: dto.triggerBuzzer || false,
+      alarmDurationSeconds: dto.alarmDuration || 30,
     });
 
     const savedAlert = await this.alertRepository.save(alert);
@@ -79,27 +95,72 @@ export class SecurityAlertService {
       this.logger.warn(`>>> Triggering buzzer for tenant ${dto.tenantId}`);
       this.gatewayService.triggerBuzzer(dto.tenantId, savedAlert.id);
 
-      // Send command to physical gate controller via Cloud Plus HTTP
-      if (dto.gateId) {
-        this.logger.warn(`>>> About to call triggerHardwareAlarm with gateId: ${dto.gateId}`);
-        await this.triggerHardwareAlarm(dto.gateId, savedAlert.id);
-      } else {
-        this.logger.warn(`>>> No gateId provided, skipping hardware alarm`);
-      }
+      // Send command to physical gate controller via Cloud Plus TCP
+      await this.triggerHardwareAlarm(savedAlert, dto.alarmDuration || 30);
     }
 
     return savedAlert;
   }
 
-  private async triggerHardwareAlarm(_gateId: string, _alertId: string): Promise<void> {
-    // Hardware alarm is triggered via Cloud Plus HTTP protocol
-    // The controller handles alarm via response to access requests
-    this.logger.log(`Hardware alarm triggered via Cloud Plus protocol`);
+  /**
+   * Trigger hardware alarm on Cloud Plus TypeB controller via TCP
+   */
+  private async triggerHardwareAlarm(alert: SecurityAlert, duration: number): Promise<void> {
+    try {
+      let success = false;
+      let serials: string[] = [];
+
+      // Try by specific controller serial first
+      if (alert.controllerSerial) {
+        const result = await this.tcpService.triggerSecurityAlarm(alert.controllerSerial, duration);
+        success = result.success;
+        if (success) serials.push(result.serial);
+      }
+      // Otherwise trigger on all controllers for the gate
+      else if (alert.gateId) {
+        const result = await this.tcpService.triggerGateAlarm(alert.gateId, duration);
+        success = result.successCount > 0;
+        serials = result.serials;
+      }
+
+      if (success) {
+        await this.alertRepository.update(alert.id, {
+          hardwareAlarmSent: true,
+          controllerSerial: serials[0] || alert.controllerSerial,
+        });
+        this.logger.warn(`Hardware alarm triggered on controllers: ${serials.join(', ')}`);
+      } else {
+        this.logger.warn(`No connected controllers found for hardware alarm`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to trigger hardware alarm: ${error}`);
+    }
   }
 
-  private async stopHardwareAlarm(_gateId: string, _alertId: string): Promise<void> {
-    // Hardware alarm stop is handled via Cloud Plus HTTP protocol
-    this.logger.log(`Hardware alarm stopped via Cloud Plus protocol`);
+  /**
+   * Stop hardware alarm on Cloud Plus TypeB controller via TCP
+   */
+  private async stopHardwareAlarm(alert: SecurityAlert): Promise<void> {
+    try {
+      if (!alert.hardwareAlarmSent) return;
+
+      let success = false;
+
+      if (alert.controllerSerial) {
+        const result = await this.tcpService.stopSecurityAlarm(alert.controllerSerial);
+        success = result.success;
+      } else if (alert.gateId) {
+        const result = await this.tcpService.stopGateAlarm(alert.gateId);
+        success = result.successCount > 0;
+      }
+
+      if (success) {
+        await this.alertRepository.update(alert.id, { hardwareAlarmStopped: true });
+        this.logger.log(`Hardware alarm stopped for alert ${alert.id}`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to stop hardware alarm: ${error}`);
+    }
   }
 
   async reportUnauthorizedVisitor(
@@ -217,7 +278,7 @@ export class SecurityAlertService {
     }
   }
 
-  async findAll(user: User, status?: SecurityAlertStatus): Promise<SecurityAlert[]> {
+  async findAll(user: User, status?: SecurityAlertStatus, tenantId?: string): Promise<SecurityAlert[]> {
     const query = this.alertRepository
       .createQueryBuilder('alert')
       .leftJoinAndSelect('alert.tenant', 'tenant')
@@ -230,6 +291,9 @@ export class SecurityAlertService {
     // Filter by tenant unless super admin
     if (user.role !== UserRole.SUPER_ADMIN) {
       query.where('alert.tenantId = :tenantId', { tenantId: user.tenantId });
+    } else if (tenantId) {
+      // Super admin can filter by tenant
+      query.where('alert.tenantId = :tenantId', { tenantId });
     }
 
     if (status) {
@@ -268,13 +332,11 @@ export class SecurityAlertService {
     this.gatewayService.broadcastSecurityAlertUpdate(savedAlert);
 
     // Stop buzzer if it was triggered (frontend and hardware)
-    if (alert.buzzerTriggered) {
+    if (alert.buzzerTriggered || alert.hardwareAlarmSent) {
       this.gatewayService.stopBuzzer(alert.tenantId, alert.id);
 
-      // Stop hardware alarm via Cloud Plus HTTP protocol
-      if (alert.accessEvent?.gateId) {
-        await this.stopHardwareAlarm(alert.accessEvent.gateId, alert.id);
-      }
+      // Stop hardware alarm via Cloud Plus TCP protocol
+      await this.stopHardwareAlarm(alert);
     }
 
     return savedAlert;
@@ -340,13 +402,11 @@ export class SecurityAlertService {
     this.gatewayService.broadcastSecurityAlertUpdate(savedAlert);
 
     // Stop buzzer (frontend and hardware)
-    if (alert.buzzerTriggered) {
+    if (alert.buzzerTriggered || alert.hardwareAlarmSent) {
       this.gatewayService.stopBuzzer(alert.tenantId, alert.id);
 
-      // Stop hardware alarm via Cloud Plus HTTP protocol
-      if (alert.accessEvent?.gateId) {
-        await this.stopHardwareAlarm(alert.accessEvent.gateId, alert.id);
-      }
+      // Stop hardware alarm via Cloud Plus TCP protocol
+      await this.stopHardwareAlarm(alert);
     }
 
     return savedAlert;

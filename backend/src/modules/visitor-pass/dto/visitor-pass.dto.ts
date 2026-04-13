@@ -143,6 +143,11 @@ export class VisitorPassQueryDto {
   @IsOptional()
   status?: VisitorPassStatus;
 
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
   @ApiPropertyOptional({ description: 'Start date filter' })
   @IsDateString()
   @IsOptional()

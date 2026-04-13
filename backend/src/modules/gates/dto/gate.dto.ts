@@ -130,3 +130,20 @@ export class GateHealthDto {
   @ApiPropertyOptional()
   uptimeSeconds?: number;
 }
+
+export class GateQueryDto {
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
+  @ApiPropertyOptional({ enum: GateType, description: 'Filter by gate type' })
+  @IsEnum(GateType)
+  @IsOptional()
+  type?: GateType;
+
+  @ApiPropertyOptional({ enum: GateState, description: 'Filter by gate state' })
+  @IsEnum(GateState)
+  @IsOptional()
+  state?: GateState;
+}

@@ -22,8 +22,8 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import api from '../../services/api';
-
-const { RangePicker } = DatePicker;
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 interface AccessEvent {
   id: string;
@@ -49,12 +49,20 @@ const accessMethodColors: Record<string, string> = {
 };
 
 export default function EventsPage() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+
   const [events, setEvents] = useState<AccessEvent[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
+  const [gates, setGates] = useState<{ id: string; name: string }[]>([]);
   const [filters, setFilters] = useState({
-    startDate: dayjs().subtract(7, 'day').toISOString(),
-    endDate: dayjs().toISOString(),
+    tenantId: undefined as string | undefined,
+    gateId: undefined as string | undefined,
+    startDate: undefined as string | undefined,
+    endDate: undefined as string | undefined,
     method: undefined as string | undefined,
+    subjectType: undefined as string | undefined,
     result: undefined as string | undefined,
   });
   const [stats, setStats] = useState({
@@ -62,15 +70,44 @@ export default function EventsPage() {
     allowed: 0,
     denied: 0,
   });
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0 });
+
+  const fetchTenants = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get('/admin/tenants');
+      setTenants(response.data.data || response.data);
+    } catch (error) {
+      console.error('Failed to fetch tenants');
+    }
+  };
+
+  const fetchGates = async (tenantId?: string) => {
+    try {
+      const params = new URLSearchParams();
+      if (tenantId) params.append('tenantId', tenantId);
+      const response = await api.get(`/gates?${params.toString()}`);
+      setGates(response.data.map((g: { id: string; name: string }) => ({ id: g.id, name: g.name })));
+    } catch (error) {
+      console.error('Failed to fetch gates');
+    }
+  };
+
+  // Refetch gates when tenant changes
+  useEffect(() => {
+    fetchGates(filters.tenantId);
+  }, [filters.tenantId]);
 
   const fetchEvents = async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
+      if (filters.tenantId) params.append('tenantId', filters.tenantId);
+      if (filters.gateId) params.append('gateId', filters.gateId);
       if (filters.startDate) params.append('startDate', filters.startDate);
       if (filters.endDate) params.append('endDate', filters.endDate);
       if (filters.method) params.append('method', filters.method);
+      if (filters.subjectType) params.append('subjectType', filters.subjectType);
       if (filters.result) params.append('result', filters.result);
       params.append('page', String(pagination.page));
       params.append('limit', String(pagination.limit));
@@ -96,13 +133,19 @@ export default function EventsPage() {
 
   useEffect(() => {
     fetchEvents();
+    fetchTenants();
   }, []);
 
   const handleExport = async () => {
     try {
       const params = new URLSearchParams();
+      if (filters.tenantId) params.append('tenantId', filters.tenantId);
+      if (filters.gateId) params.append('gateId', filters.gateId);
       if (filters.startDate) params.append('startDate', filters.startDate);
       if (filters.endDate) params.append('endDate', filters.endDate);
+      if (filters.method) params.append('method', filters.method);
+      if (filters.subjectType) params.append('subjectType', filters.subjectType);
+      if (filters.result) params.append('result', filters.result);
 
       const response = await api.get(`/events/export?${params.toString()}`, {
         responseType: 'blob',
@@ -233,46 +276,108 @@ export default function EventsPage() {
         }
       >
         <div className="mb-4">
-          <Space wrap>
-            <RangePicker
-              value={[dayjs(filters.startDate), dayjs(filters.endDate)]}
-              onChange={(dates) => {
-                if (dates) {
+          <Row gutter={[16, 16]} align="middle">
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={filters.tenantId}
+                  onChange={(value) => setFilters({ ...filters, tenantId: value, gateId: undefined })}
+                  options={tenants.map(t => ({ value: t.id, label: t.name }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Gate"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.gateId}
+                onChange={(value) => setFilters({ ...filters, gateId: value })}
+                options={gates.map(g => ({ value: g.id, label: g.name }))}
+                notFoundContent="No gates found"
+              />
+            </Col>
+            <Col>
+              <Select
+                placeholder="Method"
+                allowClear
+                style={{ width: 120 }}
+                value={filters.method}
+                onChange={(value) => setFilters({ ...filters, method: value })}
+              >
+                <Select.Option value="rfid">RFID</Select.Option>
+                <Select.Option value="qr_code">QR Code</Select.Option>
+                <Select.Option value="pin">PIN</Select.Option>
+                <Select.Option value="manual">Manual</Select.Option>
+                <Select.Option value="remote">Remote</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Select
+                placeholder="Type"
+                allowClear
+                style={{ width: 120 }}
+                value={filters.subjectType}
+                onChange={(value) => setFilters({ ...filters, subjectType: value })}
+              >
+                <Select.Option value="resident">Resident</Select.Option>
+                <Select.Option value="vehicle">Vehicle</Select.Option>
+                <Select.Option value="visitor">Visitor</Select.Option>
+                <Select.Option value="unknown">Unknown</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Select
+                placeholder="Result"
+                allowClear
+                style={{ width: 120 }}
+                value={filters.result}
+                onChange={(value) => setFilters({ ...filters, result: value })}
+              >
+                <Select.Option value="allowed">Allowed</Select.Option>
+                <Select.Option value="denied">Denied</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="Start Date"
+                style={{ width: 150 }}
+                value={filters.startDate ? dayjs(filters.startDate) : undefined}
+                onChange={(date) => setFilters({ ...filters, startDate: date?.format('YYYY-MM-DD') })}
+              />
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="End Date"
+                style={{ width: 150 }}
+                value={filters.endDate ? dayjs(filters.endDate) : undefined}
+                onChange={(date) => setFilters({ ...filters, endDate: date?.format('YYYY-MM-DD') })}
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={fetchEvents}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
                   setFilters({
-                    ...filters,
-                    startDate: dates[0]?.toISOString() || '',
-                    endDate: dates[1]?.toISOString() || '',
+                    tenantId: undefined,
+                    gateId: undefined,
+                    startDate: undefined,
+                    endDate: undefined,
+                    method: undefined,
+                    subjectType: undefined,
+                    result: undefined,
                   });
-                }
-              }}
-            />
-            <Select
-              placeholder="Method"
-              allowClear
-              style={{ width: 120 }}
-              value={filters.method}
-              onChange={(value) => setFilters({ ...filters, method: value })}
-            >
-              <Select.Option value="rfid">RFID</Select.Option>
-              <Select.Option value="qr_code">QR Code</Select.Option>
-              <Select.Option value="pin">PIN</Select.Option>
-              <Select.Option value="manual">Manual</Select.Option>
-              <Select.Option value="remote">Remote</Select.Option>
-            </Select>
-            <Select
-              placeholder="Result"
-              allowClear
-              style={{ width: 120 }}
-              value={filters.result}
-              onChange={(value) => setFilters({ ...filters, result: value })}
-            >
-              <Select.Option value="allowed">Allowed</Select.Option>
-              <Select.Option value="denied">Denied</Select.Option>
-            </Select>
-            <Button type="primary" onClick={fetchEvents}>
-              Apply Filters
-            </Button>
-          </Space>
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
         </div>
 
         <Table
@@ -285,7 +390,9 @@ export default function EventsPage() {
             pageSize: pagination.limit,
             total: pagination.total,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} events`,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} events`,
             onChange: (page, pageSize) => {
               setPagination({ ...pagination, page, limit: pageSize });
               fetchEvents();

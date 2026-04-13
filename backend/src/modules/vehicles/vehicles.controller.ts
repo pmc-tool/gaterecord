@@ -6,12 +6,13 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { VehiclesService } from './vehicles.service';
-import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import { CreateVehicleDto, UpdateVehicleDto, VehicleQueryDto } from './dto/vehicle.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -27,9 +28,9 @@ export class VehiclesController {
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
-  @ApiOperation({ summary: 'Get all vehicles for current tenant' })
-  async findAll(@CurrentUser() user: User) {
-    return this.vehiclesService.findAll(user);
+  @ApiOperation({ summary: 'Get all vehicles with optional filtering and pagination' })
+  async findAll(@CurrentUser() user: User, @Query() query: VehicleQueryDto) {
+    return this.vehiclesService.findAll(user, query);
   }
 
   @Get(':id')
