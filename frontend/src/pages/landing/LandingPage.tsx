@@ -390,21 +390,25 @@ export default function LandingPage() {
                 Real-time monitoring, seamless resident experience, and complete control
                 from anywhere in the world.
               </p>
-                <div className="mt-10 flex flex-col sm:flex-row items-center sm:items-center gap-4">
-                <Link
-                  to="/signup"
-                      className="flex h-14 w-[16.75rem] max-w-full items-center justify-center rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-4 text-base font-semibold text-white shadow-md shadow-blue-500/20 transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-blue-500/30 sm:h-auto sm:w-auto sm:max-w-none no-underline"
-                >
-                  Start Free Trial
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setDemoModalOpen(true)}
-                      className="flex h-14 w-[16.75rem] max-w-full cursor-pointer items-center justify-center gap-2 rounded-full border border-gray-300 px-8 py-4 text-base font-semibold text-gray-900 transition-colors hover:border-blue-300 hover:text-blue-600 sm:h-auto sm:w-auto sm:max-w-none"
-                >
-                  <PlayCircleIcon className="h-6 w-6 text-blue-600" />
-                  Watch Demo
-                </button>
+              <div className="mt-10 flex flex-col sm:flex-row items-center gap-3">
+                <div style={{ width: '210px', height: '44px', flexShrink: 0 }}>
+                  <Link
+                    to="/signup"
+                    className="flex w-full h-full items-center justify-center rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-semibold text-white shadow-none transition-all hover:from-blue-700 hover:to-indigo-700 sm:shadow-md sm:shadow-blue-500/20 no-underline overflow-hidden"
+                  >
+                    Start Free Trial
+                  </Link>
+                </div>
+                <div style={{ width: '210px', height: '44px', flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => setDemoModalOpen(true)}
+                    className="flex w-full h-full items-center justify-center gap-2 rounded-full border border-gray-300 text-base font-semibold text-gray-900 transition-colors hover:border-blue-300 hover:text-blue-600 cursor-pointer overflow-hidden"
+                  >
+                    <PlayCircleIcon className="h-6 w-6 text-blue-600" />
+                    Watch Demo
+                  </button>
+                </div>
               </div>
 
               {/* Stats */}
