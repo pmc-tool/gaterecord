@@ -1,10 +1,8 @@
 import api from './api';
 
 export interface NotificationSettings {
-  pushNotifications: boolean;
-  emailAlerts: boolean;
-  securityAlerts: boolean;
-  visitorNotifications: boolean;
+  emailNotifications: boolean;
+  inAppNotifications: boolean;
 }
 
 export interface ChangePasswordData {

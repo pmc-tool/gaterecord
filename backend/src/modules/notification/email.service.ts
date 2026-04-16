@@ -575,4 +575,87 @@ export class EmailService {
       html,
     });
   }
+
+  async sendNotificationEmail(
+    userEmail: string,
+    userName: string,
+    title: string,
+    message: string,
+    type: string,
+    priority: string,
+    link?: string,
+  ): Promise<boolean> {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const actionUrl = link || `${frontendUrl}/notifications`;
+
+    // Priority-based colors
+    const priorityColors: Record<string, string> = {
+      critical: '#ef4444',
+      high: '#f97316',
+      normal: '#3b82f6',
+      low: '#6b7280',
+    };
+    const headerColor = priorityColors[priority] || priorityColors.normal;
+
+    // Type-based icons
+    const typeEmojis: Record<string, string> = {
+      security_alert: '🚨',
+      unauthorized_access: '⚠️',
+      visitor_entry: '👋',
+      visitor_pass_created: '🎫',
+      access_denied: '🚫',
+      gate_offline: '📡',
+      trial_expiring: '⏰',
+      payment_failed: '💳',
+      info: 'ℹ️',
+      warning: '⚠️',
+      success: '✅',
+    };
+    const emoji = typeEmojis[type] || '🔔';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: ${headerColor}; padding: 25px; border-radius: 12px 12px 0 0; text-align: center; }
+          .header h1 { color: white; margin: 0; font-size: 20px; }
+          .content { background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; }
+          .message-box { background: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid ${headerColor}; }
+          .button { display: inline-block; background: #3b82f6; color: white !important; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }
+          .footer { background: #f9fafb; padding: 20px; border-radius: 0 0 12px 12px; text-align: center; color: #6b7280; font-size: 12px; border: 1px solid #e5e7eb; border-top: none; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>${emoji} ${title}</h1>
+          </div>
+          <div class="content">
+            <p>Hi ${userName},</p>
+            <div class="message-box">
+              <p style="margin: 0;">${message}</p>
+            </div>
+            <center>
+              <a href="${actionUrl}" class="button">View Details</a>
+            </center>
+          </div>
+          <div class="footer">
+            <p>GateRecord - Smart Gate Management</p>
+            <p style="font-size: 11px; color: #9ca3af;">You received this email because you have notifications enabled. <a href="${frontendUrl}/settings">Manage your preferences</a></p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: userEmail,
+      subject: `${emoji} ${title} - GateRecord`,
+      html,
+    });
+  }
 }

@@ -7,10 +7,11 @@ export class CreateUserDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ example: 'Password123!' })
+  @ApiPropertyOptional({ example: 'Password123!', description: 'If not provided, a temporary password will be generated and emailed to user' })
   @IsString()
   @MinLength(8)
-  password: string;
+  @IsOptional()
+  password?: string;
 
   @ApiProperty({ example: 'John' })
   @IsString()

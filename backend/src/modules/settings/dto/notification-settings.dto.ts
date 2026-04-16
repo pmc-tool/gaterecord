@@ -2,30 +2,18 @@ import { IsBoolean, IsOptional } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateNotificationSettingsDto {
-  @ApiPropertyOptional({ description: 'Enable push notifications' })
+  @ApiPropertyOptional({ description: 'Receive email notifications' })
   @IsBoolean()
   @IsOptional()
-  pushNotifications?: boolean;
+  emailNotifications?: boolean;
 
-  @ApiPropertyOptional({ description: 'Enable email alerts' })
+  @ApiPropertyOptional({ description: 'Receive in-app (bell) notifications' })
   @IsBoolean()
   @IsOptional()
-  emailAlerts?: boolean;
-
-  @ApiPropertyOptional({ description: 'Enable security alerts' })
-  @IsBoolean()
-  @IsOptional()
-  securityAlerts?: boolean;
-
-  @ApiPropertyOptional({ description: 'Enable visitor notifications' })
-  @IsBoolean()
-  @IsOptional()
-  visitorNotifications?: boolean;
+  inAppNotifications?: boolean;
 }
 
 export class NotificationSettingsResponseDto {
-  pushNotifications: boolean;
-  emailAlerts: boolean;
-  securityAlerts: boolean;
-  visitorNotifications: boolean;
+  emailNotifications: boolean;
+  inAppNotifications: boolean;
 }

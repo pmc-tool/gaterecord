@@ -1,13 +1,15 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository, MoreThan } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { Tenant, TenantStatus, BillingCycle } from '@database/entities/tenant.entity';
+import { Tenant, TenantStatus, BillingCycle, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
 import { Payment, PaymentStatus, TransactionType } from '@database/entities/payment.entity';
+import { EmailService } from '../notification/email.service';
 import {
   CreateTenantDto,
   UpdateTenantDto,
@@ -30,6 +32,8 @@ export class TenantsService {
     private accessEventRepository: Repository<AccessEvent>,
     @InjectRepository(Payment)
     private paymentRepository: Repository<Payment>,
+    private emailService: EmailService,
+    private configService: ConfigService,
   ) {}
 
   async createPlan(dto: CreateSubscriptionPlanDto): Promise<SubscriptionPlan> {
@@ -145,7 +149,13 @@ export class TenantsService {
       throw new NotFoundException('Subscription plan not found');
     }
 
-    // Create tenant
+    const now = new Date();
+    // Use same trial logic as user self-signup
+    const trialDays = plan.trialDays || 14;
+    const trialExpiresAt = new Date();
+    trialExpiresAt.setDate(trialExpiresAt.getDate() + trialDays);
+
+    // Create tenant with trial status (same as user self-signup)
     const tenant = this.tenantRepository.create({
       name: dto.name,
       slug: dto.slug,
@@ -154,6 +164,16 @@ export class TenantsService {
       address: dto.address,
       subscriptionPlanId: dto.subscriptionPlanId,
       status: TenantStatus.TRIAL,
+      subscriptionStatus: SubscriptionStatus.TRIALING,
+      subscriptionStartedAt: now,
+      subscriptionExpiresAt: trialExpiresAt,
+      currentPeriodEnd: trialExpiresAt,
+      settings: {
+        signupDate: now.toISOString(),
+        startedAsTrial: true,
+        trialDays: trialDays,
+        createdBySuperAdmin: true,
+      },
     });
 
     const savedTenant = await this.tenantRepository.save(tenant);
@@ -175,6 +195,22 @@ export class TenantsService {
     });
 
     await this.userRepository.save(adminUser);
+
+    // Send credentials email to building admin
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const loginUrl = `${frontendUrl}/login`;
+
+    this.emailService.sendNewUserCredentialsEmail(
+      dto.adminEmail.toLowerCase(),
+      `${dto.adminFirstName} ${dto.adminLastName}`,
+      UserRole.BUILDING_ADMIN,
+      adminPassword,
+      dto.name,
+      'GateRecord Admin',
+      loginUrl,
+    ).catch((error) => {
+      console.error('Failed to send credentials email:', error);
+    });
 
     return { tenant: savedTenant, adminPassword };
   }

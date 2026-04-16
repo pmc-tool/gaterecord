@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Card, Switch, Typography, Spin, message, Divider } from 'antd';
 import {
-  BellOutlined,
   MailOutlined,
-  SafetyOutlined,
-  UsergroupAddOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
 import { settingsService, NotificationSettings } from '../../../services/settings.service';
 
@@ -21,36 +19,22 @@ export default function NotificationsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [settings, setSettings] = useState<NotificationSettings>({
-    pushNotifications: true,
-    emailAlerts: true,
-    securityAlerts: true,
-    visitorNotifications: true,
+    emailNotifications: true,
+    inAppNotifications: true,
   });
 
   const notificationItems: NotificationItem[] = [
     {
-      key: 'pushNotifications',
-      icon: <BellOutlined className="text-2xl text-blue-500" />,
-      title: 'Push Notifications',
-      description: 'Receive instant notifications for important updates',
-    },
-    {
-      key: 'emailAlerts',
+      key: 'emailNotifications',
       icon: <MailOutlined className="text-2xl text-green-500" />,
-      title: 'Email Alerts',
-      description: 'Get email notifications for critical events',
+      title: 'Email Notifications',
+      description: 'Receive notifications via email',
     },
     {
-      key: 'securityAlerts',
-      icon: <SafetyOutlined className="text-2xl text-red-500" />,
-      title: 'Security Alerts',
-      description: 'Receive alerts for security-related events',
-    },
-    {
-      key: 'visitorNotifications',
-      icon: <UsergroupAddOutlined className="text-2xl text-purple-500" />,
-      title: 'Visitor Notifications',
-      description: 'Get notified when visitors arrive or passes are used',
+      key: 'inAppNotifications',
+      icon: <BellOutlined className="text-2xl text-blue-500" />,
+      title: 'In-App Notifications',
+      description: 'Receive notifications in the app (bell icon)',
     },
   ];
 

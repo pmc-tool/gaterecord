@@ -126,7 +126,7 @@ const purposeOptions = [
 
 export default function MyVisitorsPage() {
   const { user } = useAuthStore();
-  const isStaff = user?.role && [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user.role);
+  const isStaff = user?.role && [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user.role as UserRole);
   const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
 
   const [passes, setPasses] = useState<VisitorPass[]>([]);
@@ -193,9 +193,11 @@ export default function MyVisitorsPage() {
       }
       const url = isSuperAdmin && tenantId ? `/residents?tenantId=${tenantId}` : '/residents';
       const response = await api.get(url);
-      setResidents(response.data);
+      // Handle paginated response from API
+      setResidents(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch residents');
+      setResidents([]);
     }
   };
 
@@ -592,11 +594,11 @@ export default function MyVisitorsPage() {
           dataSource={passes}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 900 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} visitors`,
           }}
         />

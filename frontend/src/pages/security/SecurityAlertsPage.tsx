@@ -533,11 +533,11 @@ export function SecurityAlertsPage() {
           dataSource={alerts}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 900 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} alerts`,
           }}
           rowClassName={(record) =>

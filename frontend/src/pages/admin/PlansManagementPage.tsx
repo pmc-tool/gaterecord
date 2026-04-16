@@ -389,6 +389,7 @@ export default function PlansManagementPage() {
           dataSource={plans}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 1000 }}
           pagination={{
             current: pagination.page,
             pageSize: pagination.limit,
@@ -595,38 +596,38 @@ export default function PlansManagementPage() {
                   </>
                 ),
               },
-              {
-                key: 'features',
-                label: 'Features',
-                children: (
-                  <>
-                    <Form.Item name={['features', 'simulator_access']} valuePropName="checked">
-                      <Checkbox>Gate Simulator Access</Checkbox>
-                    </Form.Item>
-                    <Form.Item name={['features', 'csv_export']} valuePropName="checked">
-                      <Checkbox>CSV Export</Checkbox>
-                    </Form.Item>
-                    <Form.Item name={['features', 'api_access']} valuePropName="checked">
-                      <Checkbox>API Access</Checkbox>
-                    </Form.Item>
-                    {/* <Form.Item name={['features', 'custom_branding']} valuePropName="checked">
-                      <Checkbox>Custom Branding</Checkbox>
-                    </Form.Item>
-                    <Form.Item name={['features', 'priority_support']} valuePropName="checked">
-                      <Checkbox>Priority Support</Checkbox>
-                    </Form.Item>
-                    <Form.Item name={['features', 'advanced_analytics']} valuePropName="checked">
-                      <Checkbox>Advanced Analytics</Checkbox>
-                    </Form.Item>
-                    <Form.Item name={['features', 'multi_building']} valuePropName="checked">
-                      <Checkbox>Multi-Building Support</Checkbox>
-                    </Form.Item> */}
-                    <Form.Item name={['features', 'webhook_notifications']} valuePropName="checked">
-                      <Checkbox>Webhook Notifications</Checkbox>
-                    </Form.Item>
-                  </>
-                ),
-              },
+              // {
+              //   key: 'features',
+              //   label: 'Features',
+              //   children: (
+              //     <>
+              //       <Form.Item name={['features', 'simulator_access']} valuePropName="checked">
+              //         <Checkbox>Gate Simulator Access</Checkbox>
+              //       </Form.Item>
+              //       <Form.Item name={['features', 'csv_export']} valuePropName="checked">
+              //         <Checkbox>CSV Export</Checkbox>
+              //       </Form.Item>
+              //       <Form.Item name={['features', 'api_access']} valuePropName="checked">
+              //         <Checkbox>API Access</Checkbox>
+              //       </Form.Item>
+              //       {/* <Form.Item name={['features', 'custom_branding']} valuePropName="checked">
+              //         <Checkbox>Custom Branding</Checkbox>
+              //       </Form.Item>
+              //       <Form.Item name={['features', 'priority_support']} valuePropName="checked">
+              //         <Checkbox>Priority Support</Checkbox>
+              //       </Form.Item>
+              //       <Form.Item name={['features', 'advanced_analytics']} valuePropName="checked">
+              //         <Checkbox>Advanced Analytics</Checkbox>
+              //       </Form.Item>
+              //       <Form.Item name={['features', 'multi_building']} valuePropName="checked">
+              //         <Checkbox>Multi-Building Support</Checkbox>
+              //       </Form.Item> */}
+              //       <Form.Item name={['features', 'webhook_notifications']} valuePropName="checked">
+              //         <Checkbox>Webhook Notifications</Checkbox>
+              //       </Form.Item>
+              //     </>
+              //   ),
+              // },
             ]}
           />
 

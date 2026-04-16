@@ -51,6 +51,7 @@ interface Device {
   id: string;
   deviceName: string;
   deviceId: string;
+  macAddress?: string;
   tenantId: string;
   gateId?: string;
   gateName?: string;
@@ -211,11 +212,18 @@ export default function DevicesPage() {
     deviceName: string;
     deviceId: string;
     macAddress?: string;
-    tenantId: string;
+    tenantId?: string;
     gateId?: string;
   }) => {
     try {
-      await api.post('/devices', values);
+      // For building admin, use their tenantId
+      // Remove empty macAddress to avoid validation error
+      const payload = {
+        ...values,
+        macAddress: values.macAddress?.trim() || undefined,
+        tenantId: isSuperAdmin ? values.tenantId : user?.tenantId,
+      };
+      await api.post('/devices', payload);
       message.success('Device created successfully!');
       setAddDeviceModalVisible(false);
       addDeviceForm.resetFields();
@@ -223,8 +231,8 @@ export default function DevicesPage() {
       setTenantGates([]);
       fetchDevices();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      message.error(err.response?.data?.message || 'Failed to create device');
+      const err = error as Error & { response?: { data?: { message?: string } } };
+      message.error(err.response?.data?.message || err.message || 'Failed to create device');
     }
   };
 
@@ -263,12 +271,16 @@ export default function DevicesPage() {
       }
       editForm.setFieldsValue({
         deviceName: device.deviceName,
+        deviceId: device.deviceId,
+        macAddress: device.macAddress || '',
         tenantId: device.tenantId,
         gateId: device.gateId,
       });
     } else {
       editForm.setFieldsValue({
         deviceName: device.deviceName,
+        deviceId: device.deviceId,
+        macAddress: device.macAddress || '',
         gateId: device.gateId,
       });
     }
@@ -291,17 +303,23 @@ export default function DevicesPage() {
     }
   };
 
-  const handleUpdateDevice = async (values: { deviceName?: string; tenantId?: string; gateId?: string }) => {
+  const handleUpdateDevice = async (values: { deviceName?: string; deviceId?: string; macAddress?: string; tenantId?: string; gateId?: string }) => {
     if (!selectedDevice) return;
     try {
-      await api.patch(`/devices/${selectedDevice.id}`, values);
+      // Clean up macAddress - send undefined if empty
+      const payload = {
+        ...values,
+        macAddress: values.macAddress?.trim() || undefined,
+      };
+      await api.patch(`/devices/${selectedDevice.id}`, payload);
       message.success('Device updated');
       setEditModalVisible(false);
       setEditTenantId(null);
       setEditTenantGates([]);
       fetchDevices();
-    } catch (error) {
-      message.error('Failed to update device');
+    } catch (error: unknown) {
+      const err = error as Error & { response?: { data?: { message?: string } } };
+      message.error(err.response?.data?.message || err.message || 'Failed to update device');
     }
   };
 
@@ -633,6 +651,7 @@ export default function DevicesPage() {
             rowKey="id"
             size="small"
             pagination={false}
+            scroll={{ x: 500 }}
           />
         </Card>
       )}
@@ -663,9 +682,8 @@ export default function DevicesPage() {
                 type="primary"
                 icon={<PlusOutlined />}
                 onClick={() => {
-                  setGeneratedCode(null);
-                  form.resetFields();
-                  setSetupCodeModalVisible(true);
+                  addDeviceForm.resetFields();
+                  setAddDeviceModalVisible(true);
                 }}
               >
                 Add Device
@@ -756,6 +774,7 @@ export default function DevicesPage() {
           dataSource={devices}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 900 }}
           pagination={{
             current: pagination.page,
             pageSize: pagination.limit,
@@ -866,9 +885,28 @@ export default function DevicesPage() {
         width={500}
       >
         <Form form={editForm} layout="vertical" onFinish={handleUpdateDevice}>
-          <Form.Item name="deviceName" label="Device Name">
-            <Input />
+          <Form.Item
+            name="deviceId"
+            label="Device Serial Number"
+            rules={[{ required: true, message: 'Please enter the device serial number' }]}
+            tooltip="Found in the controller settings (e.g., 1Y3196)"
+          >
+            <Input placeholder="e.g., 1Y3196" />
           </Form.Item>
+
+          <Form.Item name="deviceName" label="Device Name">
+            <Input placeholder="e.g., Main Gate Controller" />
+          </Form.Item>
+
+          <Form.Item
+            name="macAddress"
+            label="MAC Address (Optional)"
+            tooltip="The controller's MAC address in format XX:XX:XX:XX:XX:XX"
+          >
+            <Input placeholder="e.g., 00:04:A3:80:F0:7E" />
+          </Form.Item>
+
+          <Divider orientation="left">Assignment</Divider>
 
           {isSuperAdmin && (
             <Form.Item
@@ -977,7 +1015,7 @@ export default function DevicesPage() {
         )}
       </Modal>
 
-      {/* Add Device Modal (Super Admin) */}
+      {/* Add Device Modal */}
       <Modal
         title="Add New Device"
         open={addDeviceModalVisible}
@@ -1025,35 +1063,41 @@ export default function DevicesPage() {
 
           <Divider orientation="left">Assignment</Divider>
 
-          <Form.Item
-            name="tenantId"
-            label="Building / Tenant"
-            rules={[{ required: true, message: 'Please select a building' }]}
-          >
-            <Select
-              placeholder="Select a building"
-              onChange={handleTenantChange}
-              showSearch
-              optionFilterProp="children"
+          {isSuperAdmin ? (
+            <Form.Item
+              name="tenantId"
+              label="Building / Tenant"
+              rules={[{ required: true, message: 'Please select a building' }]}
             >
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+              <Select
+                placeholder="Select a building"
+                onChange={handleTenantChange}
+                showSearch
+                optionFilterProp="children"
+              >
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            <Form.Item label="Building / Tenant">
+              <Input value={user?.tenant?.name || 'Your Building'} disabled />
+            </Form.Item>
+          )}
 
           <Form.Item
             name="gateId"
             label="Assign to Gate (Optional)"
           >
             <Select
-              placeholder={selectedTenantId ? 'Select a gate' : 'Select a building first'}
+              placeholder={isSuperAdmin && !selectedTenantId ? 'Select a building first' : 'Select a gate'}
               allowClear
-              disabled={!selectedTenantId}
+              disabled={isSuperAdmin && !selectedTenantId}
             >
-              {tenantGates.map((gate) => (
+              {(isSuperAdmin ? tenantGates : gates).map((gate) => (
                 <Select.Option key={gate.id} value={gate.id}>
                   {gate.name}
                 </Select.Option>

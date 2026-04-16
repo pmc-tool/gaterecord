@@ -95,6 +95,8 @@ export class AuthController {
       role: user.role,
       tenantId: user.tenantId,
       profileImageUrl: user.profileImageUrl,
+      qrCode: user.qrCode,
+      unit: user.unit,
       tenant: user.tenant
         ? {
             id: user.tenant.id,

@@ -14,6 +14,7 @@ import { Gate } from '@database/entities/gate.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { EmailService } from '../notification/email.service';
+import { NotificationService } from '../notification/notification.service';
 import { CloudPlusTcpService } from '../cloud-plus-typeB-tcp/cloud-plus-tcp.service';
 
 export interface CreateSecurityAlertDto {
@@ -57,6 +58,7 @@ export class SecurityAlertService {
     private readonly deviceRepository: Repository<DeviceConfig>,
     private readonly gatewayService: GatewayService,
     private readonly emailService: EmailService,
+    private readonly notificationService: NotificationService,
     @Inject(forwardRef(() => CloudPlusTcpService))
     private readonly tcpService: CloudPlusTcpService,
   ) {}
@@ -86,6 +88,23 @@ export class SecurityAlertService {
 
     // Broadcast to all connected clients in the tenant
     this.gatewayService.broadcastSecurityAlert(savedAlert);
+
+    // Create database notifications for Security, Building Admin, and Super Admins
+    this.notificationService.notifySecurityAlert(
+      dto.tenantId,
+      dto.title,
+      dto.description,
+      {
+        alertId: savedAlert.id,
+        gateId: dto.gateId,
+        gateName: dto.gateName,
+        visitorName: dto.visitorName,
+        priority: dto.priority,
+        link: `/security-alerts?id=${savedAlert.id}`,
+      },
+    ).catch((err) => {
+      this.logger.error('Failed to create security alert notifications:', err);
+    });
 
     // If buzzer should be triggered, send command to frontend and hardware
     this.logger.warn(

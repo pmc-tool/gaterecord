@@ -428,6 +428,7 @@ export default function ResidentsPage() {
           dataSource={residents}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 800 }}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,

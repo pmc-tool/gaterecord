@@ -2,6 +2,7 @@ import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Tenant } from './tenant.entity';
 import { Gate } from './gate.entity';
+import { User } from './user.entity';
 
 export enum AccessMethod {
   CAR_RFID = 'car_rfid',
@@ -27,6 +28,7 @@ export enum AccessSubjectType {
 @Entity('access_events')
 @Index(['tenantId', 'timestamp'])
 @Index(['gateId', 'timestamp'])
+@Index(['residentId', 'timestamp'])
 export class AccessEvent extends BaseEntity {
   @Column({ name: 'tenant_id' })
   tenantId: string;
@@ -59,6 +61,15 @@ export class AccessEvent extends BaseEntity {
 
   @Column({ name: 'subject_name', nullable: true })
   subjectName: string;
+
+  // Denormalized resident ID for fast RBAC filtering
+  // Populated from: Vehicle.ownerId, RfidCard.userId, VisitorPass.createdById, or User.id
+  @Column({ name: 'resident_id', nullable: true })
+  residentId: string;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'resident_id' })
+  resident: User;
 
   @Column({ type: 'enum', enum: AccessResult })
   result: AccessResult;

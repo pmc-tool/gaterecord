@@ -125,8 +125,8 @@ export class DevicesController {
   @Post()
   @ApiBearerAuth()
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Create a device directly (Super Admin only)' })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @ApiOperation({ summary: 'Create a device directly' })
   @ApiResponse({ status: 201, type: DeviceResponseDto })
   async createDevice(
     @Body() dto: CreateDeviceDto,

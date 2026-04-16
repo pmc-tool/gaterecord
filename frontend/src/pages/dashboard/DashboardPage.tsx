@@ -720,11 +720,11 @@ function SuperAdminDashboard() {
         <Table
           dataSource={subscriptionStats?.planBreakdown || []}
           rowKey="planId"
+          scroll={{ x: 800 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} plans`,
           }}
           size="middle"
@@ -1012,9 +1012,10 @@ function RegularDashboard() {
     },
     {
       title: 'GATE',
-      dataIndex: 'gateName',
       key: 'gateName',
-      render: (name: string) => <span className="font-medium">{name}</span>,
+      render: (_: unknown, record: AccessEvent) => (
+        <span className="font-medium">{record.gate?.name || record.gateName || '—'}</span>
+      ),
     },
     {
       title: 'METHOD',
@@ -1179,6 +1180,7 @@ function RegularDashboard() {
                 rowKey="id"
                 pagination={false}
                 size="small"
+                scroll={{ x: 400 }}
                 className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
               />
             </div>
@@ -1205,6 +1207,7 @@ function RegularDashboard() {
                 rowKey="id"
                 pagination={false}
                 size="small"
+                scroll={{ x: 500 }}
                 className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
               />
             </div>

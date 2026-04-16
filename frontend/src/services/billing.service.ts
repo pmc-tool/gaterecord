@@ -273,6 +273,14 @@ export const billingService = {
     const response = await api.post('/billing/plans/change', { newPlanId, billingCycle, immediate });
     return response.data;
   },
+
+  // ==================== Public APIs (no auth required) ====================
+
+  // Get public subscription plans for pricing page
+  async getPublicPlans(): Promise<import('../types').SubscriptionPlan[]> {
+    const response = await api.get('/auth/plans');
+    return response.data;
+  },
 };
 
 // ==================== Admin Billing APIs ====================

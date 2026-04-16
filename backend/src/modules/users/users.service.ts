@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { CreateUserDto, UpdateUserDto, UserQueryDto } from './dto/user.dto';
@@ -36,9 +37,17 @@ export class UsersService {
       throw new ConflictException('Email already exists');
     }
 
+    // Determine tenantId
+    let tenantId: string | undefined = createUserDto.tenantId;
+
     // Validate tenant permissions
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (createUserDto.tenantId !== currentUser.tenantId) {
+      // For non-super-admins, default to their own tenant if not specified
+      if (!tenantId && currentUser.tenantId) {
+        tenantId = currentUser.tenantId;
+      }
+      // Cannot create users for other tenants
+      if (tenantId !== currentUser.tenantId) {
         throw new ForbiddenException('Cannot create user for another tenant');
       }
       // Building admin can only create certain roles
@@ -50,14 +59,36 @@ export class UsersService {
       }
     }
 
-    // Store the plain password before hashing (for email)
-    const plainPassword = createUserDto.password;
+    // Check user limit based on subscription plan
+    if (tenantId) {
+      const tenant = await this.tenantRepository.findOne({
+        where: { id: tenantId },
+        relations: ['subscriptionPlan', 'users'],
+      });
+
+      if (tenant?.subscriptionPlan?.maxUsers) {
+        const userCount = tenant.users?.length || 0;
+        if (userCount >= tenant.subscriptionPlan.maxUsers) {
+          throw new ForbiddenException(
+            `User limit reached. Your plan allows ${tenant.subscriptionPlan.maxUsers} users. Please upgrade your plan to add more users.`,
+          );
+        }
+      }
+    }
+
+    // Generate temporary password if not provided
+    const plainPassword = createUserDto.password || this.generateTemporaryPassword();
     const passwordHash = await bcrypt.hash(plainPassword, 10);
+
+    // Generate unique QR code
+    const qrCode = `GR-${uuidv4()}`;
 
     const user = this.userRepository.create({
       ...createUserDto,
+      tenantId, // Use the resolved tenantId
       email: createUserDto.email.toLowerCase(),
       passwordHash,
+      qrCode,
       status: createUserDto.status || UserStatus.ACTIVE,
       mustChangePassword: true, // Force password change on first login
     });
@@ -103,6 +134,36 @@ export class UsersService {
     );
 
     this.logger.log(`Welcome email sent to ${newUser.email}`);
+  }
+
+  /**
+   * Generate a secure temporary password
+   */
+  private generateTemporaryPassword(): string {
+    const length = 12;
+    const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lowercase = 'abcdefghjkmnpqrstuvwxyz';
+    const numbers = '23456789';
+    const special = '!@#$%&*';
+    const allChars = uppercase + lowercase + numbers + special;
+
+    // Ensure at least one of each type
+    let password = '';
+    password += uppercase[Math.floor(Math.random() * uppercase.length)];
+    password += lowercase[Math.floor(Math.random() * lowercase.length)];
+    password += numbers[Math.floor(Math.random() * numbers.length)];
+    password += special[Math.floor(Math.random() * special.length)];
+
+    // Fill remaining characters
+    for (let i = password.length; i < length; i++) {
+      password += allChars[Math.floor(Math.random() * allChars.length)];
+    }
+
+    // Shuffle the password
+    return password
+      .split('')
+      .sort(() => Math.random() - 0.5)
+      .join('');
   }
 
   async findAll(query: UserQueryDto, currentUser: User): Promise<User[]> {

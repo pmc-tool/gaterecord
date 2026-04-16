@@ -11,7 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { SetupCode, SetupCodeStatus } from '@database/entities/setup-code.entity';
 import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
-import { Gate } from '@database/entities/gate.entity';
+import { Gate, GateState } from '@database/entities/gate.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import {
   CreateSetupCodeDto,
@@ -338,9 +338,23 @@ export class DevicesService {
   // ==================== Device Management ====================
 
   async createDevice(dto: CreateDeviceDto, user: User): Promise<DeviceResponseDto> {
-    // Only Super Admin can create devices directly
-    if (user.role !== UserRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only Super Admin can create devices directly');
+    // Determine tenantId based on user role
+    let tenantId: string;
+    
+    if (user.role === UserRole.SUPER_ADMIN) {
+      // Super Admin must provide tenantId
+      if (!dto.tenantId) {
+        throw new BadRequestException('tenantId is required for Super Admin');
+      }
+      tenantId = dto.tenantId;
+    } else if (user.role === UserRole.BUILDING_ADMIN) {
+      // Building Admin uses their own tenantId
+      if (!user.tenantId) {
+        throw new ForbiddenException('User must belong to a tenant');
+      }
+      tenantId = user.tenantId;
+    } else {
+      throw new ForbiddenException('Only Super Admin or Building Admin can create devices');
     }
 
     // Normalize device ID (remove colons if present)
@@ -358,7 +372,7 @@ export class DevicesService {
     // Validate gate belongs to tenant if provided
     if (dto.gateId) {
       const gate = await this.gateRepo.findOne({
-        where: { id: dto.gateId, tenantId: dto.tenantId },
+        where: { id: dto.gateId, tenantId: tenantId },
       });
       if (!gate) {
         throw new NotFoundException('Gate not found in the specified tenant');
@@ -369,7 +383,8 @@ export class DevicesService {
     const device = await this.deviceConfigRepo.save({
       deviceName: dto.deviceName,
       deviceId: normalizedDeviceId,
-      tenantId: dto.tenantId,
+      macAddress: dto.macAddress || null,
+      tenantId: tenantId,
       gateId: dto.gateId || null,
       status: DeviceStatus.OFFLINE,
     });
@@ -507,6 +522,26 @@ export class DevicesService {
     if (dto.deviceName) {
       device.deviceName = dto.deviceName;
     }
+    if (dto.deviceId) {
+      // Check if new deviceId is already in use by another device
+      const existingDevice = await this.deviceConfigRepo.findOne({
+        where: { deviceId: this.normalizeDeviceId(dto.deviceId) },
+      });
+      if (existingDevice && existingDevice.id !== device.id) {
+        throw new BadRequestException('Device with this serial number already exists');
+      }
+      device.deviceId = this.normalizeDeviceId(dto.deviceId);
+      
+      // Update gate hardware ID if device is assigned to a gate
+      if (device.gateId) {
+        await this.gateRepo.update(device.gateId, {
+          hardwareId: device.deviceId,
+        });
+      }
+    }
+    if (dto.macAddress !== undefined) {
+      device.macAddress = dto.macAddress || null;
+    }
     if (dto.gateId !== undefined) {
       device.gateId = dto.gateId;
     }
@@ -542,6 +577,7 @@ export class DevicesService {
       id: device.id,
       deviceName: device.deviceName,
       deviceId: device.deviceId,
+      macAddress: device.macAddress || undefined,
       tenantId: device.tenantId,
       gateId: device.gateId || undefined,
       gateName: device.gate?.name,
@@ -689,10 +725,13 @@ export class DevicesService {
       deviceIds.push(device.deviceId);
       this.logger.log(`Device ${device.deviceId} marked offline`);
 
-      // Also mark associated gate as offline
+      // Also mark associated gate as offline and reset state to CLOSED (secure default)
       if (device.gateId) {
-        await this.gateRepo.update(device.gateId, { isOnline: false });
-        this.logger.log(`Gate ${device.gateId} marked offline (device disconnected)`);
+        await this.gateRepo.update(device.gateId, { 
+          isOnline: false,
+          state: GateState.CLOSED,  // Reset to secure default when offline
+        });
+        this.logger.log(`Gate ${device.gateId} marked offline and state reset to CLOSED`);
       }
 
       // Also find gate by hardwareId (in case gateId is not set on device)
@@ -701,8 +740,11 @@ export class DevicesService {
         where: { hardwareId: normalizedDeviceId },
       });
       if (gateByHardwareId && gateByHardwareId.id !== device.gateId) {
-        await this.gateRepo.update(gateByHardwareId.id, { isOnline: false });
-        this.logger.log(`Gate ${gateByHardwareId.id} marked offline by hardwareId`);
+        await this.gateRepo.update(gateByHardwareId.id, { 
+          isOnline: false,
+          state: GateState.CLOSED,  // Reset to secure default when offline
+        });
+        this.logger.log(`Gate ${gateByHardwareId.id} marked offline by hardwareId and state reset to CLOSED`);
       }
 
       // Emit device offline event

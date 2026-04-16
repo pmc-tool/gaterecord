@@ -30,9 +30,10 @@ export class CreateVehicleDto {
   @IsUUID()
   ownerId: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
   @IsUUID()
-  tenantId: string;
+  @IsOptional()
+  tenantId?: string;
 
   @ApiPropertyOptional()
   @IsBoolean()

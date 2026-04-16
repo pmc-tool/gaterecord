@@ -269,6 +269,7 @@ export default function FirmwareManagementPage() {
           dataSource={firmwareList}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 800 }}
           pagination={{ pageSize: 10 }}
         />
       </Card>

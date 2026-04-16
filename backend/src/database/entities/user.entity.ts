@@ -21,10 +21,8 @@ export enum UserStatus {
 }
 
 export interface NotificationSettings {
-  pushNotifications: boolean;
-  emailAlerts: boolean;
-  securityAlerts: boolean;
-  visitorNotifications: boolean;
+  emailNotifications: boolean;    // Receive email notifications
+  inAppNotifications: boolean;    // Receive in-app (bell) notifications
 }
 
 @Entity('users')
@@ -64,6 +62,9 @@ export class User extends BaseEntity {
 
   @Column({ name: 'profile_image_url', nullable: true })
   profileImageUrl: string;
+
+  @Column({ name: 'qr_code', unique: true, nullable: true })
+  qrCode: string;
 
   @Column({ name: 'last_login_at', nullable: true })
   lastLoginAt: Date;

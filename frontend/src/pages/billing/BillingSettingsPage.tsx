@@ -538,6 +538,7 @@ export default function BillingSettingsPage() {
           columns={paymentColumns}
           dataSource={payments}
           rowKey="id"
+          scroll={{ x: 700 }}
           pagination={{
             current: paymentsPage,
             total: paymentsTotal,
@@ -566,6 +567,7 @@ export default function BillingSettingsPage() {
             dataSource={refunds}
             rowKey="refundId"
             pagination={false}
+            scroll={{ x: 600 }}
           />
         </Card>
       )}

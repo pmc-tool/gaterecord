@@ -129,22 +129,32 @@ export default function UsersPage() {
 
   const handleSubmit = async (values: Partial<User> & { password?: string }) => {
     try {
+      // Clean up empty password - don't send if empty (backend will generate temporary)
+      const payload = { ...values };
+      if (!payload.password || payload.password.trim() === '') {
+        delete payload.password;
+      }
+
+      // For building admins, add their tenantId
+      if (!isSuperAdmin && currentUser?.tenantId) {
+        payload.tenantId = currentUser.tenantId;
+      }
+
       if (editingUser) {
-        const updateData = { ...values };
-        if (!updateData.password) {
-          delete updateData.password;
-        }
-        await api.patch(`/users/${editingUser.id}`, updateData);
+        await api.patch(`/users/${editingUser.id}`, payload);
         message.success('User updated successfully');
       } else {
-        await api.post('/users', values);
-        message.success('User created successfully');
+        await api.post('/users', payload);
+        message.success(payload.password 
+          ? 'User created successfully. Welcome email sent.' 
+          : 'User created successfully. Temporary password sent via email.');
       }
       setModalVisible(false);
       fetchUsers();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      message.error(err.response?.data?.message || 'Failed to save user');
+      const err = error as Error & { response?: { data?: { message?: string | string[] } } };
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to save user';
+      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : String(errorMsg));
     }
   };
 
@@ -319,11 +329,11 @@ export default function UsersPage() {
           dataSource={users}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 800 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} users`,
           }}
         />
@@ -368,10 +378,13 @@ export default function UsersPage() {
 
           <Form.Item
             name="password"
-            label={editingUser ? 'New Password (leave blank to keep current)' : 'Password'}
-            rules={editingUser ? [] : [{ required: true, message: 'Please enter password' }]}
+            label={editingUser ? 'New Password (leave blank to keep current)' : 'Password (optional)'}
+            rules={[
+              { min: 8, message: 'Password must be at least 8 characters' },
+            ]}
+            extra={!editingUser ? 'Leave empty to auto-generate and email a temporary password to user' : undefined}
           >
-            <Input.Password placeholder="Password" />
+            <Input.Password placeholder={editingUser ? 'Leave blank to keep current' : 'Enter password or leave empty for auto-generated'} />
           </Form.Item>
 
           <Form.Item
@@ -388,15 +401,21 @@ export default function UsersPage() {
             </Select>
           </Form.Item>
 
-          <Form.Item name="tenantId" label="Building (optional for Super Admin)">
-            <Select placeholder="Select building" allowClear>
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {isSuperAdmin ? (
+            <Form.Item name="tenantId" label="Building (optional for Super Admin)">
+              <Select placeholder="Select building" allowClear>
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            <Form.Item label="Building">
+              <Input value={currentUser?.tenant?.name || 'Your Building'} disabled />
+            </Form.Item>
+          )}
 
           <Form.Item name="status" label="Status" initialValue="active">
             <Select>

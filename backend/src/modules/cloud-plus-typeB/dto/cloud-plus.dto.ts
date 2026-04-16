@@ -152,7 +152,8 @@ export interface ValidationResult {
   name: string;
   info: string;
   denialReason?: string;
-  subjectType: 'vehicle' | 'rfid_card' | 'visitor_pass' | 'unknown';
+  subjectType: 'vehicle' | 'rfid_card' | 'visitor_pass' | 'user' | 'unknown';
   subjectId?: string;
   subjectIdentifier: string;
+  residentId?: string; // Owner/user ID for RBAC filtering
 }

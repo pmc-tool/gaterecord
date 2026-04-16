@@ -70,17 +70,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   checkAuth: async () => {
     const tokens = authService.getTokens();
     if (!tokens) {
-      set({ isAuthenticated: false, user: null, tokens: null });
+      set({ isAuthenticated: false, user: null, tokens: null, isLoading: false });
       return;
     }
 
+    set({ isLoading: true });
     try {
       const user = await authService.getCurrentUser();
       authService.saveUser(user);
-      set({ user, isAuthenticated: true });
+      set({ user, isAuthenticated: true, isLoading: false });
     } catch {
       authService.clearAuth();
-      set({ isAuthenticated: false, user: null, tokens: null });
+      set({ isAuthenticated: false, user: null, tokens: null, isLoading: false });
     }
   },
 

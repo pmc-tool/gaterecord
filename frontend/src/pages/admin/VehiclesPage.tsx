@@ -214,8 +214,9 @@ export default function VehiclesPage() {
       setSelectedTenantId(null);
       fetchVehicles();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      message.error(err.response?.data?.message || 'Failed to save vehicle');
+      const err = error as Error & { response?: { data?: { message?: string | string[] } } };
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to save vehicle';
+      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : String(errorMsg));
     }
   };
 
@@ -423,6 +424,7 @@ export default function VehiclesPage() {
           dataSource={vehicles}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 800 }}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,

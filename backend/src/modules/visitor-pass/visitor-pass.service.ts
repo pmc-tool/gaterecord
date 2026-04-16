@@ -191,9 +191,12 @@ export class VisitorPassService {
       queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: query.tenantId });
     }
 
-    // Residents only see their own passes
+    // Residents only see their own passes (created by them OR where they are the host)
     if (currentUser.role === 'resident') {
-      queryBuilder.andWhere('pass.createdById = :userId', { userId: currentUser.id });
+      queryBuilder.andWhere(
+        '(pass.createdById = :userId OR pass.residentId = :userId)',
+        { userId: currentUser.id },
+      );
     }
 
     // Apply filters
@@ -227,8 +230,12 @@ export class VisitorPassService {
       throw new NotFoundException(`Visitor pass with ID ${id} not found`);
     }
 
-    // Check access: user must be creator, or admin of same tenant
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Check access: user must be creator, host resident, or admin of same tenant
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
@@ -308,8 +315,12 @@ export class VisitorPassService {
   ): Promise<VisitorPass> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator can update (or admin)
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Only creator or host resident can update (or admin)
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You can only update your own visitor passes');
     }
 
@@ -342,8 +353,12 @@ export class VisitorPassService {
   async remove(id: string, currentUser: User): Promise<void> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator can delete (or admin)
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Only creator or host resident can delete (or admin)
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You can only delete your own visitor passes');
     }
 
@@ -379,7 +394,10 @@ export class VisitorPassService {
     }
 
     if (currentUser.role === 'resident') {
-      queryBuilder.andWhere('pass.createdById = :userId', { userId: currentUser.id });
+      queryBuilder.andWhere(
+        '(pass.createdById = :userId OR pass.residentId = :userId)',
+        { userId: currentUser.id },
+      );
     }
 
     const passes = await queryBuilder.getMany();

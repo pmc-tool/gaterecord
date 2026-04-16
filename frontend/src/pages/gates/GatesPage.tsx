@@ -216,9 +216,10 @@ export default function GatesPage() {
       fetchDevices(); // Refresh devices to get updated linkage
       fetchGates();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      const errorMsg = err.response?.data?.message || 'Failed to save gate';
-      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : errorMsg);
+      // API interceptor converts errors to plain Error with message
+      const err = error as Error & { response?: { data?: { message?: string | string[] } } };
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to save gate';
+      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : String(errorMsg));
     }
   };
 
@@ -427,11 +428,11 @@ export default function GatesPage() {
           dataSource={gates}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 700 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} gates`,
           }}
         />

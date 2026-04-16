@@ -19,7 +19,10 @@ export class DeviceConfig extends BaseEntity {
   deviceName: string;
 
   @Column({ name: 'device_id', type: 'varchar', unique: true })
-  deviceId: string; // MAC address
+  deviceId: string; // Serial number from controller
+
+  @Column({ name: 'mac_address', type: 'varchar', nullable: true })
+  macAddress: string | null; // MAC address in XX:XX:XX:XX:XX:XX format
 
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId: string;

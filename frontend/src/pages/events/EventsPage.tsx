@@ -10,6 +10,7 @@ import {
   Row,
   Col,
   Statistic,
+  Tooltip,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -56,6 +57,7 @@ export default function EventsPage() {
   const [loading, setLoading] = useState(false);
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
   const [gates, setGates] = useState<{ id: string; name: string }[]>([]);
+  const [retentionDays, setRetentionDays] = useState<number>(30);
   const [filters, setFilters] = useState({
     tenantId: undefined as string | undefined,
     gateId: undefined as string | undefined,
@@ -79,6 +81,15 @@ export default function EventsPage() {
       setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants');
+    }
+  };
+
+  const fetchRetentionDays = async () => {
+    try {
+      const response = await api.get('/events/retention-days');
+      setRetentionDays(response.data.days);
+    } catch (error) {
+      console.error('Failed to fetch retention days');
     }
   };
 
@@ -113,16 +124,15 @@ export default function EventsPage() {
       params.append('limit', String(pagination.limit));
 
       const response = await api.get(`/events?${params.toString()}`);
-      const { events: eventList, total } = response.data;
+      const { events: eventList, total, allowedCount, deniedCount } = response.data;
       setEvents(eventList || []);
       setPagination(prev => ({ ...prev, total }));
 
-      // Calculate stats from current page data
-      const data = eventList || [];
+      // Use all-time stats from API response
       setStats({
         total: total,
-        allowed: data.filter((e: AccessEvent) => e.result === 'allowed').length,
-        denied: data.filter((e: AccessEvent) => e.result === 'denied').length,
+        allowed: allowedCount || 0,
+        denied: deniedCount || 0,
       });
     } catch (error) {
       console.error('Failed to fetch events:', error);
@@ -131,10 +141,16 @@ export default function EventsPage() {
     }
   };
 
+  // Initialize tenants and retention days on mount
+  useEffect(() => {
+    fetchTenants();
+    fetchRetentionDays();
+  }, []);
+
+  // Fetch events when pagination changes (including initial load)
   useEffect(() => {
     fetchEvents();
-    fetchTenants();
-  }, []);
+  }, [pagination.page, pagination.limit]);
 
   const handleExport = async () => {
     try {
@@ -269,9 +285,16 @@ export default function EventsPage() {
             <Button icon={<ReloadOutlined />} onClick={fetchEvents}>
               Refresh
             </Button>
-            <Button icon={<DownloadOutlined />} onClick={handleExport}>
-              Export CSV
-            </Button>
+            <Tooltip 
+              title={isSuperAdmin 
+                ? 'Export all events (Super Admin)' 
+                : `Export last ${retentionDays} days of events`
+              }
+            >
+              <Button icon={<DownloadOutlined />} onClick={handleExport}>
+                Export CSV
+              </Button>
+            </Tooltip>
           </Space>
         }
       >
@@ -385,17 +408,16 @@ export default function EventsPage() {
           dataSource={events}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 800 }}
           pagination={{
             current: pagination.page,
             pageSize: pagination.limit,
             total: pagination.total,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} events`,
             onChange: (page, pageSize) => {
-              setPagination({ ...pagination, page, limit: pageSize });
-              fetchEvents();
+              setPagination((prev) => ({ ...prev, page, limit: pageSize }));
             },
           }}
         />

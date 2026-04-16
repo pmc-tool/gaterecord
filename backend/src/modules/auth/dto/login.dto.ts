@@ -40,6 +40,7 @@ export class LoginResponseDto {
     role: string;
     tenantId: string | null;
     profileImageUrl?: string;
+    qrCode?: string;
     tenant: {
       id: string;
       name: string;

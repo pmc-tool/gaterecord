@@ -96,6 +96,7 @@ export class AuthService {
         role: user.role,
         tenantId: user.tenantId,
         profileImageUrl: user.profileImageUrl,
+        qrCode: user.qrCode,
         tenant: user.tenant
           ? {
               id: user.tenant.id,
@@ -141,6 +142,7 @@ export class AuthService {
         role: tokenEntity.user.role,
         tenantId: tokenEntity.user.tenantId,
         profileImageUrl: tokenEntity.user.profileImageUrl,
+        qrCode: tokenEntity.user.qrCode,
         tenant: tokenEntity.user.tenant
           ? {
               id: tokenEntity.user.tenant.id,
@@ -259,6 +261,7 @@ export class AuthService {
             role: existingUser.role,
             tenantId: existingUser.tenantId,
             profileImageUrl: existingUser.profileImageUrl,
+            qrCode: existingUser.qrCode,
             tenant: existingUser.tenant
               ? {
                   id: existingUser.tenant.id,
@@ -349,6 +352,7 @@ export class AuthService {
 
     // Create user as building admin
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
+    const qrCode = `GR-${uuidv4()}`;
 
     const user = this.userRepository.create({
       email: signupDto.email.toLowerCase(),
@@ -359,6 +363,7 @@ export class AuthService {
       role: UserRole.BUILDING_ADMIN,
       status: UserStatus.ACTIVE,
       tenantId: savedTenant.id,
+      qrCode,
     });
 
     const savedUser = await this.userRepository.save(user);
@@ -392,6 +397,7 @@ export class AuthService {
         role: savedUser.role,
         tenantId: savedUser.tenantId,
         profileImageUrl: savedUser.profileImageUrl,
+        qrCode: savedUser.qrCode,
         tenant: {
           id: savedTenant.id,
           name: savedTenant.name,
@@ -445,6 +451,7 @@ export class AuthService {
         role: user.role,
         tenantId: user.tenantId,
         profileImageUrl: user.profileImageUrl,
+        qrCode: user.qrCode,
         tenant: user.tenant
           ? {
               id: user.tenant.id,

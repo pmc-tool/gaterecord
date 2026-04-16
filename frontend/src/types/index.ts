@@ -29,6 +29,7 @@ export interface User {
   };
   unit?: string;
   profileImageUrl?: string;
+  qrCode?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,16 +58,34 @@ export interface Tenant {
 export interface SubscriptionPlan {
   id: string;
   name: string;
+  description?: string;
+  monthlyPrice: number;
+  yearlyPrice: number;
+  discountPercent?: number;
+  discountLabel?: string;
+  discountValidUntil?: string;
+  trialDays?: number;
   maxGates: number;
   maxUsers: number;
+  maxVehicles?: number;
+  maxVisitorPassesPerMonth?: number;
   logRetentionDays: number;
   features: {
     simulator_access?: boolean;
     csv_export?: boolean;
     api_access?: boolean;
     custom_branding?: boolean;
+    priority_support?: boolean;
+    advanced_analytics?: boolean;
+    multi_building?: boolean;
+    webhook_notifications?: boolean;
   };
+  displayOrder?: number;
+  badge?: string;
+  badgeColor?: string;
+  isFeatured?: boolean;
   isActive: boolean;
+  isPublic?: boolean;
 }
 
 // Gate types
@@ -168,6 +187,7 @@ export interface AccessEvent {
   id: string;
   gateId: string;
   gateName?: string;
+  gate?: { id: string; name: string };
   timestamp: string;
   method: AccessMethod;
   subjectType: string;
@@ -217,4 +237,42 @@ export interface AuthState {
   tokens: AuthTokens | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+}
+
+// Notification types
+export enum NotificationType {
+  SECURITY_ALERT = 'security_alert',
+  VISITOR_ENTRY = 'visitor_entry',
+  ACCESS_DENIED = 'access_denied',
+  SYSTEM_ALERT = 'system_alert',
+  GATE_OFFLINE = 'gate_offline',
+  MAINTENANCE = 'maintenance',
+  SUBSCRIPTION = 'subscription',
+}
+
+export enum NotificationPriority {
+  LOW = 'low',
+  MEDIUM = 'medium',
+  HIGH = 'high',
+  URGENT = 'urgent',
+}
+
+export interface Notification {
+  id: string;
+  userId: string;
+  tenantId?: string;
+  type: NotificationType;
+  priority: NotificationPriority;
+  title: string;
+  message: string;
+  isRead: boolean;
+  emailSent: boolean;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  readAt?: string;
+}
+
+export interface NotificationCounts {
+  total: number;
+  unread: number;
 }

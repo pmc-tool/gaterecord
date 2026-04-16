@@ -954,6 +954,7 @@ export class CloudPlusTcpService {
       subjectType: AccessSubjectType.USER,
       subjectId: operator.id,
       subjectName: `${operator.firstName} ${operator.lastName}`,
+      residentId: operator.id,
       result: AccessResult.ALLOWED,
       metadata: {
         source: 'tcp-manual',

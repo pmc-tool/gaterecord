@@ -584,7 +584,7 @@ export default function SignupPage() {
                   Create your admin account to manage your building.
                 </Paragraph>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Form.Item
                     name="firstName"
                     label="First Name"

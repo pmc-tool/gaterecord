@@ -67,10 +67,8 @@ export class SettingsService {
     // Return default settings if none exist
     return (
       user.notificationSettings || {
-        pushNotifications: true,
-        emailAlerts: true,
-        securityAlerts: true,
-        visitorNotifications: true,
+        emailNotifications: true,
+        inAppNotifications: true,
       }
     );
   }
@@ -85,17 +83,13 @@ export class SettingsService {
     }
 
     const currentSettings = user.notificationSettings || {
-      pushNotifications: true,
-      emailAlerts: true,
-      securityAlerts: true,
-      visitorNotifications: true,
+      emailNotifications: true,
+      inAppNotifications: true,
     };
 
     const updatedSettings: NotificationSettings = {
-      pushNotifications: dto.pushNotifications ?? currentSettings.pushNotifications,
-      emailAlerts: dto.emailAlerts ?? currentSettings.emailAlerts,
-      securityAlerts: dto.securityAlerts ?? currentSettings.securityAlerts,
-      visitorNotifications: dto.visitorNotifications ?? currentSettings.visitorNotifications,
+      emailNotifications: dto.emailNotifications ?? currentSettings.emailNotifications,
+      inAppNotifications: dto.inAppNotifications ?? currentSettings.inAppNotifications,
     };
 
     await this.userRepository.update(userId, { notificationSettings: updatedSettings });
