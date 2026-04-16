@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsUUID, IsEnum, Matches } from 'class-validator';
+import { IsString, IsOptional, IsUUID, IsEnum, Matches, IsNumber, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeviceStatus } from '@database/entities/device-config.entity';
+import { Transform } from 'class-transformer';
 
 export class CreateDeviceDto {
   @ApiProperty({ example: 'Main Gate Controller' })
@@ -13,15 +14,17 @@ export class CreateDeviceDto {
 
   @ApiPropertyOptional({ example: '00:04:A3:80:F0:7E', description: 'MAC address' })
   @IsOptional()
-  @IsString()
+  @ValidateIf((o) => o.macAddress && o.macAddress.trim() !== '')
   @Matches(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, {
-    message: 'MAC address must be in format XX:XX:XX:XX:XX:XX',
+    message: 'MAC address must be in format XX:XX:XX:XX:XX:XX (e.g., 00:04:A3:80:F0:7E)',
   })
+  @Transform(({ value }) => (value && typeof value === 'string' && value.trim()) ? value.trim() : undefined)
   macAddress?: string;
 
-  @ApiProperty({ description: 'Tenant/Building ID' })
+  @ApiPropertyOptional({ description: 'Tenant/Building ID (required for Super Admin, ignored for Building Admin)' })
+  @IsOptional()
   @IsUUID()
-  tenantId: string;
+  tenantId?: string;
 
   @ApiPropertyOptional({ description: 'Gate ID to assign' })
   @IsOptional()
@@ -38,6 +41,9 @@ export class DeviceResponseDto {
 
   @ApiProperty()
   deviceId: string;
+
+  @ApiPropertyOptional()
+  macAddress?: string;
 
   @ApiProperty()
   tenantId: string;
@@ -81,6 +87,20 @@ export class UpdateDeviceDto {
   @IsOptional()
   @IsString()
   deviceName?: string;
+
+  @ApiPropertyOptional({ example: '1Y3196', description: 'Device serial number from controller' })
+  @IsOptional()
+  @IsString()
+  deviceId?: string;
+
+  @ApiPropertyOptional({ example: '00:04:A3:80:F0:7E', description: 'MAC address' })
+  @IsOptional()
+  @ValidateIf((o) => o.macAddress && o.macAddress.trim() !== '')
+  @Matches(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, {
+    message: 'MAC address must be in format XX:XX:XX:XX:XX:XX (e.g., 00:04:A3:80:F0:7E)',
+  })
+  @Transform(({ value }) => (value && typeof value === 'string' && value.trim()) ? value.trim() : undefined)
+  macAddress?: string;
 
   @ApiPropertyOptional({ description: 'Tenant ID (Super Admin only)' })
   @IsOptional()
@@ -172,4 +192,38 @@ export class DeviceDiagnosticsDto {
 
   @ApiPropertyOptional()
   lastRebootReason?: string;
+}
+
+export class DeviceQueryDto {
+  @ApiPropertyOptional({ description: 'Search by device name' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by tenant ID' })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by gate ID' })
+  @IsOptional()
+  @IsUUID()
+  gateId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status', enum: DeviceStatus })
+  @IsOptional()
+  @IsEnum(DeviceStatus)
+  status?: DeviceStatus;
+
+  @ApiPropertyOptional({ description: 'Page number', default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Items per page', default: 10 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  limit?: number;
 }

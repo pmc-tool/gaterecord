@@ -1,5 +1,6 @@
-import { IsEnum, IsOptional, IsDateString, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsDateString, IsUUID, IsInt, Min, Max } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   AccessMethod,
   AccessResult,
@@ -7,6 +8,11 @@ import {
 } from '@database/entities/access-event.entity';
 
 export class AccessEventQueryDto {
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
   @ApiPropertyOptional()
   @IsUUID()
   @IsOptional()
@@ -16,6 +22,11 @@ export class AccessEventQueryDto {
   @IsEnum(AccessMethod)
   @IsOptional()
   method?: AccessMethod;
+
+  @ApiPropertyOptional({ enum: AccessSubjectType })
+  @IsEnum(AccessSubjectType)
+  @IsOptional()
+  subjectType?: AccessSubjectType;
 
   @ApiPropertyOptional({ enum: AccessResult })
   @IsEnum(AccessResult)
@@ -32,10 +43,19 @@ export class AccessEventQueryDto {
   @IsOptional()
   endDate?: string;
 
-  @ApiPropertyOptional({ default: 1 })
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
   page?: number;
 
-  @ApiPropertyOptional({ default: 20 })
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  @IsOptional()
   limit?: number;
 }
 

@@ -13,9 +13,19 @@ import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { User, UserStatus, UserRole } from '@database/entities/user.entity';
 import { RefreshToken } from '@database/entities/refresh-token.entity';
-import { Tenant, TenantStatus } from '@database/entities/tenant.entity';
+import { PasswordResetToken } from '@database/entities/password-reset-token.entity';
+import { Tenant, TenantStatus, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
+import { LoginHistory, LoginStatus } from '@database/entities/login-history.entity';
 import { LoginDto, LoginResponseDto, SignupDto } from './dto/login.dto';
+import {
+  ForgotPasswordDto,
+  ForgotPasswordResponseDto,
+  VerifyOtpDto,
+  VerifyOtpResponseDto,
+  ResetPasswordDto,
+  ResetPasswordResponseDto,
+} from './dto/password-reset.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { EmailService } from '../notification/email.service';
 
@@ -32,6 +42,10 @@ export class AuthService {
     private tenantRepository: Repository<Tenant>,
     @InjectRepository(SubscriptionPlan)
     private subscriptionPlanRepository: Repository<SubscriptionPlan>,
+    @InjectRepository(LoginHistory)
+    private loginHistoryRepository: Repository<LoginHistory>,
+    @InjectRepository(PasswordResetToken)
+    private passwordResetTokenRepository: Repository<PasswordResetToken>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
@@ -48,20 +62,27 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('No account found with this email address');
     }
 
     const isPasswordValid = await bcrypt.compare(loginDto.password, user.passwordHash);
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+      // Record failed login attempt
+      await this.recordLoginActivity(user.id, LoginStatus.FAILED, ipAddress, userAgent, 'Invalid password');
+      throw new UnauthorizedException('Incorrect password');
     }
 
     if (user.status !== UserStatus.ACTIVE) {
+      // Record failed login attempt
+      await this.recordLoginActivity(user.id, LoginStatus.FAILED, ipAddress, userAgent, 'Account not active');
       throw new UnauthorizedException('Account is not active');
     }
 
     // Update last login
     await this.userRepository.update(user.id, { lastLoginAt: new Date() });
+
+    // Record successful login
+    await this.recordLoginActivity(user.id, LoginStatus.SUCCESS, ipAddress, userAgent);
 
     const tokens = await this.generateTokens(user, userAgent, ipAddress);
 
@@ -74,6 +95,8 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role,
         tenantId: user.tenantId,
+        profileImageUrl: user.profileImageUrl,
+        qrCode: user.qrCode,
         tenant: user.tenant
           ? {
               id: user.tenant.id,
@@ -118,6 +141,8 @@ export class AuthService {
         lastName: tokenEntity.user.lastName,
         role: tokenEntity.user.role,
         tenantId: tokenEntity.user.tenantId,
+        profileImageUrl: tokenEntity.user.profileImageUrl,
+        qrCode: tokenEntity.user.qrCode,
         tenant: tokenEntity.user.tenant
           ? {
               id: tokenEntity.user.tenant.id,
@@ -235,6 +260,8 @@ export class AuthService {
             lastName: existingUser.lastName,
             role: existingUser.role,
             tenantId: existingUser.tenantId,
+            profileImageUrl: existingUser.profileImageUrl,
+            qrCode: existingUser.qrCode,
             tenant: existingUser.tenant
               ? {
                   id: existingUser.tenant.id,
@@ -297,6 +324,8 @@ export class AuthService {
       tenantStatus = TenantStatus.PENDING_PAYMENT;
     }
 
+    const now = new Date();
+
     // Create tenant (building)
     const tenant = this.tenantRepository.create({
       name: signupDto.buildingName,
@@ -306,10 +335,13 @@ export class AuthService {
       address: signupDto.buildingAddress,
       status: tenantStatus,
       subscriptionPlanId: selectedPlan.id,
+      subscriptionStartedAt: now,
       subscriptionExpiresAt: trialExpiresAt,
+      currentPeriodEnd: trialExpiresAt,
+      subscriptionStatus: SubscriptionStatus.TRIALING,
       settings: {
         paymentInfo: signupDto.paymentInfo,
-        signupDate: new Date().toISOString(),
+        signupDate: now.toISOString(),
         startedAsTrial: signupDto.startTrial || false,
         trialDays: trialDays,
         requiresPayment: signupDto.requiresPayment || false,
@@ -320,6 +352,7 @@ export class AuthService {
 
     // Create user as building admin
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
+    const qrCode = `GR-${uuidv4()}`;
 
     const user = this.userRepository.create({
       email: signupDto.email.toLowerCase(),
@@ -330,6 +363,7 @@ export class AuthService {
       role: UserRole.BUILDING_ADMIN,
       status: UserStatus.ACTIVE,
       tenantId: savedTenant.id,
+      qrCode,
     });
 
     const savedUser = await this.userRepository.save(user);
@@ -362,6 +396,8 @@ export class AuthService {
         lastName: savedUser.lastName,
         role: savedUser.role,
         tenantId: savedUser.tenantId,
+        profileImageUrl: savedUser.profileImageUrl,
+        qrCode: savedUser.qrCode,
         tenant: {
           id: savedTenant.id,
           name: savedTenant.name,
@@ -374,7 +410,7 @@ export class AuthService {
   async getSubscriptionPlans(): Promise<SubscriptionPlan[]> {
     return this.subscriptionPlanRepository.find({
       where: { isActive: true },
-      order: { maxGates: 'ASC' },
+      order: { displayOrder: 'ASC' },
     });
   }
 
@@ -414,6 +450,8 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role,
         tenantId: user.tenantId,
+        profileImageUrl: user.profileImageUrl,
+        qrCode: user.qrCode,
         tenant: user.tenant
           ? {
               id: user.tenant.id,
@@ -422,6 +460,212 @@ export class AuthService {
             }
           : null,
       },
+    };
+  }
+
+  // ==================== Login Activity Tracking ====================
+
+  private async recordLoginActivity(
+    userId: string,
+    status: LoginStatus,
+    ipAddress?: string,
+    userAgent?: string,
+    failureReason?: string,
+  ): Promise<void> {
+    try {
+      const { browser, os, device } = this.parseUserAgent(userAgent || '');
+
+      const loginHistory = this.loginHistoryRepository.create({
+        userId,
+        status,
+        ipAddress,
+        userAgent,
+        browser,
+        os,
+        device,
+        failureReason,
+      });
+
+      await this.loginHistoryRepository.save(loginHistory);
+    } catch (error) {
+      // Log but don't fail the login if activity tracking fails
+      this.logger.error('Failed to record login activity', error);
+    }
+  }
+
+  private parseUserAgent(userAgent: string): { browser: string; os: string; device: string } {
+    let browser = 'Unknown';
+    let os = 'Unknown';
+    let device = 'Desktop';
+
+    // Parse browser
+    if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
+      browser = 'Chrome';
+    } else if (userAgent.includes('Firefox')) {
+      browser = 'Firefox';
+    } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+      browser = 'Safari';
+    } else if (userAgent.includes('Edg')) {
+      browser = 'Edge';
+    } else if (userAgent.includes('Opera') || userAgent.includes('OPR')) {
+      browser = 'Opera';
+    }
+
+    // Parse OS
+    if (userAgent.includes('Windows')) {
+      os = 'Windows';
+    } else if (userAgent.includes('Mac OS')) {
+      os = 'macOS';
+    } else if (userAgent.includes('Linux')) {
+      os = 'Linux';
+    } else if (userAgent.includes('Android')) {
+      os = 'Android';
+    } else if (userAgent.includes('iOS') || userAgent.includes('iPhone') || userAgent.includes('iPad')) {
+      os = 'iOS';
+    }
+
+    // Parse device
+    if (userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone')) {
+      device = 'Mobile';
+    } else if (userAgent.includes('Tablet') || userAgent.includes('iPad')) {
+      device = 'Tablet';
+    }
+
+    return { browser, os, device };
+  }
+
+  // Password Reset Methods
+
+  async forgotPassword(dto: ForgotPasswordDto): Promise<ForgotPasswordResponseDto> {
+    const user = await this.userRepository.findOne({
+      where: { email: dto.email.toLowerCase() },
+    });
+
+    const expiresInSeconds = 60; // OTP valid for 60 seconds
+
+    if (!user) {
+      this.logger.warn(`Password reset requested for non-existent email: ${dto.email}`);
+      throw new BadRequestException('No account found with this email address');
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      this.logger.warn(`Password reset requested for inactive user: ${dto.email}`);
+      throw new BadRequestException('This account is not active');
+    }
+
+    // Invalidate any existing reset tokens for this user
+    await this.passwordResetTokenRepository.update(
+      { userId: user.id, isUsed: false },
+      { isUsed: true },
+    );
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const token = uuidv4();
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+
+    // Save the reset token
+    await this.passwordResetTokenRepository.save({
+      email: user.email,
+      userId: user.id,
+      token,
+      otp,
+      expiresAt,
+      isUsed: false,
+      isVerified: false,
+    });
+
+    // Send OTP email
+    const userName = user.firstName || user.email.split('@')[0];
+    await this.emailService.sendPasswordResetOtp(user.email, userName, otp, expiresInSeconds);
+
+    this.logger.log(`Password reset OTP sent to: ${user.email}`);
+
+    return {
+      message: 'Verification code has been sent to your email.',
+      email: dto.email,
+      expiresIn: expiresInSeconds,
+    };
+  }
+
+  async verifyOtp(dto: VerifyOtpDto): Promise<VerifyOtpResponseDto> {
+    const resetToken = await this.passwordResetTokenRepository.findOne({
+      where: {
+        email: dto.email.toLowerCase(),
+        isUsed: false,
+        isVerified: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!resetToken) {
+      throw new BadRequestException('Invalid or expired verification code. Please request a new code.');
+    }
+
+    // Check expiration
+    if (resetToken.expiresAt < new Date()) {
+      await this.passwordResetTokenRepository.update(resetToken.id, { isUsed: true });
+      throw new BadRequestException('Verification code has expired. Please request a new code.');
+    }
+
+    // Verify OTP
+    if (resetToken.otp !== dto.otp) {
+      throw new BadRequestException('Invalid verification code');
+    }
+
+    // Mark as verified
+    await this.passwordResetTokenRepository.update(resetToken.id, { isVerified: true });
+
+    this.logger.log(`OTP verified for: ${dto.email}`);
+
+    return {
+      message: 'Verification successful',
+      token: resetToken.token,
+      email: dto.email,
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<ResetPasswordResponseDto> {
+    const resetToken = await this.passwordResetTokenRepository.findOne({
+      where: {
+        email: dto.email.toLowerCase(),
+        token: dto.token,
+        isUsed: false,
+        isVerified: true,
+      },
+    });
+
+    if (!resetToken) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    // Check expiration (give extra 5 minutes after OTP verification)
+    const extendedExpiry = new Date(resetToken.expiresAt.getTime() + 5 * 60 * 1000);
+    if (extendedExpiry < new Date()) {
+      await this.passwordResetTokenRepository.update(resetToken.id, { isUsed: true });
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    // Hash new password
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    // Update user password
+    await this.userRepository.update(resetToken.userId, { passwordHash });
+
+    // Mark token as used
+    await this.passwordResetTokenRepository.update(resetToken.id, { isUsed: true });
+
+    // Invalidate all refresh tokens for security
+    await this.refreshTokenRepository.update(
+      { userId: resetToken.userId, isRevoked: false },
+      { isRevoked: true },
+    );
+
+    this.logger.log(`Password reset successful for: ${dto.email}`);
+
+    return {
+      message: 'Password reset successful. Please login with your new password.',
+      success: true,
     };
   }
 }

@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Avatar, Dropdown, Typography, Space } from 'antd';
+import { Layout, Menu, Avatar, Dropdown, Typography, Space, Modal, Spin, Drawer, Button } from 'antd';
 import {
   DashboardOutlined,
   GatewayOutlined,
@@ -17,11 +17,16 @@ import {
   DesktopOutlined,
   CreditCardOutlined,
   RocketOutlined,
+  QrcodeOutlined,
+  MenuOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
+import { QRCodeSVG } from 'qrcode.react';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
 import { socketService } from '../../services/socket.service';
 import { PlansModal } from '../billing/PlansModal';
+import { NotificationBell } from './NotificationBell';
 
 interface UserWithTenant extends Omit<User, 'tenant'> {
   tenant?: { id: string; name: string; slug: string };
@@ -33,10 +38,31 @@ const { Text } = Typography;
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, tokens } = useAuthStore();
+  const { user, logout, tokens, isLoading } = useAuthStore();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [plansModalOpen, setPlansModalOpen] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const userWithTenant = user as UserWithTenant | null;
+
+  // Handle window resize for mobile detection
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     if (tokens?.accessToken) {
@@ -53,7 +79,12 @@ export function AppLayout() {
     navigate('/login');
   };
 
-  const menuItems = [
+  // Memoize menu items to only re-compute when user.role changes
+  const menuItems = useMemo(() => {
+    // Don't render menu until user role is available
+    if (!user?.role) return [];
+    
+    return [
     {
       key: '/dashboard',
       icon: <DashboardOutlined />,
@@ -62,9 +93,10 @@ export function AppLayout() {
     {
       key: '/visitors',
       icon: <UsergroupAddOutlined />,
-      label: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user?.role as UserRole)
+      label: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN].includes(user?.role as UserRole)
         ? 'Visitor Management'
         : 'My Visitors',
+      roles: [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.RESIDENT],
     },
     {
       key: '/gates',
@@ -157,6 +189,7 @@ export function AppLayout() {
       roles: [UserRole.BUILDING_ADMIN],
     },
   ].filter((item) => !item.roles || item.roles.includes(user?.role as UserRole));
+  }, [user?.role]);
 
   const handleMenuClick = ({ key }: { key: string }) => {
     if (key === 'upgrade') {
@@ -172,11 +205,19 @@ export function AppLayout() {
         key: 'profile',
         icon: <UserOutlined />,
         label: 'Profile',
+        onClick: () => navigate('/profile'),
+      },
+      {
+        key: 'myqrcode',
+        icon: <QrcodeOutlined />,
+        label: 'My QR Code',
+        onClick: () => setQrModalOpen(true),
       },
       {
         key: 'settings',
         icon: <SettingOutlined />,
         label: 'Settings',
+        onClick: () => navigate('/settings'),
       },
       {
         type: 'divider' as const,
@@ -193,48 +234,96 @@ export function AppLayout() {
 
   return (
     <Layout className="min-h-screen">
-      <Sider
-        collapsible
-        collapsed={collapsed}
-        onCollapse={setCollapsed}
-        theme="light"
-        className="shadow-sm"
-      >
-        <div className="h-16 flex items-center justify-center border-b px-2">
-          <img
-            src="/logo.png"
-            alt="GateRecord"
-            className={collapsed ? "h-8 w-8 object-contain" : "h-12 object-contain"}
+      {/* Desktop Sidebar */}
+      {!isMobile && (
+        <Sider
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+          theme="light"
+          className="shadow-sm hidden md:block"
+          style={{ position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100 }}
+        >
+          <div className="h-16 flex items-center justify-center border-b px-2">
+            <img
+              src="/logo.png"
+              alt="GateRecord"
+              className={collapsed ? "h-8 w-8 object-contain" : "h-12 object-contain"}
+            />
+          </div>
+          <Menu
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={handleMenuClick}
+            className="border-r-0"
           />
-        </div>
+        </Sider>
+      )}
+
+      {/* Mobile Drawer */}
+      <Drawer
+        title={
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="GateRecord" className="h-8 object-contain" />
+            <span className="font-semibold">GateRecord</span>
+          </div>
+        }
+        placement="left"
+        onClose={() => setMobileMenuOpen(false)}
+        open={mobileMenuOpen}
+        width={280}
+        className="md:hidden"
+        styles={{ body: { padding: 0 } }}
+        closeIcon={<CloseOutlined />}
+      >
         <Menu
           mode="inline"
           selectedKeys={[location.pathname]}
           items={menuItems}
           onClick={handleMenuClick}
           className="border-r-0"
+          style={{ border: 'none' }}
         />
-      </Sider>
+      </Drawer>
 
-      <Layout>
-        <Header className="bg-white px-6 flex items-center justify-between shadow-sm">
-          <div>
-            <Text type="secondary">
+      <Layout style={{ marginLeft: isMobile ? 0 : (collapsed ? 80 : 200), transition: 'margin-left 0.2s' }}>
+        <Header className="bg-white px-4 md:px-6 flex items-center justify-between shadow-sm sticky top-0 z-50">
+          <div className="flex items-center gap-3">
+            {/* Mobile Menu Button */}
+            {isMobile && (
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                onClick={() => setMobileMenuOpen(true)}
+                className="md:hidden"
+                size="large"
+              />
+            )}
+            <Text type="secondary" className="hidden sm:block">
               {userWithTenant?.tenant ? userWithTenant.tenant.name : 'Super Admin'}
             </Text>
           </div>
 
-          <Dropdown menu={userMenu} trigger={['click']}>
-            <Space className="cursor-pointer">
-              <Avatar icon={<UserOutlined />} />
-              <Text>
-                {user?.firstName} {user?.lastName}
-              </Text>
-            </Space>
-          </Dropdown>
+          <div className="flex items-center gap-2 sm:gap-6">
+            <NotificationBell />
+            
+            <Dropdown menu={userMenu} trigger={['click']}>
+              <div className="flex items-center gap-2 cursor-pointer">
+                <Avatar 
+                  src={user?.profileImageUrl} 
+                  icon={!user?.profileImageUrl && <UserOutlined />}
+                  size={isMobile ? 'small' : 'default'}
+                />
+                <Text className="hidden sm:inline">
+                  {user?.firstName} {user?.lastName}
+                </Text>
+              </div>
+            </Dropdown>
+          </div>
         </Header>
 
-        <Content className="m-6 p-6 bg-white rounded-lg shadow-sm min-h-[calc(100vh-140px)]">
+        <Content className="m-2 sm:m-4 md:m-6 p-3 sm:p-4 md:p-6 bg-white rounded-lg shadow-sm min-h-[calc(100vh-140px)]">
           <Outlet />
         </Content>
       </Layout>
@@ -246,6 +335,29 @@ export function AppLayout() {
           onClose={() => setPlansModalOpen(false)}
         />
       )}
+
+      {/* QR Code Modal */}
+      <Modal
+        title="My QR Code"
+        open={qrModalOpen}
+        onCancel={() => setQrModalOpen(false)}
+        footer={null}
+        centered
+        width={320}
+      >
+        <div className="flex flex-col items-center py-4">
+          {user?.qrCode ? (
+            <QRCodeSVG 
+              value={user.qrCode} 
+              size={200}
+              level="H"
+              includeMargin
+            />
+          ) : (
+            <Text type="secondary">No QR Code available</Text>
+          )}
+        </div>
+      </Modal>
     </Layout>
   );
 }

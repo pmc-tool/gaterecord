@@ -45,12 +45,13 @@ import { useAuthStore } from '../../store/authStore';
 
 dayjs.extend(relativeTime);
 
-const { Text, Paragraph } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 interface Device {
   id: string;
   deviceName: string;
   deviceId: string;
+  macAddress?: string;
   tenantId: string;
   gateId?: string;
   gateName?: string;
@@ -109,12 +110,30 @@ export default function DevicesPage() {
   const [form] = Form.useForm();
   const [addDeviceForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  
+  // Filter states
+  const [searchText, setSearchText] = useState<string>('');
+  const [filterTenantId, setFilterTenantId] = useState<string | undefined>(undefined);
+  const [filterGateId, setFilterGateId] = useState<string | undefined>(undefined);
+  const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined);
+  const [filterGates, setFilterGates] = useState<Gate[]>([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0 });
 
-  const fetchDevices = useCallback(async () => {
+  const fetchDevices = useCallback(async (page = 1, limit = 10, search?: string, tenantId?: string, gateId?: string, status?: string) => {
     setLoading(true);
     try {
-      const response = await api.get('/devices');
-      setDevices(response.data);
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      if (search) params.append('search', search);
+      if (tenantId) params.append('tenantId', tenantId);
+      if (gateId) params.append('gateId', gateId);
+      if (status) params.append('status', status);
+      const response = await api.get(`/devices?${params.toString()}`);
+      setDevices(response.data.data || response.data);
+      if (response.data.total !== undefined) {
+        setPagination({ page: response.data.page, limit: response.data.limit, total: response.data.total });
+      }
     } catch (error) {
       message.error('Failed to fetch devices');
     } finally {
@@ -144,7 +163,7 @@ export default function DevicesPage() {
     if (!isSuperAdmin) return;
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants', error);
     }
@@ -171,6 +190,13 @@ export default function DevicesPage() {
     }
   }, [fetchDevices, fetchSetupCodes, fetchGates, fetchTenants, isSuperAdmin]);
 
+  // Initialize filter gates when gates are loaded
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setFilterGates(gates);
+    }
+  }, [gates, isSuperAdmin]);
+
   const handleGenerateCode = async (values: { deviceName: string; gateId?: string }) => {
     try {
       const response = await api.post('/devices/setup-codes', values);
@@ -186,11 +212,18 @@ export default function DevicesPage() {
     deviceName: string;
     deviceId: string;
     macAddress?: string;
-    tenantId: string;
+    tenantId?: string;
     gateId?: string;
   }) => {
     try {
-      await api.post('/devices', values);
+      // For building admin, use their tenantId
+      // Remove empty macAddress to avoid validation error
+      const payload = {
+        ...values,
+        macAddress: values.macAddress?.trim() || undefined,
+        tenantId: isSuperAdmin ? values.tenantId : user?.tenantId,
+      };
+      await api.post('/devices', payload);
       message.success('Device created successfully!');
       setAddDeviceModalVisible(false);
       addDeviceForm.resetFields();
@@ -198,8 +231,8 @@ export default function DevicesPage() {
       setTenantGates([]);
       fetchDevices();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      message.error(err.response?.data?.message || 'Failed to create device');
+      const err = error as Error & { response?: { data?: { message?: string } } };
+      message.error(err.response?.data?.message || err.message || 'Failed to create device');
     }
   };
 
@@ -238,12 +271,16 @@ export default function DevicesPage() {
       }
       editForm.setFieldsValue({
         deviceName: device.deviceName,
+        deviceId: device.deviceId,
+        macAddress: device.macAddress || '',
         tenantId: device.tenantId,
         gateId: device.gateId,
       });
     } else {
       editForm.setFieldsValue({
         deviceName: device.deviceName,
+        deviceId: device.deviceId,
+        macAddress: device.macAddress || '',
         gateId: device.gateId,
       });
     }
@@ -266,17 +303,23 @@ export default function DevicesPage() {
     }
   };
 
-  const handleUpdateDevice = async (values: { deviceName?: string; tenantId?: string; gateId?: string }) => {
+  const handleUpdateDevice = async (values: { deviceName?: string; deviceId?: string; macAddress?: string; tenantId?: string; gateId?: string }) => {
     if (!selectedDevice) return;
     try {
-      await api.patch(`/devices/${selectedDevice.id}`, values);
+      // Clean up macAddress - send undefined if empty
+      const payload = {
+        ...values,
+        macAddress: values.macAddress?.trim() || undefined,
+      };
+      await api.patch(`/devices/${selectedDevice.id}`, payload);
       message.success('Device updated');
       setEditModalVisible(false);
       setEditTenantId(null);
       setEditTenantGates([]);
       fetchDevices();
-    } catch (error) {
-      message.error('Failed to update device');
+    } catch (error: unknown) {
+      const err = error as Error & { response?: { data?: { message?: string } } };
+      message.error(err.response?.data?.message || err.message || 'Failed to update device');
     }
   };
 
@@ -544,6 +587,11 @@ export default function DevicesPage() {
 
   return (
     <div className="space-y-4">
+      {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Device Management</Title>
+      </div>
+
       {/* Stats Row */}
       <Row gutter={16}>
         <Col span={6}>
@@ -603,6 +651,7 @@ export default function DevicesPage() {
             rowKey="id"
             size="small"
             pagination={false}
+            scroll={{ x: 500 }}
           />
         </Card>
       )}
@@ -612,7 +661,7 @@ export default function DevicesPage() {
         title="Devices"
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchDevices}>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchDevices(pagination.page, pagination.limit, searchText, filterTenantId, filterGateId, filterStatus)}>
               Refresh
             </Button>
             {isSuperAdmin ? (
@@ -633,9 +682,8 @@ export default function DevicesPage() {
                 type="primary"
                 icon={<PlusOutlined />}
                 onClick={() => {
-                  setGeneratedCode(null);
-                  form.resetFields();
-                  setSetupCodeModalVisible(true);
+                  addDeviceForm.resetFields();
+                  setAddDeviceModalVisible(true);
                 }}
               >
                 Add Device
@@ -644,12 +692,98 @@ export default function DevicesPage() {
           </Space>
         }
       >
+        <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+          <Row gutter={16} align="middle">
+            <Col>
+              <Input
+                placeholder="Search device name"
+                allowClear
+                className="w-48"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </Col>
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  className="w-44"
+                  value={filterTenantId}
+                  onChange={(value) => {
+                    setFilterTenantId(value);
+                    setFilterGateId(undefined);
+                    if (value) {
+                      const filtered = gates.filter((g) => g.tenantId === value);
+                      setFilterGates(filtered);
+                    } else {
+                      setFilterGates(gates);
+                    }
+                  }}
+                  options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Select Gate"
+                allowClear
+                className="w-40"
+                value={filterGateId}
+                onChange={(value) => setFilterGateId(value)}
+                options={(isSuperAdmin ? filterGates : gates).map((g) => ({ label: g.name, value: g.id }))}
+                notFoundContent="No gates found"
+              />
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                className="w-32"
+                value={filterStatus}
+                onChange={(value) => setFilterStatus(value)}
+                options={[
+                  { label: 'Setup', value: 'setup' },
+                  { label: 'Online', value: 'online' },
+                  { label: 'Offline', value: 'offline' },
+                  { label: 'Updating', value: 'updating' },
+                ]}
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={() => fetchDevices(1, pagination.limit, searchText, filterTenantId, filterGateId, filterStatus)}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setSearchText('');
+                  setFilterTenantId(undefined);
+                  setFilterGateId(undefined);
+                  setFilterStatus(undefined);
+                  setFilterGates(gates);
+                  fetchDevices(1, pagination.limit, undefined, undefined, undefined, undefined);
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
         <Table
           columns={columns}
           dataSource={devices}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          scroll={{ x: 900 }}
+          pagination={{
+            current: pagination.page,
+            pageSize: pagination.limit,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} devices`,
+            onChange: (page, pageSize) => fetchDevices(page, pageSize, searchText, filterTenantId, filterGateId, filterStatus),
+          }}
         />
       </Card>
 
@@ -751,9 +885,28 @@ export default function DevicesPage() {
         width={500}
       >
         <Form form={editForm} layout="vertical" onFinish={handleUpdateDevice}>
-          <Form.Item name="deviceName" label="Device Name">
-            <Input />
+          <Form.Item
+            name="deviceId"
+            label="Device Serial Number"
+            rules={[{ required: true, message: 'Please enter the device serial number' }]}
+            tooltip="Found in the controller settings (e.g., 1Y3196)"
+          >
+            <Input placeholder="e.g., 1Y3196" />
           </Form.Item>
+
+          <Form.Item name="deviceName" label="Device Name">
+            <Input placeholder="e.g., Main Gate Controller" />
+          </Form.Item>
+
+          <Form.Item
+            name="macAddress"
+            label="MAC Address (Optional)"
+            tooltip="The controller's MAC address in format XX:XX:XX:XX:XX:XX"
+          >
+            <Input placeholder="e.g., 00:04:A3:80:F0:7E" />
+          </Form.Item>
+
+          <Divider orientation="left">Assignment</Divider>
 
           {isSuperAdmin && (
             <Form.Item
@@ -862,7 +1015,7 @@ export default function DevicesPage() {
         )}
       </Modal>
 
-      {/* Add Device Modal (Super Admin) */}
+      {/* Add Device Modal */}
       <Modal
         title="Add New Device"
         open={addDeviceModalVisible}
@@ -910,35 +1063,41 @@ export default function DevicesPage() {
 
           <Divider orientation="left">Assignment</Divider>
 
-          <Form.Item
-            name="tenantId"
-            label="Building / Tenant"
-            rules={[{ required: true, message: 'Please select a building' }]}
-          >
-            <Select
-              placeholder="Select a building"
-              onChange={handleTenantChange}
-              showSearch
-              optionFilterProp="children"
+          {isSuperAdmin ? (
+            <Form.Item
+              name="tenantId"
+              label="Building / Tenant"
+              rules={[{ required: true, message: 'Please select a building' }]}
             >
-              {tenants.map((tenant) => (
-                <Select.Option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+              <Select
+                placeholder="Select a building"
+                onChange={handleTenantChange}
+                showSearch
+                optionFilterProp="children"
+              >
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            <Form.Item label="Building / Tenant">
+              <Input value={user?.tenant?.name || 'Your Building'} disabled />
+            </Form.Item>
+          )}
 
           <Form.Item
             name="gateId"
             label="Assign to Gate (Optional)"
           >
             <Select
-              placeholder={selectedTenantId ? 'Select a gate' : 'Select a building first'}
+              placeholder={isSuperAdmin && !selectedTenantId ? 'Select a building first' : 'Select a gate'}
               allowClear
-              disabled={!selectedTenantId}
+              disabled={isSuperAdmin && !selectedTenantId}
             >
-              {tenantGates.map((gate) => (
+              {(isSuperAdmin ? tenantGates : gates).map((gate) => (
                 <Select.Option key={gate.id} value={gate.id}>
                   {gate.name}
                 </Select.Option>

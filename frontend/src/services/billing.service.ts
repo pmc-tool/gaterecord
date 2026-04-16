@@ -273,6 +273,14 @@ export const billingService = {
     const response = await api.post('/billing/plans/change', { newPlanId, billingCycle, immediate });
     return response.data;
   },
+
+  // ==================== Public APIs (no auth required) ====================
+
+  // Get public subscription plans for pricing page
+  async getPublicPlans(): Promise<import('../types').SubscriptionPlan[]> {
+    const response = await api.get('/auth/plans');
+    return response.data;
+  },
 };
 
 // ==================== Admin Billing APIs ====================
@@ -301,10 +309,13 @@ export const adminBillingService = {
     page?: number;
     limit?: number;
     tenantId?: string;
+    planId?: string;
     status?: string;
     type?: string;
+    billingCycle?: string;
     startDate?: string;
     endDate?: string;
+    search?: string;
   }): Promise<{ success: boolean; payments: Payment[]; total: number; page: number; totalPages: number }> {
     const response = await api.get('/admin/stripe/payments', { params });
     return response.data;

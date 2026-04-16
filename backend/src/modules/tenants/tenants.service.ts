@@ -1,12 +1,15 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository, MoreThan } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { Tenant, TenantStatus, BillingCycle } from '@database/entities/tenant.entity';
+import { Tenant, TenantStatus, BillingCycle, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
+import { Payment, PaymentStatus, TransactionType } from '@database/entities/payment.entity';
+import { EmailService } from '../notification/email.service';
 import {
   CreateTenantDto,
   UpdateTenantDto,
@@ -27,6 +30,10 @@ export class TenantsService {
     private gateRepository: Repository<Gate>,
     @InjectRepository(AccessEvent)
     private accessEventRepository: Repository<AccessEvent>,
+    @InjectRepository(Payment)
+    private paymentRepository: Repository<Payment>,
+    private emailService: EmailService,
+    private configService: ConfigService,
   ) {}
 
   async createPlan(dto: CreateSubscriptionPlanDto): Promise<SubscriptionPlan> {
@@ -39,13 +46,35 @@ export class TenantsService {
     return this.planRepository.save(plan);
   }
 
-  async findAllPlans(includeInactive = false): Promise<SubscriptionPlan[]> {
-    const query = includeInactive ? {} : { where: { isActive: true } };
-    return this.planRepository.find({
-      ...query,
-      order: { displayOrder: 'ASC', createdAt: 'ASC' },
-      relations: ['tenants'],
-    });
+  async findAllPlans(query: { search?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: SubscriptionPlan[]; total: number; page: number; limit: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.planRepository.createQueryBuilder('plan')
+      .leftJoinAndSelect('plan.tenants', 'tenants')
+      .orderBy('plan.displayOrder', 'ASC')
+      .addOrderBy('plan.createdAt', 'ASC');
+
+    // Search by name
+    if (query.search) {
+      qb.andWhere('LOWER(plan.name) LIKE LOWER(:search)', { search: `%${query.search}%` });
+    }
+
+    // Filter by status
+    if (query.status === 'active') {
+      qb.andWhere('plan.isActive = :isActive', { isActive: true });
+    } else if (query.status === 'inactive') {
+      qb.andWhere('plan.isActive = :isActive', { isActive: false });
+    }
+    // If no status filter, return all plans (for admin)
+
+    const [data, total] = await qb
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, limit };
   }
 
   async findOnePlan(id: string): Promise<SubscriptionPlan> {
@@ -120,7 +149,13 @@ export class TenantsService {
       throw new NotFoundException('Subscription plan not found');
     }
 
-    // Create tenant
+    const now = new Date();
+    // Use same trial logic as user self-signup
+    const trialDays = plan.trialDays || 14;
+    const trialExpiresAt = new Date();
+    trialExpiresAt.setDate(trialExpiresAt.getDate() + trialDays);
+
+    // Create tenant with trial status (same as user self-signup)
     const tenant = this.tenantRepository.create({
       name: dto.name,
       slug: dto.slug,
@@ -129,6 +164,16 @@ export class TenantsService {
       address: dto.address,
       subscriptionPlanId: dto.subscriptionPlanId,
       status: TenantStatus.TRIAL,
+      subscriptionStatus: SubscriptionStatus.TRIALING,
+      subscriptionStartedAt: now,
+      subscriptionExpiresAt: trialExpiresAt,
+      currentPeriodEnd: trialExpiresAt,
+      settings: {
+        signupDate: now.toISOString(),
+        startedAsTrial: true,
+        trialDays: trialDays,
+        createdBySuperAdmin: true,
+      },
     });
 
     const savedTenant = await this.tenantRepository.save(tenant);
@@ -151,14 +196,61 @@ export class TenantsService {
 
     await this.userRepository.save(adminUser);
 
+    // Send credentials email to building admin
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const loginUrl = `${frontendUrl}/login`;
+
+    this.emailService.sendNewUserCredentialsEmail(
+      dto.adminEmail.toLowerCase(),
+      `${dto.adminFirstName} ${dto.adminLastName}`,
+      UserRole.BUILDING_ADMIN,
+      adminPassword,
+      dto.name,
+      'GateRecord Admin',
+      loginUrl,
+    ).catch((error) => {
+      console.error('Failed to send credentials email:', error);
+    });
+
     return { tenant: savedTenant, adminPassword };
   }
 
-  async findAll(): Promise<Tenant[]> {
-    return this.tenantRepository.find({
-      relations: ['subscriptionPlan'],
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(query: { search?: string; status?: string; startDate?: string; endDate?: string; page?: number; limit?: number } = {}): Promise<{ data: Tenant[]; total: number; page: number; limit: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.tenantRepository.createQueryBuilder('tenant')
+      .leftJoinAndSelect('tenant.subscriptionPlan', 'subscriptionPlan')
+      .orderBy('tenant.createdAt', 'DESC');
+
+    // Search by name, slug, or contact email
+    if (query.search) {
+      qb.andWhere(
+        '(LOWER(tenant.name) LIKE LOWER(:search) OR LOWER(tenant.slug) LIKE LOWER(:search) OR LOWER(tenant.contactEmail) LIKE LOWER(:search))',
+        { search: `%${query.search}%` }
+      );
+    }
+
+    // Filter by status
+    if (query.status) {
+      qb.andWhere('tenant.status = :status', { status: query.status });
+    }
+
+    // Filter by date range
+    if (query.startDate) {
+      qb.andWhere('tenant.createdAt >= :startDate', { startDate: query.startDate });
+    }
+    if (query.endDate) {
+      qb.andWhere('tenant.createdAt <= :endDate', { endDate: `${query.endDate} 23:59:59` });
+    }
+
+    const [data, total] = await qb
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, limit };
   }
 
   async findOne(id: string): Promise<Tenant> {
@@ -252,6 +344,12 @@ export class TenantsService {
       monthlySubscribers: number;
       yearlySubscribers: number;
       revenue: number;
+      // Lifetime revenue from payments
+      lifetimeMonthlyRevenue: number;
+      lifetimeYearlyRevenue: number;
+      lifetimeTotalRevenue: number;
+      monthlyPaymentCount: number;
+      yearlyPaymentCount: number;
     }[];
     recentSubscriptions: {
       id: string;
@@ -269,6 +367,40 @@ export class TenantsService {
 
     const plans = await this.planRepository.find({
       where: { isActive: true },
+    });
+
+    // Get lifetime payment stats per plan and billing cycle
+    const lifetimeRevenueQuery = await this.paymentRepository
+      .createQueryBuilder('payment')
+      .select('payment.subscription_plan_id', 'planId')
+      .addSelect('payment.billing_cycle', 'billingCycle')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'totalAmount')
+      .addSelect('COUNT(*)', 'paymentCount')
+      .where('payment.transaction_type = :type', { type: TransactionType.CHARGE })
+      .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+      .andWhere('payment.subscription_plan_id IS NOT NULL')
+      .groupBy('payment.subscription_plan_id')
+      .addGroupBy('payment.billing_cycle')
+      .getRawMany();
+
+    // Create a map for quick lookup
+    const lifetimeRevenueMap = new Map<string, { monthly: { amount: number; count: number }; yearly: { amount: number; count: number } }>();
+    lifetimeRevenueQuery.forEach((row) => {
+      const planId = row.planId;
+      if (!lifetimeRevenueMap.has(planId)) {
+        lifetimeRevenueMap.set(planId, {
+          monthly: { amount: 0, count: 0 },
+          yearly: { amount: 0, count: 0 },
+        });
+      }
+      const planData = lifetimeRevenueMap.get(planId)!;
+      if (row.billingCycle === 'monthly') {
+        planData.monthly.amount = parseFloat(row.totalAmount) || 0;
+        planData.monthly.count = parseInt(row.paymentCount) || 0;
+      } else if (row.billingCycle === 'yearly') {
+        planData.yearly.amount = parseFloat(row.totalAmount) || 0;
+        planData.yearly.count = parseInt(row.paymentCount) || 0;
+      }
     });
 
     let monthlyRevenue = 0;
@@ -291,6 +423,12 @@ export class TenantsService {
       monthlyRevenue += monthlyRev;
       yearlyRevenue += yearlyRev;
 
+      // Get lifetime payment stats for this plan
+      const lifetimeData = lifetimeRevenueMap.get(plan.id) || {
+        monthly: { amount: 0, count: 0 },
+        yearly: { amount: 0, count: 0 },
+      };
+
       return {
         planId: plan.id,
         planName: plan.name,
@@ -300,6 +438,12 @@ export class TenantsService {
         monthlySubscribers: monthlySubscribers.length,
         yearlySubscribers: yearlySubscribers.length,
         revenue: monthlyRev + yearlyRev / 12, // Normalize to monthly for comparison
+        // Lifetime revenue from actual payments
+        lifetimeMonthlyRevenue: lifetimeData.monthly.amount,
+        lifetimeYearlyRevenue: lifetimeData.yearly.amount,
+        lifetimeTotalRevenue: lifetimeData.monthly.amount + lifetimeData.yearly.amount,
+        monthlyPaymentCount: lifetimeData.monthly.count,
+        yearlyPaymentCount: lifetimeData.yearly.count,
       };
     });
 
@@ -345,6 +489,8 @@ export class TenantsService {
     mrr: number;
     arr: number;
     totalRevenue: number;
+    monthlySubscriptionsRevenue: number;
+    yearlySubscriptionsRevenue: number;
     revenueGrowth: number;
     // Platform overview
     totalTenants: number;
@@ -407,6 +553,8 @@ export class TenantsService {
     let activeTenants = 0;
     let trialTenants = 0;
     let suspendedTenants = 0;
+    let monthlySubscriptionsRevenue = 0;
+    let yearlySubscriptionsRevenue = 0;
 
     const planDistribution: { planName: string; count: number; revenue: number }[] = [];
 
@@ -417,9 +565,13 @@ export class TenantsService {
       let planRevenue = 0;
       activePlanTenants.forEach((t) => {
         if (t.billingCycle === BillingCycle.YEARLY) {
-          planRevenue += Number(plan.yearlyPrice) / 12; // Convert to monthly
+          const yearlyPrice = Number(plan.yearlyPrice);
+          planRevenue += yearlyPrice / 12; // Convert to monthly for MRR
+          yearlySubscriptionsRevenue += yearlyPrice;
         } else {
-          planRevenue += Number(plan.monthlyPrice);
+          const monthlyPrice = Number(plan.monthlyPrice);
+          planRevenue += monthlyPrice;
+          monthlySubscriptionsRevenue += monthlyPrice;
         }
       });
 
@@ -547,7 +699,9 @@ export class TenantsService {
       // Financial metrics
       mrr: Math.round(mrr * 100) / 100,
       arr: Math.round(mrr * 12 * 100) / 100,
-      totalRevenue: Math.round(mrr * 100) / 100, // Current month
+      totalRevenue: Math.round((monthlySubscriptionsRevenue + yearlySubscriptionsRevenue) * 100) / 100,
+      monthlySubscriptionsRevenue: Math.round(monthlySubscriptionsRevenue * 100) / 100,
+      yearlySubscriptionsRevenue: Math.round(yearlySubscriptionsRevenue * 100) / 100,
       revenueGrowth: Math.round(revenueGrowth * 10) / 10,
       // Platform overview
       totalTenants: tenants.length,
@@ -569,6 +723,378 @@ export class TenantsService {
       // Alerts
       expiringTrials,
       tenantsAtLimit,
+    };
+  }
+
+  /**
+   * Get professional SaaS metrics for the Subscription & Earnings Dashboard
+   * Includes Netflix/Stripe-level business intelligence metrics
+   */
+  async getProfessionalMetrics(): Promise<{
+    // Revenue Metrics
+    mrr: number;
+    arr: number;
+    netRevenue: number;
+    revenueGrowth: number;
+    // Subscription Metrics
+    activeSubscriptions: number;
+    newThisMonth: number;
+    churnedThisMonth: number;
+    churnRate: number;
+    // Customer Value Metrics
+    arpu: number;
+    ltv: number;
+    trialConversionRate: number;
+    // Billing Split
+    monthlySubscribers: number;
+    yearlySubscribers: number;
+    // Health Indicators
+    paymentSuccessRate: number;
+    failedPayments: number;
+    pastDueCount: number;
+    expiringTrials: number;
+    // Revenue Trend (last 12 months)
+    revenueTrend: { month: string; revenue: number; subscriptions: number }[];
+    // Plan Performance
+    planPerformance: {
+      planName: string;
+      subscribers: number;
+      mrr: number;
+      churnRate: number;
+      growth: number;
+    }[];
+  }> {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    // Get all tenants with plans
+    const tenants = await this.tenantRepository.find({
+      relations: ['subscriptionPlan'],
+    });
+
+    const plans = await this.planRepository.find({ where: { isActive: true } });
+
+    // Calculate MRR
+    let mrr = 0;
+    let lastMonthMrr = 0;
+    let activeSubscriptions = 0;
+    let monthlySubscribers = 0;
+    let yearlySubscribers = 0;
+    let trialCount = 0;
+
+    // Current active tenants
+    const activeTenants = tenants.filter((t) => t.status === TenantStatus.ACTIVE);
+    const trialTenants = tenants.filter((t) => t.status === TenantStatus.TRIAL);
+    
+    activeTenants.forEach((t) => {
+      activeSubscriptions++;
+      if (t.billingCycle === BillingCycle.MONTHLY) {
+        monthlySubscribers++;
+        mrr += Number(t.subscriptionPlan?.monthlyPrice || 0);
+      } else if (t.billingCycle === BillingCycle.YEARLY) {
+        yearlySubscribers++;
+        mrr += Number(t.subscriptionPlan?.yearlyPrice || 0) / 12;
+      }
+    });
+
+    trialCount = trialTenants.length;
+
+    // New subscriptions this month
+    const newThisMonth = tenants.filter(
+      (t) => new Date(t.createdAt) >= startOfMonth && t.status === TenantStatus.ACTIVE,
+    ).length;
+
+    // Estimate churned this month (tenants that became suspended this month)
+    const churnedThisMonth = tenants.filter(
+      (t) =>
+        t.status === TenantStatus.SUSPENDED &&
+        t.updatedAt &&
+        new Date(t.updatedAt) >= startOfMonth,
+    ).length;
+
+    // Calculate last month MRR for comparison (tenants that existed before this month)
+    const lastMonthActiveTenants = tenants.filter(
+      (t) =>
+        new Date(t.createdAt) < startOfMonth &&
+        (t.status === TenantStatus.ACTIVE ||
+          (t.status === TenantStatus.SUSPENDED && t.updatedAt && new Date(t.updatedAt) >= startOfMonth)),
+    );
+
+    lastMonthActiveTenants.forEach((t) => {
+      if (!t.subscriptionPlan) return;
+      if (t.billingCycle === BillingCycle.YEARLY) {
+        lastMonthMrr += Number(t.subscriptionPlan.yearlyPrice) / 12;
+      } else {
+        lastMonthMrr += Number(t.subscriptionPlan.monthlyPrice);
+      }
+    });
+
+    // Revenue growth
+    const revenueGrowth = lastMonthMrr > 0 ? ((mrr - lastMonthMrr) / lastMonthMrr) * 100 : 0;
+
+    // Churn rate = churned this month / total active at start of month
+    const totalAtStartOfMonth = lastMonthActiveTenants.length;
+    const churnRate = totalAtStartOfMonth > 0 ? (churnedThisMonth / totalAtStartOfMonth) * 100 : 0;
+
+    // ARPU (Average Revenue Per User) = MRR / Active Subscribers
+    const arpu = activeSubscriptions > 0 ? mrr / activeSubscriptions : 0;
+
+    // LTV (Lifetime Value) = ARPU / Monthly Churn Rate (as decimal)
+    const monthlyChurnRateDecimal = churnRate / 100;
+    const ltv = monthlyChurnRateDecimal > 0 ? arpu / monthlyChurnRateDecimal : arpu * 24; // Default to 24 months if no churn
+
+    // Trial conversion - tenants that were trial and became active
+    const convertedTrials = tenants.filter(
+      (t) =>
+        t.status === TenantStatus.ACTIVE &&
+        t.createdAt &&
+        t.updatedAt &&
+        new Date(t.updatedAt) >= startOfMonth,
+    ).length;
+    const totalTrialsLastMonth = tenants.filter(
+      (t) =>
+        (t.status === TenantStatus.TRIAL || t.status === TenantStatus.ACTIVE) &&
+        new Date(t.createdAt) >= startOfLastMonth &&
+        new Date(t.createdAt) < startOfMonth,
+    ).length;
+    const trialConversionRate = totalTrialsLastMonth > 0 ? (convertedTrials / totalTrialsLastMonth) * 100 : 0;
+
+    // Expiring trials in next 7 days
+    const expiringTrials = trialTenants.filter((t) => {
+      if (!t.subscriptionExpiresAt) return false;
+      const expiresAt = new Date(t.subscriptionExpiresAt);
+      return expiresAt <= sevenDaysFromNow && expiresAt > now;
+    }).length;
+
+    // Payment metrics
+    const monthlyPayments = await this.paymentRepository.count({
+      where: {
+        createdAt: MoreThan(startOfMonth),
+        transactionType: TransactionType.CHARGE,
+      },
+    });
+
+    const successfulPayments = await this.paymentRepository.count({
+      where: {
+        createdAt: MoreThan(startOfMonth),
+        transactionType: TransactionType.CHARGE,
+        status: PaymentStatus.SUCCEEDED,
+      },
+    });
+
+    const failedPayments = await this.paymentRepository.count({
+      where: {
+        createdAt: MoreThan(startOfMonth),
+        transactionType: TransactionType.CHARGE,
+        status: PaymentStatus.FAILED,
+      },
+    });
+
+    const paymentSuccessRate = monthlyPayments > 0 ? (successfulPayments / monthlyPayments) * 100 : 100;
+
+    // Past due subscriptions
+    const pastDueCount = tenants.filter(
+      (t) =>
+        t.subscriptionExpiresAt &&
+        new Date(t.subscriptionExpiresAt) < now &&
+        t.status === TenantStatus.ACTIVE,
+    ).length;
+
+    // Net revenue (total successful payments this month)
+    const netRevenueResult = await this.paymentRepository
+      .createQueryBuilder('payment')
+      .select('COALESCE(SUM(payment.net_amount), 0)', 'total')
+      .where('payment.created_at >= :startOfMonth', { startOfMonth })
+      .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+      .andWhere('payment.transaction_type = :type', { type: TransactionType.CHARGE })
+      .getRawOne();
+    const netRevenue = parseFloat(netRevenueResult?.total) || 0;
+
+    // Revenue trend (last 12 months)
+    const revenueTrend: { month: string; revenue: number; subscriptions: number }[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      const monthName = monthStart.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+
+      const monthRevenueResult = await this.paymentRepository
+        .createQueryBuilder('payment')
+        .select('COALESCE(SUM(payment.amount), 0)', 'total')
+        .addSelect('COUNT(DISTINCT payment.tenant_id)', 'subscriptions')
+        .where('payment.created_at >= :monthStart', { monthStart })
+        .andWhere('payment.created_at <= :monthEnd', { monthEnd })
+        .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+        .andWhere('payment.transaction_type = :type', { type: TransactionType.CHARGE })
+        .getRawOne();
+
+      revenueTrend.push({
+        month: monthName,
+        revenue: parseFloat(monthRevenueResult?.total) || 0,
+        subscriptions: parseInt(monthRevenueResult?.subscriptions) || 0,
+      });
+    }
+
+    // Plan performance
+    const planPerformance = plans.map((plan) => {
+      const planSubscribers = activeTenants.filter((t) => t.subscriptionPlanId === plan.id);
+      let planMrr = 0;
+      planSubscribers.forEach((t) => {
+        if (t.billingCycle === BillingCycle.YEARLY) {
+          planMrr += Number(plan.yearlyPrice) / 12;
+        } else {
+          planMrr += Number(plan.monthlyPrice);
+        }
+      });
+
+      const planChurned = tenants.filter(
+        (t) =>
+          t.subscriptionPlanId === plan.id &&
+          t.status === TenantStatus.SUSPENDED &&
+          t.updatedAt &&
+          new Date(t.updatedAt) >= startOfMonth,
+      ).length;
+
+      const planLastMonth = tenants.filter(
+        (t) =>
+          t.subscriptionPlanId === plan.id &&
+          new Date(t.createdAt) < startOfMonth &&
+          (t.status === TenantStatus.ACTIVE ||
+            (t.status === TenantStatus.SUSPENDED && t.updatedAt && new Date(t.updatedAt) >= startOfMonth)),
+      ).length;
+
+      const planChurnRate = planLastMonth > 0 ? (planChurned / planLastMonth) * 100 : 0;
+
+      const planNewThisMonth = tenants.filter(
+        (t) =>
+          t.subscriptionPlanId === plan.id &&
+          new Date(t.createdAt) >= startOfMonth &&
+          t.status === TenantStatus.ACTIVE,
+      ).length;
+
+      const planGrowth = planLastMonth > 0 ? ((planSubscribers.length - planLastMonth) / planLastMonth) * 100 : 0;
+
+      return {
+        planName: plan.name,
+        subscribers: planSubscribers.length,
+        mrr: Math.round(planMrr * 100) / 100,
+        churnRate: Math.round(planChurnRate * 10) / 10,
+        growth: Math.round(planGrowth * 10) / 10,
+      };
+    });
+
+    return {
+      // Revenue Metrics
+      mrr: Math.round(mrr * 100) / 100,
+      arr: Math.round(mrr * 12 * 100) / 100,
+      netRevenue: Math.round(netRevenue * 100) / 100,
+      revenueGrowth: Math.round(revenueGrowth * 10) / 10,
+      // Subscription Metrics
+      activeSubscriptions,
+      newThisMonth,
+      churnedThisMonth,
+      churnRate: Math.round(churnRate * 10) / 10,
+      // Customer Value Metrics
+      arpu: Math.round(arpu * 100) / 100,
+      ltv: Math.round(ltv * 100) / 100,
+      trialConversionRate: Math.round(trialConversionRate * 10) / 10,
+      // Billing Split
+      monthlySubscribers,
+      yearlySubscribers,
+      // Health Indicators
+      paymentSuccessRate: Math.round(paymentSuccessRate * 10) / 10,
+      failedPayments,
+      pastDueCount,
+      expiringTrials,
+      // Revenue Trend
+      revenueTrend,
+      // Plan Performance
+      planPerformance,
+    };
+  }
+
+  /**
+   * Get subscriptions with pagination and date range filter
+   */
+  async getSubscriptionsList(params: {
+    page?: number;
+    limit?: number;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+    planId?: string;
+  }): Promise<{
+    data: {
+      id: string;
+      tenantName: string;
+      planName: string;
+      billingCycle: string;
+      amount: number;
+      subscribedAt: Date;
+      status: string;
+    }[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.tenantRepository
+      .createQueryBuilder('tenant')
+      .leftJoinAndSelect('tenant.subscriptionPlan', 'plan')
+      .orderBy('tenant.createdAt', 'DESC');
+
+    // Apply date range filter
+    if (params.startDate) {
+      queryBuilder.andWhere('tenant.createdAt >= :startDate', {
+        startDate: new Date(params.startDate),
+      });
+    }
+    if (params.endDate) {
+      const endDate = new Date(params.endDate);
+      endDate.setHours(23, 59, 59, 999);
+      queryBuilder.andWhere('tenant.createdAt <= :endDate', { endDate });
+    }
+
+    // Apply status filter
+    if (params.status) {
+      queryBuilder.andWhere('tenant.status = :status', { status: params.status });
+    }
+
+    // Apply plan filter
+    if (params.planId) {
+      queryBuilder.andWhere('tenant.subscriptionPlanId = :planId', { planId: params.planId });
+    }
+
+    const [tenants, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    const data = tenants.map((t) => ({
+      id: t.id,
+      tenantName: t.name,
+      planName: t.subscriptionPlan?.name || 'Unknown',
+      billingCycle: t.billingCycle,
+      amount:
+        t.billingCycle === BillingCycle.YEARLY
+          ? Number(t.subscriptionPlan?.yearlyPrice || 0)
+          : Number(t.subscriptionPlan?.monthlyPrice || 0),
+      subscribedAt: t.createdAt,
+      status: t.status,
+    }));
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
   }
 }

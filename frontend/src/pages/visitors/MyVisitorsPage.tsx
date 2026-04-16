@@ -126,7 +126,7 @@ const purposeOptions = [
 
 export default function MyVisitorsPage() {
   const { user } = useAuthStore();
-  const isStaff = user?.role && [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user.role);
+  const isStaff = user?.role && [UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY].includes(user.role as UserRole);
   const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
 
   const [passes, setPasses] = useState<VisitorPass[]>([]);
@@ -140,6 +140,9 @@ export default function MyVisitorsPage() {
   const [validityType, setValidityType] = useState<ValidityType>(ValidityType.SINGLE_USE);
   const [filters, setFilters] = useState({
     status: undefined as VisitorPassStatus | undefined,
+    tenantId: undefined as string | undefined,
+    startDate: undefined as string | undefined,
+    endDate: undefined as string | undefined,
   });
 
   // For staff on-premise registration
@@ -152,6 +155,9 @@ export default function MyVisitorsPage() {
     try {
       const params = new URLSearchParams();
       if (filters.status) params.append('status', filters.status);
+      if (filters.tenantId) params.append('tenantId', filters.tenantId);
+      if (filters.startDate) params.append('startDate', filters.startDate);
+      if (filters.endDate) params.append('endDate', filters.endDate);
 
       const [passesRes, statsRes] = await Promise.all([
         api.get(`/visitor-passes?${params.toString()}`),
@@ -171,7 +177,7 @@ export default function MyVisitorsPage() {
     if (!isSuperAdmin) return;
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants');
     }
@@ -187,9 +193,11 @@ export default function MyVisitorsPage() {
       }
       const url = isSuperAdmin && tenantId ? `/residents?tenantId=${tenantId}` : '/residents';
       const response = await api.get(url);
-      setResidents(response.data);
+      // Handle paginated response from API
+      setResidents(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch residents');
+      setResidents([]);
     }
   };
 
@@ -517,23 +525,68 @@ export default function MyVisitorsPage() {
         }
       >
         <div className="mb-4">
-          <Space>
-            <Select
-              placeholder="Filter by status"
-              allowClear
-              style={{ width: 150 }}
-              value={filters.status}
-              onChange={(value) => setFilters({ ...filters, status: value })}
-            >
-              <Select.Option value={VisitorPassStatus.ACTIVE}>Active</Select.Option>
-              <Select.Option value={VisitorPassStatus.USED}>Used</Select.Option>
-              <Select.Option value={VisitorPassStatus.EXPIRED}>Expired</Select.Option>
-              <Select.Option value={VisitorPassStatus.CANCELLED}>Cancelled</Select.Option>
-            </Select>
-            <Button type="primary" onClick={fetchPasses}>
-              Apply
-            </Button>
-          </Space>
+          <Row gutter={[16, 16]} align="middle">
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={filters.tenantId}
+                  onChange={(value) => setFilters({ ...filters, tenantId: value })}
+                  options={tenants.map(t => ({ value: t.id, label: t.name }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.status}
+                onChange={(value) => setFilters({ ...filters, status: value })}
+              >
+                <Select.Option value={VisitorPassStatus.ACTIVE}>Active</Select.Option>
+                <Select.Option value={VisitorPassStatus.USED}>Used</Select.Option>
+                <Select.Option value={VisitorPassStatus.EXPIRED}>Expired</Select.Option>
+                <Select.Option value={VisitorPassStatus.CANCELLED}>Cancelled</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="Start Date"
+                style={{ width: 150 }}
+                value={filters.startDate ? dayjs(filters.startDate) : undefined}
+                onChange={(date) => setFilters({ ...filters, startDate: date?.format('YYYY-MM-DD') })}
+              />
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="End Date"
+                style={{ width: 150 }}
+                value={filters.endDate ? dayjs(filters.endDate) : undefined}
+                onChange={(date) => setFilters({ ...filters, endDate: date?.format('YYYY-MM-DD') })}
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={fetchPasses}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setFilters({
+                    status: undefined,
+                    tenantId: undefined,
+                    startDate: undefined,
+                    endDate: undefined,
+                  });
+                  fetchPasses();
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
         </div>
 
         <Table
@@ -541,7 +594,13 @@ export default function MyVisitorsPage() {
           dataSource={passes}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          scroll={{ x: 900 }}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} visitors`,
+          }}
         />
       </Card>
 

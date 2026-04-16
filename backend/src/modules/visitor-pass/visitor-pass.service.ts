@@ -5,13 +5,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, MoreThan } from 'typeorm';
 import {
   VisitorPass,
   VisitorPassStatus,
   RegistrationType,
 } from '@database/entities/visitor-pass.entity';
 import { User, UserRole } from '@database/entities/user.entity';
+import { Tenant } from '@database/entities/tenant.entity';
 import {
   CreateVisitorPassDto,
   UpdateVisitorPassDto,
@@ -27,6 +28,8 @@ export class VisitorPassService {
   constructor(
     @InjectRepository(VisitorPass)
     private readonly visitorPassRepository: Repository<VisitorPass>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
     private readonly configService: ConfigService,
   ) {}
 
@@ -72,6 +75,38 @@ export class VisitorPassService {
       tenantId = currentUser.tenantId;
     } else {
       throw new BadRequestException('You must belong to a tenant to create visitor passes');
+    }
+
+    // Check visitor pass monthly limit based on subscription plan
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: tenantId },
+      relations: ['subscriptionPlan'],
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    if (!tenant.subscriptionPlan) {
+      throw new ForbiddenException('No subscription plan found. Please subscribe to a plan first.');
+    }
+
+    // Count visitor passes created this month for this tenant
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const passesThisMonth = await this.visitorPassRepository.count({
+      where: {
+        tenantId,
+        createdAt: MoreThan(startOfMonth),
+      },
+    });
+
+    if (passesThisMonth >= tenant.subscriptionPlan.maxVisitorPassesPerMonth) {
+      throw new ForbiddenException(
+        `Monthly visitor pass limit reached. Your plan allows ${tenant.subscriptionPlan.maxVisitorPassesPerMonth} visitor passes per month. Please upgrade your plan to create more passes.`,
+      );
     }
 
     // Create visitor pass with ACTIVE status (no approval needed)
@@ -151,11 +186,17 @@ export class VisitorPassService {
     // Filter by tenant for non-super-admin users
     if (currentUser.tenantId) {
       queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: currentUser.tenantId });
+    } else if (query.tenantId) {
+      // Super admin can filter by tenant
+      queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: query.tenantId });
     }
 
-    // Residents only see their own passes
+    // Residents only see their own passes (created by them OR where they are the host)
     if (currentUser.role === 'resident') {
-      queryBuilder.andWhere('pass.createdById = :userId', { userId: currentUser.id });
+      queryBuilder.andWhere(
+        '(pass.createdById = :userId OR pass.residentId = :userId)',
+        { userId: currentUser.id },
+      );
     }
 
     // Apply filters
@@ -189,8 +230,12 @@ export class VisitorPassService {
       throw new NotFoundException(`Visitor pass with ID ${id} not found`);
     }
 
-    // Check access: user must be creator, or admin of same tenant
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Check access: user must be creator, host resident, or admin of same tenant
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
@@ -270,8 +315,12 @@ export class VisitorPassService {
   ): Promise<VisitorPass> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator can update (or admin)
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Only creator or host resident can update (or admin)
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You can only update your own visitor passes');
     }
 
@@ -304,8 +353,12 @@ export class VisitorPassService {
   async remove(id: string, currentUser: User): Promise<void> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator can delete (or admin)
-    if (pass.createdById !== currentUser.id && currentUser.role === 'resident') {
+    // Only creator or host resident can delete (or admin)
+    if (
+      pass.createdById !== currentUser.id &&
+      pass.residentId !== currentUser.id &&
+      currentUser.role === 'resident'
+    ) {
       throw new ForbiddenException('You can only delete your own visitor passes');
     }
 
@@ -341,7 +394,10 @@ export class VisitorPassService {
     }
 
     if (currentUser.role === 'resident') {
-      queryBuilder.andWhere('pass.createdById = :userId', { userId: currentUser.id });
+      queryBuilder.andWhere(
+        '(pass.createdById = :userId OR pass.residentId = :userId)',
+        { userId: currentUser.id },
+      );
     }
 
     const passes = await queryBuilder.getMany();

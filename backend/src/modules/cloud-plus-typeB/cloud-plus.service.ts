@@ -8,6 +8,7 @@ import { Gate, GateState } from '@database/entities/gate.entity';
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
+import { User, UserStatus } from '@database/entities/user.entity';
 import {
   AccessEvent,
   AccessMethod,
@@ -44,6 +45,8 @@ export class CloudPlusService {
     private visitorPassRepository: Repository<VisitorPass>,
     @InjectRepository(AccessEvent)
     private accessEventRepository: Repository<AccessEvent>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private gatewayService: GatewayService,
   ) {}
 
@@ -368,6 +371,7 @@ export class CloudPlusService {
         subjectType: 'vehicle',
         subjectId: vehicle.id,
         subjectIdentifier: rfidUid,
+        residentId: vehicle.ownerId,
         denialReason: 'Not yet valid',
       };
     }
@@ -380,6 +384,7 @@ export class CloudPlusService {
         subjectType: 'vehicle',
         subjectId: vehicle.id,
         subjectIdentifier: rfidUid,
+        residentId: vehicle.ownerId,
         denialReason: 'Access expired',
       };
     }
@@ -392,6 +397,7 @@ export class CloudPlusService {
       subjectType: 'vehicle',
       subjectId: vehicle.id,
       subjectIdentifier: rfidUid,
+      residentId: vehicle.ownerId,
     };
   }
 
@@ -408,6 +414,7 @@ export class CloudPlusService {
         subjectType: 'rfid_card',
         subjectId: rfidCard.id,
         subjectIdentifier: rfidUid,
+        residentId: rfidCard.userId,
         denialReason: 'Not yet valid',
       };
     }
@@ -420,6 +427,7 @@ export class CloudPlusService {
         subjectType: 'rfid_card',
         subjectId: rfidCard.id,
         subjectIdentifier: rfidUid,
+        residentId: rfidCard.userId,
         denialReason: 'Card expired',
       };
     }
@@ -432,17 +440,76 @@ export class CloudPlusService {
       subjectType: 'rfid_card',
       subjectId: rfidCard.id,
       subjectIdentifier: rfidUid,
+      residentId: rfidCard.userId,
     };
   }
 
   /**
-   * Validate QR code against visitor passes
+   * Validate QR code against user QR codes and visitor passes
    */
   private async validateQrCode(
     tenantId: string,
     qrToken: string,
     gate: Gate,
   ): Promise<ValidationResult> {
+    // Check if it's a user QR code (starts with "GR-")
+    if (qrToken.startsWith('GR-')) {
+      const user = await this.userRepository.findOne({
+        where: { qrCode: qrToken },
+      });
+
+      if (!user) {
+        return {
+          allowed: false,
+          name: 'Unknown',
+          info: 'Invalid user QR code',
+          subjectType: 'user',
+          subjectIdentifier: qrToken,
+          denialReason: 'Invalid user QR code',
+        };
+      }
+
+      // Check if user belongs to the same tenant as the gate
+      if (user.tenantId !== tenantId) {
+        return {
+          allowed: false,
+          name: `${user.firstName} ${user.lastName}`,
+          info: 'Access denied - wrong building',
+          subjectType: 'user',
+          subjectId: user.id,
+          subjectIdentifier: qrToken,
+          residentId: user.id,
+          denialReason: 'User does not belong to this building',
+        };
+      }
+
+      // Check user status
+      if (user.status !== UserStatus.ACTIVE) {
+        return {
+          allowed: false,
+          name: `${user.firstName} ${user.lastName}`,
+          info: `Account ${user.status}`,
+          subjectType: 'user',
+          subjectId: user.id,
+          subjectIdentifier: qrToken,
+          residentId: user.id,
+          denialReason: `User account is ${user.status}`,
+        };
+      }
+
+      // User QR code is valid
+      return {
+        allowed: true,
+        name: `${user.firstName} ${user.lastName}`,
+        info: user.unit ? `Unit ${user.unit}` : 'Welcome',
+        subjectType: 'user',
+        subjectId: user.id,
+        subjectIdentifier: qrToken,
+        residentId: user.id,
+      };
+    }
+
+    // Not a user QR code - check visitor passes
     const visitorPass = await this.visitorPassRepository.findOne({
       where: {
         tenantId,
@@ -473,6 +540,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
+        residentId: visitorPass.createdById,
         denialReason: 'Pass cancelled',
       };
     }
@@ -485,6 +553,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
+        residentId: visitorPass.createdById,
         denialReason: 'Pass expired',
       };
     }
@@ -498,6 +567,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
+        residentId: visitorPass.createdById,
         denialReason: 'Pass not yet valid',
       };
     }
@@ -514,6 +584,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
+        residentId: visitorPass.createdById,
         denialReason: 'Pass expired',
       };
     }
@@ -530,6 +601,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
+        residentId: visitorPass.createdById,
         denialReason: 'Pass already used',
       };
     }
@@ -550,6 +622,7 @@ export class CloudPlusService {
       subjectType: 'visitor_pass',
       subjectId: visitorPass.id,
       subjectIdentifier: qrToken,
+      residentId: visitorPass.createdById,
     };
   }
 
@@ -644,6 +717,7 @@ export class CloudPlusService {
       vehicle: AccessSubjectType.VEHICLE,
       rfid_card: AccessSubjectType.RFID_CARD,
       visitor_pass: AccessSubjectType.VISITOR_PASS,
+      user: AccessSubjectType.USER,
       unknown: AccessSubjectType.UNKNOWN,
     };
 
@@ -661,6 +735,7 @@ export class CloudPlusService {
       subjectId: result.subjectId,
       subjectIdentifier: result.subjectIdentifier,
       subjectName: result.name,
+      residentId: result.residentId,
       result: result.allowed ? AccessResult.ALLOWED : AccessResult.DENIED,
       denialReason: result.denialReason,
       metadata: {

@@ -18,6 +18,14 @@ import { User } from '@database/entities/user.entity';
 export class AccessEventsController {
   constructor(private readonly accessEventsService: AccessEventsService) {}
 
+  @Get('retention-days')
+  @ApiOperation({ summary: 'Get log retention days for current user subscription' })
+  @ApiResponse({ status: 200, description: 'Retention days', schema: { example: { days: 30 } } })
+  async getRetentionDays(@CurrentUser() user: User) {
+    const days = await this.accessEventsService.getLogRetentionDays(user);
+    return { days };
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get access events with filtering' })
   @ApiResponse({ status: 200, description: 'Paginated list of events' })

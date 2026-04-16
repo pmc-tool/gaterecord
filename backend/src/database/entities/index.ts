@@ -17,3 +17,5 @@ export * from './setup-code.entity';
 export * from './device-config.entity';
 export * from './firmware-version.entity';
 export * from './ota-update.entity';
+export * from './login-history.entity';
+export * from './password-reset-token.entity';

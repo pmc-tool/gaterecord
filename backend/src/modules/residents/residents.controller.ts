@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ResidentsService } from './residents.service';
-import { CreateResidentDto, UpdateResidentDto } from './dto/resident.dto';
+import { CreateResidentDto, UpdateResidentDto, ResidentQueryDto } from './dto/resident.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -28,9 +28,9 @@ export class ResidentsController {
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
-  @ApiOperation({ summary: 'Get all residents for current tenant' })
-  async findAll(@CurrentUser() user: User, @Query('tenantId') tenantId?: string) {
-    return this.residentsService.findAll(user, tenantId);
+  @ApiOperation({ summary: 'Get all residents with optional filtering and pagination' })
+  async findAll(@CurrentUser() user: User, @Query() query: ResidentQueryDto) {
+    return this.residentsService.findAll(user, query);
   }
 
   @Get(':id')

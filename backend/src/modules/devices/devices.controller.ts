@@ -10,6 +10,7 @@ import {
   Ip,
   UseGuards,
   Logger,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { DevicesService } from './devices.service';
@@ -25,6 +26,7 @@ import {
   UpdateDeviceDto,
   UpdateCheckResponseDto,
   CreateDeviceDto,
+  DeviceQueryDto,
 } from './dto/device.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
@@ -123,8 +125,8 @@ export class DevicesController {
   @Post()
   @ApiBearerAuth()
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Create a device directly (Super Admin only)' })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @ApiOperation({ summary: 'Create a device directly' })
   @ApiResponse({ status: 201, type: DeviceResponseDto })
   async createDevice(
     @Body() dto: CreateDeviceDto,
@@ -137,10 +139,10 @@ export class DevicesController {
   @ApiBearerAuth()
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
-  @ApiOperation({ summary: 'List all devices for tenant' })
-  @ApiResponse({ status: 200, type: [DeviceResponseDto] })
-  async getDevices(@CurrentUser() user: User): Promise<DeviceResponseDto[]> {
-    return this.devicesService.getDevices(user);
+  @ApiOperation({ summary: 'List all devices with optional filtering and pagination' })
+  @ApiResponse({ status: 200, description: 'List of devices with pagination' })
+  async getDevices(@Query() query: DeviceQueryDto, @CurrentUser() user: User) {
+    return this.devicesService.getDevices(user, query);
   }
 
   @Get(':id')

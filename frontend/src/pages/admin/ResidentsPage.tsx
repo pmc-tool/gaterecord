@@ -15,6 +15,8 @@ import {
   Badge,
   List,
   Empty,
+  Row,
+  Col,
 } from 'antd';
 import {
   PlusOutlined,
@@ -24,6 +26,7 @@ import {
   UserOutlined,
   CarOutlined,
   CreditCardOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import RfidRegistrationModal from '../../components/RfidRegistrationModal';
 import type { ColumnsType } from 'antd/es/table';
@@ -64,6 +67,18 @@ export default function ResidentsPage() {
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
   const [form] = Form.useForm();
 
+  // Filter state
+  const [searchFilter, setSearchFilter] = useState('');
+  const [tenantFilter, setTenantFilter] = useState<string | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+
+  // Pagination state
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 10,
+    total: 0,
+  });
+
   // RFID Registration state
   const [rfidModalVisible, setRfidModalVisible] = useState(false);
   const [rfidTargetResident, setRfidTargetResident] = useState<Resident | null>(null);
@@ -73,11 +88,30 @@ export default function ResidentsPage() {
   const [selectedResidentForCards, setSelectedResidentForCards] = useState<Resident | null>(null);
   const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
 
-  const fetchResidents = async () => {
+  const fetchResidents = async (page = pagination.current, pageSize = pagination.pageSize) => {
     setLoading(true);
     try {
-      const response = await api.get('/residents');
-      setResidents(response.data);
+      const params: Record<string, unknown> = {
+        page,
+        limit: pageSize,
+      };
+      if (searchFilter) params.search = searchFilter;
+      if (tenantFilter) params.tenantId = tenantFilter;
+      if (statusFilter) params.status = statusFilter;
+
+      const response = await api.get('/residents', { params });
+      const data = response.data;
+      if (data.data) {
+        setResidents(data.data);
+        setPagination({
+          current: data.page || page,
+          pageSize: data.limit || pageSize,
+          total: data.total || 0,
+        });
+      } else {
+        setResidents(data);
+        setPagination((prev) => ({ ...prev, total: data.length }));
+      }
     } catch (error) {
       message.error('Failed to fetch residents');
     } finally {
@@ -85,10 +119,27 @@ export default function ResidentsPage() {
     }
   };
 
+  const handleApplyFilters = () => {
+    fetchResidents(1, pagination.pageSize);
+  };
+
+  const handleResetFilters = () => {
+    setSearchFilter('');
+    setTenantFilter(undefined);
+    setStatusFilter(undefined);
+    setPagination((prev) => ({ ...prev, current: 1 }));
+  };
+
+  useEffect(() => {
+    if (!searchFilter && !tenantFilter && !statusFilter) {
+      fetchResidents(1, pagination.pageSize);
+    }
+  }, [searchFilter, tenantFilter, statusFilter]);
+
   const fetchTenants = async () => {
     try {
       const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      setTenants(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch tenants');
     }
@@ -100,6 +151,7 @@ export default function ResidentsPage() {
     if (isSuperAdmin) {
       fetchTenants();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
   const handleCreate = () => {
@@ -308,11 +360,12 @@ export default function ResidentsPage() {
 
   return (
     <div>
+      <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 16 }}>Residents Management</h1>
       <Card
-        title="Residents Management"
+        title={null}
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchResidents}>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchResidents()}>
               Refresh
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
@@ -321,12 +374,72 @@ export default function ResidentsPage() {
           </Space>
         }
       >
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={24} sm={12} md={6}>
+            <Input
+              placeholder="Search by name or email"
+              prefix={<SearchOutlined />}
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              allowClear
+            />
+          </Col>
+          {isSuperAdmin && (
+            <Col xs={24} sm={12} md={6}>
+              <Select
+                placeholder="Filter by Building"
+                value={tenantFilter}
+                onChange={(value) => setTenantFilter(value)}
+                allowClear
+                style={{ width: '100%' }}
+              >
+                {tenants.map((tenant) => (
+                  <Select.Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Col>
+          )}
+          <Col xs={24} sm={12} md={6}>
+            <Select
+              placeholder="Filter by Status"
+              value={statusFilter}
+              onChange={(value) => setStatusFilter(value)}
+              allowClear
+              style={{ width: '100%' }}
+            >
+              <Select.Option value="active">Active</Select.Option>
+              <Select.Option value="inactive">Inactive</Select.Option>
+            </Select>
+          </Col>
+          <Col xs={24} sm={12} md={6}>
+            <Space>
+              <Button type="primary" onClick={handleApplyFilters}>
+                Apply
+              </Button>
+              <Button onClick={handleResetFilters}>Reset</Button>
+            </Space>
+          </Col>
+        </Row>
+
         <Table
           columns={columns}
           dataSource={residents}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          scroll={{ x: 800 }}
+          pagination={{
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} residents`,
+            onChange: (page, pageSize) => {
+              fetchResidents(page, pageSize);
+            },
+          }}
         />
       </Card>
 

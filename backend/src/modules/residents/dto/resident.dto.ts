@@ -1,5 +1,6 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class CreateResidentDto {
   @ApiProperty()
@@ -76,4 +77,33 @@ export class UpdateResidentDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+}
+
+export class ResidentQueryDto {
+  @ApiPropertyOptional({ description: 'Search by name or email' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by tenant ID' })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status: active or inactive' })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'Page number', default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Items per page', default: 10 })
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsNumber()
+  limit?: number;
 }

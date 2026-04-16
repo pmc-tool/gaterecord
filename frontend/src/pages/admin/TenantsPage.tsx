@@ -14,6 +14,9 @@ import {
   Popconfirm,
   Tooltip,
   Descriptions,
+  Row,
+  Col,
+  DatePicker,
 } from 'antd';
 import {
   PlusOutlined,
@@ -63,12 +66,25 @@ export default function TenantsPage() {
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
   const [form] = Form.useForm();
+  const [searchText, setSearchText] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [startDate, setStartDate] = useState<dayjs.Dayjs | null>(null);
+  const [endDate, setEndDate] = useState<dayjs.Dayjs | null>(null);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0 });
 
-  const fetchTenants = async () => {
+  const fetchTenants = async (page = 1, limit = 10, search?: string, status?: string, start?: string, end?: string) => {
     setLoading(true);
     try {
-      const response = await api.get('/admin/tenants');
-      setTenants(response.data);
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      if (search) params.append('search', search);
+      if (status) params.append('status', status);
+      if (start) params.append('startDate', start);
+      if (end) params.append('endDate', end);
+      const response = await api.get(`/admin/tenants?${params.toString()}`);
+      setTenants(response.data.data);
+      setPagination({ page: response.data.page, limit: response.data.limit, total: response.data.total });
     } catch (error) {
       message.error('Failed to fetch tenants');
     } finally {
@@ -114,7 +130,7 @@ export default function TenantsPage() {
     try {
       await api.delete(`/admin/tenants/${id}`);
       message.success('Tenant deleted successfully');
-      fetchTenants();
+      fetchTenants(pagination.page, pagination.limit, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD'));
     } catch (error) {
       message.error('Failed to delete tenant');
     }
@@ -130,7 +146,7 @@ export default function TenantsPage() {
         message.success('Tenant created successfully');
       }
       setModalVisible(false);
-      fetchTenants();
+      fetchTenants(pagination.page, pagination.limit, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD'));
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
       message.error(err.response?.data?.message || 'Failed to save tenant');
@@ -224,7 +240,7 @@ export default function TenantsPage() {
         title="Buildings / Tenants"
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchTenants}>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchTenants(pagination.page, pagination.limit, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD'))}>
               Refresh
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
@@ -233,12 +249,80 @@ export default function TenantsPage() {
           </Space>
         }
       >
+        <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+          <Row gutter={16} align="middle">
+            <Col>
+              <Input
+                placeholder="Search name, slug, email"
+                allowClear
+                className="w-52"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                className="w-36"
+                value={statusFilter}
+                onChange={(value) => setStatusFilter(value)}
+                options={[
+                  { label: 'Active', value: 'active' },
+                  { label: 'Suspended', value: 'suspended' },
+                  { label: 'Trial', value: 'trial' },
+                ]}
+              />
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="Start Date"
+                value={startDate}
+                onChange={(date) => setStartDate(date)}
+                allowClear
+              />
+            </Col>
+            <Col>
+              <DatePicker
+                placeholder="End Date"
+                value={endDate}
+                onChange={(date) => setEndDate(date)}
+                allowClear
+              />
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={() => fetchTenants(1, pagination.limit, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD'))}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setSearchText('');
+                  setStatusFilter(undefined);
+                  setStartDate(null);
+                  setEndDate(null);
+                  fetchTenants(1, pagination.limit, undefined, undefined, undefined, undefined);
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
         <Table
           columns={columns}
           dataSource={tenants}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          scroll={{ x: 900 }}
+          pagination={{
+            current: pagination.page,
+            pageSize: pagination.limit,
+            total: pagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} tenants`,
+            onChange: (page, pageSize) => fetchTenants(page, pageSize, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD')),
+          }}
         />
       </Card>
 

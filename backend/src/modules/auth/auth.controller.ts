@@ -13,6 +13,14 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto, RefreshTokenDto, SignupDto } from './dto/login.dto';
+import {
+  ForgotPasswordDto,
+  ForgotPasswordResponseDto,
+  VerifyOtpDto,
+  VerifyOtpResponseDto,
+  ResetPasswordDto,
+  ResetPasswordResponseDto,
+} from './dto/password-reset.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
@@ -83,8 +91,12 @@ export class AuthController {
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      phone: user.phone,
       role: user.role,
       tenantId: user.tenantId,
+      profileImageUrl: user.profileImageUrl,
+      qrCode: user.qrCode,
+      unit: user.unit,
       tenant: user.tenant
         ? {
             id: user.tenant.id,
@@ -151,5 +163,36 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'List of subscription plans' })
   async getPlans() {
     return this.authService.getSubscriptionPlans();
+  }
+
+  // Password Reset Endpoints
+
+  @Post('forgot-password')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request password reset OTP' })
+  @ApiResponse({ status: 200, description: 'OTP sent if email exists', type: ForgotPasswordResponseDto })
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<ForgotPasswordResponseDto> {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @Post('verify-otp')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP for password reset' })
+  @ApiResponse({ status: 200, description: 'OTP verified', type: VerifyOtpResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
+  async verifyOtp(@Body() dto: VerifyOtpDto): Promise<VerifyOtpResponseDto> {
+    return this.authService.verifyOtp(dto);
+  }
+
+  @Post('reset-password')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset password with verified token' })
+  @ApiResponse({ status: 200, description: 'Password reset successful', type: ResetPasswordResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid or expired token' })
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<ResetPasswordResponseDto> {
+    return this.authService.resetPassword(dto);
   }
 }

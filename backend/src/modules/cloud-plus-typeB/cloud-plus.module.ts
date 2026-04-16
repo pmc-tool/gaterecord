@@ -12,6 +12,7 @@ import { Vehicle } from '@database/entities/vehicle.entity';
 import { RfidCard } from '@database/entities/rfid-card.entity';
 import { VisitorPass } from '@database/entities/visitor-pass.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
+import { User } from '@database/entities/user.entity';
 
 /**
  * Cloud Plus TypeB Module
@@ -43,7 +44,7 @@ import { AccessEvent } from '@database/entities/access-event.entity';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DeviceConfig, Gate, Vehicle, RfidCard, VisitorPass, AccessEvent]),
+    TypeOrmModule.forFeature([DeviceConfig, Gate, Vehicle, RfidCard, VisitorPass, AccessEvent, User]),
     GatewayModule,
   ],
   controllers: [CloudPlusController],

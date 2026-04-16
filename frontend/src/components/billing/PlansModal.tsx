@@ -152,7 +152,7 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
                 Select the plan that best fits your needs
               </Text>
             </div>
-            <Button onClick={onClose}>Close</Button>
+            {/* <Button onClick={onClose}>Close</Button> */}
           </div>
 
           {loading ? (

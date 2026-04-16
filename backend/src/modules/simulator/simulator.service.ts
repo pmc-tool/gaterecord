@@ -29,7 +29,7 @@ import {
   AccessResult,
   AccessSubjectType,
 } from '@database/entities/access-event.entity';
-import { User, UserRole } from '@database/entities/user.entity';
+import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import {
   TriggerEventDto,
   SimulatorEvent,
@@ -37,6 +37,7 @@ import {
   UpdateSensorDto,
 } from './dto/simulator.dto';
 import { EmailService } from '../notification/email.service';
+import { NotificationService } from '../notification/notification.service';
 import { SecurityAlertService } from '../security-alert/security-alert.service';
 import { CloudPlusService } from '../cloud-plus-typeB/cloud-plus.service';
 
@@ -47,6 +48,7 @@ export class SimulatorService {
 
   constructor(
     private emailService: EmailService,
+    private notificationService: NotificationService,
     private securityAlertService: SecurityAlertService,
     private configService: ConfigService,
     @Inject(forwardRef(() => CloudPlusService))
@@ -156,6 +158,7 @@ export class SimulatorService {
         subjectId: vehicle.id,
         subjectIdentifier: rfidUid,
         subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
+        residentId: vehicle.ownerId,
         result: AccessResult.DENIED,
         denialReason: 'Vehicle not yet valid',
       });
@@ -179,6 +182,7 @@ export class SimulatorService {
         subjectId: vehicle.id,
         subjectIdentifier: rfidUid,
         subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
+        residentId: vehicle.ownerId,
         result: AccessResult.DENIED,
         denialReason: 'Vehicle access expired',
       });
@@ -202,6 +206,7 @@ export class SimulatorService {
       subjectId: vehicle.id,
       subjectIdentifier: rfidUid,
       subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
+      residentId: vehicle.ownerId,
       result: AccessResult.ALLOWED,
     });
 
@@ -445,6 +450,105 @@ export class SimulatorService {
     currentUser: User,
   ): Promise<SimulatorFeedbackDto> {
     const now = new Date();
+
+    // Check if it's a user QR code (starts with "GR-")
+    if (qrToken.startsWith('GR-')) {
+      const user = await this.userRepository.findOne({
+        where: { qrCode: qrToken },
+      });
+
+      if (!user) {
+        const event = await this.createAccessEvent(gate, {
+          method: AccessMethod.QR,
+          subjectType: AccessSubjectType.USER,
+          subjectIdentifier: qrToken,
+          result: AccessResult.DENIED,
+          denialReason: 'Invalid user QR code',
+        });
+
+        return {
+          gateId: gate.id,
+          action: SimulatorEvent.QR_VERIFIED,
+          success: false,
+          message: 'Access denied - Invalid user QR code',
+          gateState: gate.state,
+          eventId: event.id,
+        };
+      }
+
+      // Check if user belongs to the same tenant as the gate
+      if (user.tenantId !== gate.tenantId) {
+        const event = await this.createAccessEvent(gate, {
+          method: AccessMethod.QR,
+          subjectType: AccessSubjectType.USER,
+          subjectId: user.id,
+          subjectIdentifier: qrToken,
+          subjectName: `${user.firstName} ${user.lastName}`,
+          result: AccessResult.DENIED,
+          denialReason: 'User does not belong to this building',
+        });
+
+        return {
+          gateId: gate.id,
+          action: SimulatorEvent.QR_VERIFIED,
+          success: false,
+          message: 'Access denied - Wrong building',
+          gateState: gate.state,
+          eventId: event.id,
+        };
+      }
+
+      // Check user status
+      if (user.status !== UserStatus.ACTIVE) {
+        const event = await this.createAccessEvent(gate, {
+          method: AccessMethod.QR,
+          subjectType: AccessSubjectType.USER,
+          subjectId: user.id,
+          subjectIdentifier: qrToken,
+          subjectName: `${user.firstName} ${user.lastName}`,
+          result: AccessResult.DENIED,
+          denialReason: `User account is ${user.status}`,
+        });
+
+        return {
+          gateId: gate.id,
+          action: SimulatorEvent.QR_VERIFIED,
+          success: false,
+          message: `Access denied - Account ${user.status}`,
+          gateState: gate.state,
+          eventId: event.id,
+        };
+      }
+
+      // User QR code is valid - grant access
+      const event = await this.createAccessEvent(gate, {
+        method: AccessMethod.QR,
+        subjectType: AccessSubjectType.USER,
+        subjectId: user.id,
+        subjectIdentifier: qrToken,
+        subjectName: `${user.firstName} ${user.lastName}`,
+        result: AccessResult.ALLOWED,
+        metadata: {
+          userId: user.id,
+          userEmail: user.email,
+          userRole: user.role,
+          unit: user.unit,
+        },
+      });
+
+      await this.transitionState(gate, GateState.OPENING);
+
+      return {
+        gateId: gate.id,
+        action: SimulatorEvent.QR_VERIFIED,
+        success: true,
+        message: `Access granted - ${user.firstName} ${user.lastName}${user.unit ? ` (Unit ${user.unit})` : ''}`,
+        gateState: GateState.OPENING,
+        eventId: event.id,
+      };
+    }
+
+    // Not a user QR code - check visitor passes
     const pass = await this.visitorPassRepository.findOne({
       where: {
         tenantId: gate.tenantId,
@@ -599,15 +703,19 @@ export class SimulatorService {
 
     const buildingName = pass.tenant?.name || gate.tenant?.name || 'the building';
 
-    await this.emailService.sendVisitorEntryNotification(
-      resident.email,
-      `${resident.firstName} ${resident.lastName}`,
+    // Create database notification for resident
+    await this.notificationService.notifyVisitorEntry(
+      resident.id,
       pass.visitorName,
-      buildingName,
       gate.name,
-      accessEvent.timestamp,
-      accessEvent.id,
-      reportUrl,
+      {
+        eventId: accessEvent.id,
+        gateId: gate.id,
+        gateName: gate.name,
+        visitorName: pass.visitorName,
+        visitorPassId: pass.id,
+        link: `/access-log?id=${accessEvent.id}`,
+      },
     );
 
     this.logger.log(`Visitor entry notification sent to ${resident.email}`);

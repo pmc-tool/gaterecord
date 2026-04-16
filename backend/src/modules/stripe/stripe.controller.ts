@@ -510,16 +510,19 @@ export class AdminStripeController {
    */
   @Get('payments')
   async getAllPayments(@Req() req: any) {
-    const { page, limit, tenantId, status, type, startDate, endDate } = req.query;
+    const { page, limit, tenantId, planId, status, type, billingCycle, startDate, endDate, search } = req.query;
 
     const result = await this.stripeService.getAllPayments({
       page: parseInt(page) || 1,
       limit: parseInt(limit) || 20,
       tenantId,
+      planId,
       status,
       transactionType: type,
+      billingCycle,
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
+      searchTerm: search,
     });
 
     return {
@@ -556,6 +559,154 @@ export class AdminStripeController {
     return {
       success: true,
       ...result,
+    };
+  }
+
+  // ==================== Advanced Payment Analytics ====================
+
+  /**
+   * Get revenue breakdown by billing cycle (monthly vs yearly)
+   * GET /api/v1/admin/stripe/revenue-by-billing-cycle
+   *
+   * Query params: startDate, endDate, tenantId
+   */
+  @Get('revenue-by-billing-cycle')
+  async getRevenueByBillingCycle(@Req() req: any) {
+    const { startDate, endDate, tenantId } = req.query;
+
+    const data = await this.stripeService.getRevenueByBillingCycle({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      tenantId,
+    });
+
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  /**
+   * Get revenue for a specific date range with daily breakdown
+   * GET /api/v1/admin/stripe/revenue-by-date-range
+   *
+   * Query params: startDate (required), endDate (required), tenantId, billingCycle
+   */
+  @Get('revenue-by-date-range')
+  async getRevenueByDateRange(@Req() req: any) {
+    const { startDate, endDate, tenantId, billingCycle } = req.query;
+
+    if (!startDate || !endDate) {
+      return {
+        success: false,
+        error: 'startDate and endDate are required',
+      };
+    }
+
+    const data = await this.stripeService.getRevenueByDateRange(
+      new Date(startDate),
+      new Date(endDate),
+      { tenantId, billingCycle },
+    );
+
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  /**
+   * Get revenue breakdown by plan
+   * GET /api/v1/admin/stripe/revenue-by-plan
+   *
+   * Query params: startDate, endDate
+   */
+  @Get('revenue-by-plan')
+  async getRevenueByPlan(@Req() req: any) {
+    const { startDate, endDate } = req.query;
+
+    const data = await this.stripeService.getRevenueByPlan({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  /**
+   * Advanced payment search with multiple filters
+   * GET /api/v1/admin/stripe/payments/search
+   *
+   * Query params: page, limit, tenantId, planId, status, type, billingCycle,
+   *               paymentType, minAmount, maxAmount, startDate, endDate,
+   *               searchTerm, sortBy, sortOrder
+   */
+  @Get('payments/search')
+  async searchPayments(@Req() req: any) {
+    const {
+      page,
+      limit,
+      tenantId,
+      planId,
+      status,
+      type,
+      billingCycle,
+      paymentType,
+      minAmount,
+      maxAmount,
+      startDate,
+      endDate,
+      searchTerm,
+      sortBy,
+      sortOrder,
+    } = req.query;
+
+    const result = await this.stripeService.searchPayments({
+      page: page ? parseInt(page) : undefined,
+      limit: limit ? parseInt(limit) : undefined,
+      tenantId,
+      planId,
+      status: status ? (status.includes(',') ? status.split(',') : status) : undefined,
+      transactionType: type ? (type.includes(',') ? type.split(',') : type) : undefined,
+      billingCycle,
+      paymentType,
+      minAmount: minAmount ? parseFloat(minAmount) : undefined,
+      maxAmount: maxAmount ? parseFloat(maxAmount) : undefined,
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      searchTerm,
+      sortBy,
+      sortOrder,
+    });
+
+    return {
+      success: true,
+      ...result,
+    };
+  }
+
+  /**
+   * Get transaction status breakdown
+   * GET /api/v1/admin/stripe/transaction-status-breakdown
+   *
+   * Query params: startDate, endDate, tenantId
+   */
+  @Get('transaction-status-breakdown')
+  async getTransactionStatusBreakdown(@Req() req: any) {
+    const { startDate, endDate, tenantId } = req.query;
+
+    const data = await this.stripeService.getTransactionStatusBreakdown({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      tenantId,
+    });
+
+    return {
+      success: true,
+      data,
     };
   }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import {
   Row,
   Col,
@@ -31,13 +31,21 @@ import {
   CameraOutlined,
   CloseOutlined,
   VideoCameraOutlined,
+  BankOutlined,
 } from '@ant-design/icons';
 import { Html5Qrcode } from 'html5-qrcode';
 import { useGateStore } from '../../store/gateStore';
+import { useAuthStore } from '../../store/authStore';
 import { simulatorService, TriggerEventDto } from '../../services/simulator.service';
 import { socketService } from '../../services/socket.service';
 import { GateState, SimulatorEvent, SimulatorFeedback, SensorHealthStatus } from '../../types';
 import api from '../../services/api';
+
+interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+}
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -61,6 +69,13 @@ interface EventLog {
 
 export function GateSimulatorPage() {
   const { gates, fetchGates, selectedGate, fetchGateById, gateHealth, fetchGateHealth, updateGateState } = useGateStore();
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'super_admin';
+  
+  // Tenant selection state (for Super Admin)
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  
   const [selectedGateId, setSelectedGateId] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDoor, setSelectedDoor] = useState<number>(0);
@@ -80,9 +95,39 @@ export function GateSimulatorPage() {
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scannerContainerId = 'qr-scanner-container';
 
+  // Filter gates by selected tenant for Super Admin
+  const filteredGates = useMemo(() => {
+    if (!isSuperAdmin) return gates;
+    if (!selectedTenantId) return [];
+    return gates.filter((g) => g.tenantId === selectedTenantId);
+  }, [gates, selectedTenantId, isSuperAdmin]);
+
+  // Fetch tenants for Super Admin
+  const fetchTenants = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get('/admin/tenants');
+      setTenants(response.data.data || response.data);
+    } catch (error) {
+      console.error('Failed to fetch tenants', error);
+    }
+  }, [isSuperAdmin]);
+
   useEffect(() => {
     fetchGates();
-  }, []);
+    if (isSuperAdmin) {
+      fetchTenants();
+    }
+  }, [isSuperAdmin, fetchTenants]);
+
+  // Reset gate selection when tenant changes
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setSelectedGateId(null);
+      setSelectedDeviceId(null);
+      setSelectedDoor(0);
+    }
+  }, [selectedTenantId, isSuperAdmin]);
 
   useEffect(() => {
     if (selectedGateId) {
@@ -360,16 +405,54 @@ export function GateSimulatorPage() {
         {/* Gate Selection and Status */}
         <Col xs={24} lg={8}>
           <Card title="Gate Selection" className="mb-4">
-            <Select
-              placeholder="Select a gate"
-              value={selectedGateId}
-              onChange={setSelectedGateId}
-              className="w-full"
-              options={gates.map((g) => ({
-                value: g.id,
-                label: `${g.name} (${g.type})`,
-              }))}
-            />
+            <Space direction="vertical" className="w-full" size="middle">
+              {/* Tenant/Building Selection for Super Admin */}
+              {isSuperAdmin && (
+                <div>
+                  <Text type="secondary" className="text-xs mb-1 block">
+                    <BankOutlined className="mr-1" />
+                    Select Building
+                  </Text>
+                  <Select
+                    placeholder="Select a building"
+                    value={selectedTenantId}
+                    onChange={setSelectedTenantId}
+                    className="w-full"
+                    showSearch
+                    optionFilterProp="label"
+                    options={tenants.map((t) => ({
+                      value: t.id,
+                      label: t.name,
+                    }))}
+                  />
+                </div>
+              )}
+              
+              {/* Gate Selection */}
+              <div>
+                {isSuperAdmin && (
+                  <Text type="secondary" className="text-xs mb-1 block">
+                    Select Gate
+                  </Text>
+                )}
+                <Select
+                  placeholder={isSuperAdmin && !selectedTenantId ? "Select building first" : "Select a gate"}
+                  value={selectedGateId}
+                  onChange={setSelectedGateId}
+                  className="w-full"
+                  disabled={isSuperAdmin && !selectedTenantId}
+                  notFoundContent={
+                    isSuperAdmin && selectedTenantId && filteredGates.length === 0 
+                      ? "No gates found for this building" 
+                      : "No gates found"
+                  }
+                  options={filteredGates.map((g) => ({
+                    value: g.id,
+                    label: `${g.name} (${g.type})`,
+                  }))}
+                />
+              </div>
+            </Space>
           </Card>
 
           {selectedGate && (
@@ -390,7 +473,7 @@ export function GateSimulatorPage() {
                       {selectedGate.state}
                     </Tag>
                   </div>
-                  <Divider className="my-2" />
+                  {/* <Divider className="my-2" />
                   <div className="flex justify-between items-center">
                     <Text>Online Status:</Text>
                     <Switch
@@ -399,11 +482,11 @@ export function GateSimulatorPage() {
                       checkedChildren={<WifiOutlined />}
                       unCheckedChildren={<ApiOutlined />}
                     />
-                  </div>
+                  </div> */}
                 </Space>
               </Card>
 
-              <Card title="Sensor Health" size="small">
+              {/* <Card title="Sensor Health" size="small">
                 {gateHealth?.sensors?.map((sensor) => (
                   <div key={sensor.sensorType} className="flex justify-between items-center py-1">
                     <Text className="text-xs">{sensor.sensorType.replace(/_/g, ' ')}</Text>
@@ -419,7 +502,7 @@ export function GateSimulatorPage() {
                     />
                   </div>
                 ))}
-              </Card>
+              </Card> */}
             </>
           )}
         </Col>

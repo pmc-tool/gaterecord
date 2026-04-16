@@ -7,10 +7,11 @@ export class CreateUserDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ example: 'Password123!' })
+  @ApiPropertyOptional({ example: 'Password123!', description: 'If not provided, a temporary password will be generated and emailed to user' })
   @IsString()
   @MinLength(8)
-  password: string;
+  @IsOptional()
+  password?: string;
 
   @ApiProperty({ example: 'John' })
   @IsString()
@@ -80,9 +81,51 @@ export class UserResponseDto {
   @ApiPropertyOptional()
   unit?: string;
 
+  @ApiPropertyOptional()
+  profileImageUrl?: string;
+
   @ApiProperty()
   createdAt: Date;
 
   @ApiProperty()
   updatedAt: Date;
+}
+
+export class UpdateProfileDto {
+  @ApiPropertyOptional({ example: 'John' })
+  @IsString()
+  @IsOptional()
+  firstName?: string;
+
+  @ApiPropertyOptional({ example: 'Doe' })
+  @IsString()
+  @IsOptional()
+  lastName?: string;
+
+  @ApiPropertyOptional({ example: '+1234567890' })
+  @IsString()
+  @IsOptional()
+  phone?: string;
+}
+
+export class UserQueryDto {
+  @ApiPropertyOptional({ description: 'Search by name or email' })
+  @IsString()
+  @IsOptional()
+  search?: string;
+
+  @ApiPropertyOptional({ enum: UserRole, description: 'Filter by role' })
+  @IsEnum(UserRole)
+  @IsOptional()
+  role?: UserRole;
+
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
+  @ApiPropertyOptional({ enum: UserStatus, description: 'Filter by status' })
+  @IsEnum(UserStatus)
+  @IsOptional()
+  status?: UserStatus;
 }

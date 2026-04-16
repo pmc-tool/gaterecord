@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
+import { Tenant } from '@database/entities/tenant.entity';
 import { CreateResidentDto, UpdateResidentDto } from './dto/resident.dto';
 import * as bcrypt from 'bcrypt';
 
@@ -15,10 +16,16 @@ export class ResidentsService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
   ) {}
 
-  async findAll(currentUser: User, tenantId?: string): Promise<User[]> {
-    const query = this.userRepository
+  async findAll(currentUser: User, query: { search?: string; tenantId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: User[]; total: number; page: number; limit: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.userRepository
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.tenant', 'tenant')
       .leftJoinAndSelect('user.vehicles', 'vehicles')
@@ -28,18 +35,37 @@ export class ResidentsService {
     // Tenant isolation
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       // Super admin can filter by specific tenant if provided
-      if (tenantId) {
-        query.andWhere('user.tenantId = :tenantId', { tenantId });
+      if (query.tenantId) {
+        qb.andWhere('user.tenantId = :tenantId', { tenantId: query.tenantId });
       }
     } else {
       // Non-super-admins can only see their own tenant's residents
       if (!currentUser.tenantId) {
         throw new ForbiddenException('User must belong to a tenant');
       }
-      query.andWhere('user.tenantId = :tenantId', { tenantId: currentUser.tenantId });
+      qb.andWhere('user.tenantId = :tenantId', { tenantId: currentUser.tenantId });
     }
 
-    return query.orderBy('user.createdAt', 'DESC').getMany();
+    // Search by name or email
+    if (query.search) {
+      qb.andWhere(
+        '(LOWER(user.firstName) LIKE LOWER(:search) OR LOWER(user.lastName) LIKE LOWER(:search) OR LOWER(user.email) LIKE LOWER(:search))',
+        { search: `%${query.search}%` }
+      );
+    }
+
+    // Filter by status
+    if (query.status) {
+      qb.andWhere('user.status = :status', { status: query.status });
+    }
+
+    const [data, total] = await qb
+      .orderBy('user.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, limit };
   }
 
   async findOne(id: string, currentUser: User): Promise<User> {
@@ -74,6 +100,30 @@ export class ResidentsService {
     // Validate tenantId is provided
     if (!createDto.tenantId) {
       throw new ForbiddenException('Tenant ID is required');
+    }
+
+    // Check user limit based on subscription plan
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: createDto.tenantId },
+      relations: ['subscriptionPlan'],
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    if (!tenant.subscriptionPlan) {
+      throw new ForbiddenException('No subscription plan found. Please subscribe to a plan first.');
+    }
+
+    const residentCount = await this.userRepository.count({
+      where: { tenantId: createDto.tenantId, role: UserRole.RESIDENT },
+    });
+
+    if (residentCount >= tenant.subscriptionPlan.maxUsers) {
+      throw new ForbiddenException(
+        `User limit reached. Your plan allows ${tenant.subscriptionPlan.maxUsers} users. Please upgrade your plan to add more users.`,
+      );
     }
 
     const existingUser = await this.userRepository.findOne({

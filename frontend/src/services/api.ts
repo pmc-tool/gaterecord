@@ -24,10 +24,17 @@ api.interceptors.request.use(
 // Response interceptor to handle token refresh
 api.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError) => {
+  async (error: AxiosError<{ message?: string }>) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
     if (error.response?.status === 401 && !originalRequest._retry) {
+      // Check if this is a login error (not a token expiry)
+      const isLoginError = originalRequest.url?.includes('/auth/login');
+      if (isLoginError) {
+        const message = error.response?.data?.message || 'Login failed';
+        return Promise.reject(new Error(message));
+      }
+
       originalRequest._retry = true;
 
       try {
@@ -56,7 +63,9 @@ api.interceptors.response.use(
       }
     }
 
-    return Promise.reject(error);
+    // Extract error message from response for other errors
+    const message = error.response?.data?.message || error.message || 'An error occurred';
+    return Promise.reject(new Error(message));
   }
 );
 

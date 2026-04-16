@@ -20,6 +20,11 @@ export enum UserStatus {
   PENDING = 'pending',
 }
 
+export interface NotificationSettings {
+  emailNotifications: boolean;    // Receive email notifications
+  inAppNotifications: boolean;    // Receive in-app (bell) notifications
+}
+
 @Entity('users')
 @Index(['email'], { unique: true })
 @Index(['tenantId', 'role'])
@@ -58,11 +63,17 @@ export class User extends BaseEntity {
   @Column({ name: 'profile_image_url', nullable: true })
   profileImageUrl: string;
 
+  @Column({ name: 'qr_code', unique: true, nullable: true })
+  qrCode: string;
+
   @Column({ name: 'last_login_at', nullable: true })
   lastLoginAt: Date;
 
   @Column({ name: 'must_change_password', default: false })
   mustChangePassword: boolean;
+
+  @Column({ name: 'notification_settings', type: 'jsonb', nullable: true })
+  notificationSettings: NotificationSettings;
 
   @OneToMany(() => Vehicle, (vehicle) => vehicle.owner)
   vehicles: Vehicle[];

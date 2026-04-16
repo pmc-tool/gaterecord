@@ -8,30 +8,61 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { User, UserRole } from '@database/entities/user.entity';
-import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import { Tenant } from '@database/entities/tenant.entity';
+import { CreateVehicleDto, UpdateVehicleDto, VehicleQueryDto } from './dto/vehicle.dto';
 
 @Injectable()
 export class VehiclesService {
   constructor(
     @InjectRepository(Vehicle)
     private readonly vehicleRepository: Repository<Vehicle>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
   ) {}
 
-  async findAll(currentUser: User): Promise<Vehicle[]> {
-    const query = this.vehicleRepository
+  async findAll(currentUser: User, queryDto: VehicleQueryDto = {}): Promise<{ data: Vehicle[]; total: number; page: number; limit: number }> {
+    const page = queryDto.page || 1;
+    const limit = queryDto.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.vehicleRepository
       .createQueryBuilder('vehicle')
       .leftJoinAndSelect('vehicle.owner', 'owner')
       .leftJoinAndSelect('vehicle.tenant', 'tenant');
 
     // Tenant isolation - non-super-admins can only see their own tenant's vehicles
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      // Super admin can filter by specific tenant if provided
+      if (queryDto.tenantId) {
+        qb.where('vehicle.tenantId = :tenantId', { tenantId: queryDto.tenantId });
+      }
+    } else {
       if (!currentUser.tenantId) {
         throw new ForbiddenException('User must belong to a tenant');
       }
-      query.where('vehicle.tenantId = :tenantId', { tenantId: currentUser.tenantId });
+      qb.where('vehicle.tenantId = :tenantId', { tenantId: currentUser.tenantId });
     }
 
-    return query.orderBy('vehicle.createdAt', 'DESC').getMany();
+    // Search by plate number or owner name
+    if (queryDto.search) {
+      qb.andWhere(
+        '(LOWER(vehicle.licensePlate) LIKE LOWER(:search) OR LOWER(owner.firstName) LIKE LOWER(:search) OR LOWER(owner.lastName) LIKE LOWER(:search))',
+        { search: `%${queryDto.search}%` }
+      );
+    }
+
+    // Filter by status
+    if (queryDto.status) {
+      qb.andWhere('vehicle.status = :status', { status: queryDto.status });
+    }
+
+    const [data, total] = await qb
+      .orderBy('vehicle.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, limit };
   }
 
   async findOne(id: string, currentUser: User): Promise<Vehicle> {
@@ -73,6 +104,30 @@ export class VehiclesService {
     // Validate tenantId is provided
     if (!createDto.tenantId) {
       throw new ForbiddenException('Tenant ID is required');
+    }
+
+    // Check vehicle limit based on subscription plan
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: createDto.tenantId },
+      relations: ['subscriptionPlan'],
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    if (!tenant.subscriptionPlan) {
+      throw new ForbiddenException('No subscription plan found. Please subscribe to a plan first.');
+    }
+
+    const vehicleCount = await this.vehicleRepository.count({
+      where: { tenantId: createDto.tenantId },
+    });
+
+    if (vehicleCount >= tenant.subscriptionPlan.maxVehicles) {
+      throw new ForbiddenException(
+        `Vehicle limit reached. Your plan allows ${tenant.subscriptionPlan.maxVehicles} vehicles. Please upgrade your plan to add more vehicles.`,
+      );
     }
 
     const existingRfid = await this.vehicleRepository.findOne({

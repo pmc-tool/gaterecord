@@ -42,11 +42,10 @@ import {
   UndoOutlined,
   GiftOutlined,
   BarChartOutlined,
-  SearchOutlined,
-  FilterOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import dayjs from 'dayjs';
+import api from '../../services/api';
 import {
   adminBillingService,
   Payment,
@@ -55,7 +54,19 @@ import {
 } from '../../services/billing.service';
 
 const { Title, Text, Paragraph } = Typography;
-const { RangePicker } = DatePicker;
+
+// Types for tenant and plan dropdowns
+interface TenantOption {
+  id: string;
+  name: string;
+  status: string;
+  subscriptionStatus: string;
+}
+
+interface PlanOption {
+  id: string;
+  name: string;
+}
 
 export default function PaymentsAdminPage() {
   const [loading, setLoading] = useState(true);
@@ -65,10 +76,18 @@ export default function PaymentsAdminPage() {
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20 });
   const [filters, setFilters] = useState<{
     tenantId?: string;
+    planId?: string;
     status?: string;
-    dateRange?: [dayjs.Dayjs, dayjs.Dayjs];
+    type?: string;
+    billingCycle?: string;
+    startDate?: dayjs.Dayjs;
+    endDate?: dayjs.Dayjs;
   }>({});
   const [revenueData, setRevenueData] = useState<{ month: string; revenue: number }[]>([]);
+  
+  // Dropdown options
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
 
   // Modal states
   const [refundModalOpen, setRefundModalOpen] = useState(false);
@@ -97,17 +116,47 @@ export default function PaymentsAdminPage() {
         page,
         limit: pageSize,
         tenantId: filters.tenantId,
+        planId: filters.planId,
         status: filters.status,
-        startDate: filters.dateRange?.[0]?.toISOString(),
-        endDate: filters.dateRange?.[1]?.toISOString(),
+        type: filters.type,
+        billingCycle: filters.billingCycle,
+        startDate: filters.startDate?.startOf('day').toISOString(),
+        endDate: filters.endDate?.endOf('day').toISOString(),
       });
-      setPayments(data.payments);
-      setPaymentsTotal(data.total);
+      setPayments(data.payments || []);
+      setPaymentsTotal(data.total || 0);
       setPagination({ current: page, pageSize });
-    } catch {
+    } catch (err) {
+      console.error('Failed to load payments:', err);
       message.error('Failed to load payments');
+      setPayments([]);
+      setPaymentsTotal(0);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchTenants = async () => {
+    try {
+      const response = await api.get('/admin/tenants');
+      const data = response.data.data || response.data || [];
+      // Filter to only show tenants with active subscriptions
+      const activeTenants = data.filter(
+        (t: TenantOption) => t.subscriptionStatus === 'active'
+      );
+      setTenants(activeTenants);
+    } catch (err) {
+      console.error('Failed to fetch tenants:', err);
+    }
+  };
+
+  const fetchPlans = async () => {
+    try {
+      const response = await api.get('/admin/plans');
+      const data = response.data.data || response.data || [];
+      setPlans(data);
+    } catch (err) {
+      console.error('Failed to fetch plans:', err);
     }
   };
 
@@ -121,7 +170,7 @@ export default function PaymentsAdminPage() {
   };
 
   useEffect(() => {
-    Promise.all([fetchFinancialOverview(), fetchPayments(), fetchRevenueData()]);
+    Promise.all([fetchFinancialOverview(), fetchPayments(), fetchRevenueData(), fetchTenants(), fetchPlans()]);
   }, []);
 
   useEffect(() => {
@@ -193,20 +242,40 @@ export default function PaymentsAdminPage() {
       title: 'Date',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      render: (date: string) => dayjs(date).format('MMM D, YYYY HH:mm'),
-      width: 160,
+      render: (date: string) => (
+        <div>
+          <div className="font-medium">{dayjs(date).format('MMM D, YYYY')}</div>
+          <div className="text-xs text-gray-500">{dayjs(date).format('HH:mm')}</div>
+        </div>
+      ),
+      width: 120,
       sorter: (a, b) => dayjs(a.createdAt).unix() - dayjs(b.createdAt).unix(),
+      defaultSortOrder: 'descend',
     },
     {
       title: 'Tenant',
-      dataIndex: 'tenantId',
-      key: 'tenantId',
-      width: 120,
-      ellipsis: true,
-      render: (tenantId: string) => (
-        <Tooltip title={tenantId}>
-          <Text code className="text-xs">{tenantId.slice(0, 8)}...</Text>
-        </Tooltip>
+      key: 'tenant',
+      width: 180,
+      render: (_, record: Payment) => (
+        <div>
+          <div className="font-medium">{record.tenant?.name || 'Unknown'}</div>
+          <Text type="secondary" className="text-xs">{record.tenantId?.slice(0, 8)}...</Text>
+        </div>
+      ),
+    },
+    {
+      title: 'Plan',
+      key: 'plan',
+      width: 140,
+      render: (_, record: Payment) => (
+        <div>
+          <div>{record.subscriptionPlan?.name || '-'}</div>
+          {record.billingCycle && (
+            <Tag color={record.billingCycle === 'yearly' ? 'purple' : 'blue'} className="text-xs">
+              {record.billingCycle}
+            </Tag>
+          )}
+        </div>
       ),
     },
     {
@@ -216,81 +285,107 @@ export default function PaymentsAdminPage() {
       width: 100,
       render: (type: string) => {
         const colors: Record<string, string> = {
-          charge: 'blue',
+          charge: 'green',
           refund: 'red',
-          credit: 'green',
+          credit: 'blue',
           chargeback: 'orange',
           adjustment: 'purple',
         };
-        return <Tag color={colors[type] || 'default'}>{type}</Tag>;
+        const icons: Record<string, string> = {
+          charge: '+',
+          refund: '−',
+          credit: '★',
+          chargeback: '!',
+          adjustment: '↔',
+        };
+        return (
+          <Tag color={colors[type] || 'default'}>
+            {icons[type]} {type.toUpperCase()}
+          </Tag>
+        );
       },
-      filters: [
-        { text: 'Charge', value: 'charge' },
-        { text: 'Refund', value: 'refund' },
-        { text: 'Credit', value: 'credit' },
-      ],
     },
     {
       title: 'Description',
       dataIndex: 'description',
       key: 'description',
       ellipsis: true,
+      width: 200,
+      render: (desc: string, record: Payment) => (
+        <div>
+          <div className="truncate">{desc || `${record.paymentType || 'Payment'}`}</div>
+          {record.paymentMethodLast4 && (
+            <Text type="secondary" className="text-xs">
+              {record.paymentMethodBrand} •••• {record.paymentMethodLast4}
+            </Text>
+          )}
+        </div>
+      ),
     },
     {
       title: 'Amount',
       dataIndex: 'amount',
       key: 'amount',
-      width: 100,
+      width: 110,
       align: 'right',
       render: (amount: number, record: Payment) => (
-        <Text
-          strong
-          style={{
-            color: record.transactionType === 'refund' ? '#ff4d4f' : '#52c41a',
-          }}
-        >
-          {record.transactionType === 'refund' ? '-' : '+'}${amount.toFixed(2)}
-        </Text>
+        <div className="text-right">
+          <div
+            className="font-bold"
+            style={{
+              color: record.transactionType === 'refund' || record.transactionType === 'chargeback' ? '#ff4d4f' : '#52c41a',
+            }}
+          >
+            {record.transactionType === 'refund' || record.transactionType === 'chargeback' ? '-' : '+'}
+            ${(amount || 0).toFixed(2)}
+          </div>
+          {record.feeAmount && record.feeAmount > 0 && (
+            <Text type="secondary" className="text-xs">
+              Fee: ${record.feeAmount.toFixed(2)}
+            </Text>
+          )}
+        </div>
       ),
-      sorter: (a, b) => a.amount - b.amount,
+      sorter: (a, b) => (a.amount || 0) - (b.amount || 0),
     },
     {
       title: 'Net',
       key: 'netAmount',
-      width: 100,
+      width: 90,
       align: 'right',
-      render: (_, record: Payment) => (
-        <Text type="secondary">
-          ${(record.netAmount || record.amount - (record.feeAmount || 0)).toFixed(2)}
-        </Text>
-      ),
+      render: (_, record: Payment) => {
+        const net = record.netAmount || (record.amount || 0) - (record.feeAmount || 0);
+        return (
+          <Text type="secondary" className="font-medium">
+            ${net.toFixed(2)}
+          </Text>
+        );
+      },
     },
     {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 110,
       render: (status: string) => {
-        const colors: Record<string, string> = {
-          succeeded: 'green',
-          pending: 'orange',
-          failed: 'red',
-          refunded: 'purple',
-          partially_refunded: 'gold',
+        const config: Record<string, { color: string; text: string }> = {
+          succeeded: { color: 'green', text: 'Succeeded' },
+          pending: { color: 'orange', text: 'Pending' },
+          failed: { color: 'red', text: 'Failed' },
+          refunded: { color: 'purple', text: 'Refunded' },
+          partially_refunded: { color: 'gold', text: 'Partial Refund' },
+          canceled: { color: 'default', text: 'Canceled' },
+          disputed: { color: 'red', text: 'Disputed' },
         };
-        return <Tag color={colors[status] || 'default'}>{status.replace('_', ' ')}</Tag>;
+        const { color, text } = config[status] || { color: 'default', text: status };
+        return <Tag color={color}>{text}</Tag>;
       },
-      filters: [
-        { text: 'Succeeded', value: 'succeeded' },
-        { text: 'Pending', value: 'pending' },
-        { text: 'Failed', value: 'failed' },
-        { text: 'Refunded', value: 'refunded' },
-      ],
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 150,
+      width: 100,
+      fixed: 'right',
       render: (_, record: Payment) => (
         <Space>
           <Tooltip title="Issue Refund">
@@ -377,7 +472,7 @@ export default function PaymentsAdminPage() {
         </Button>
       </div>
 
-      {/* Financial Overview Cards */}
+      {/* Commented out: Financial Overview Cards
       <Row gutter={[16, 16]} className="mb-6">
         <Col xs={12} sm={8} lg={4}>
           <Card>
@@ -444,9 +539,10 @@ export default function PaymentsAdminPage() {
           </Card>
         </Col>
       </Row>
+      */}
 
+      {/* Commented out: Revenue Growth and Revenue Trend sections
       <Row gutter={[16, 16]} className="mb-6">
-        {/* Revenue Growth */}
         <Col xs={24} lg={8}>
           <Card size="small">
             <div className="flex items-center justify-between">
@@ -470,75 +566,166 @@ export default function PaymentsAdminPage() {
           </Card>
         </Col>
 
-        {/* Revenue Trend */}
         <Col xs={24} lg={16}>
           <Card title="Revenue Trend (Last 6 Months)" size="small">
             {renderRevenueChart()}
           </Card>
         </Col>
       </Row>
+      */}
 
       {/* Filters */}
       <Card className="mb-4">
         <div className="flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2">
-            <FilterOutlined />
-            <Text strong>Filters:</Text>
-          </div>
-          <Input
-            placeholder="Tenant ID"
-            prefix={<SearchOutlined />}
-            className="w-48"
+          <Select
+            placeholder="Select Tenant"
+            className="w-52"
             allowClear
-            onChange={(e) => setFilters((f) => ({ ...f, tenantId: e.target.value || undefined }))}
+            showSearch
+            optionFilterProp="label"
+            value={filters.tenantId}
+            onChange={(value) => setFilters((f) => ({ ...f, tenantId: value }))}
+            options={tenants.map((t) => ({
+              label: t.name,
+              value: t.id,
+            }))}
+          />
+          <Select
+            placeholder="Select Plan"
+            className="w-40"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            value={filters.planId}
+            onChange={(value) => setFilters((f) => ({ ...f, planId: value }))}
+            options={plans.map((p) => ({
+              label: p.name,
+              value: p.id,
+            }))}
+          />
+          <Select
+            placeholder="Transaction Type"
+            className="w-40"
+            allowClear
+            value={filters.type}
+            onChange={(value) => setFilters((f) => ({ ...f, type: value }))}
+            options={[
+              { label: '+ Charge', value: 'charge' },
+              { label: '− Refund', value: 'refund' },
+              { label: '★ Credit', value: 'credit' },
+              { label: '! Chargeback', value: 'chargeback' },
+            ]}
           />
           <Select
             placeholder="Status"
             className="w-36"
             allowClear
+            value={filters.status}
             onChange={(value) => setFilters((f) => ({ ...f, status: value }))}
             options={[
-              { label: 'Succeeded', value: 'succeeded' },
-              { label: 'Pending', value: 'pending' },
-              { label: 'Failed', value: 'failed' },
-              { label: 'Refunded', value: 'refunded' },
+              { label: '✓ Succeeded', value: 'succeeded' },
+              { label: '◷ Pending', value: 'pending' },
+              { label: '✗ Failed', value: 'failed' },
+              { label: '↩ Refunded', value: 'refunded' },
+              { label: '! Disputed', value: 'disputed' },
             ]}
           />
-          <RangePicker
-            onChange={(dates) =>
-              setFilters((f) => ({
-                ...f,
-                dateRange: dates as [dayjs.Dayjs, dayjs.Dayjs] | undefined,
-              }))
-            }
+          <Select
+            placeholder="Billing Cycle"
+            className="w-32"
+            allowClear
+            value={filters.billingCycle}
+            onChange={(value) => setFilters((f) => ({ ...f, billingCycle: value }))}
+            options={[
+              { label: 'Monthly', value: 'monthly' },
+              { label: 'Yearly', value: 'yearly' },
+            ]}
           />
-          <Button
-            onClick={() => {
-              setFilters({});
-            }}
-          >
-            Clear Filters
-          </Button>
+          <DatePicker
+            placeholder="Start Date"
+            value={filters.startDate}
+            onChange={(date) => setFilters((f) => ({ ...f, startDate: date || undefined }))}
+            allowClear
+          />
+          <DatePicker
+            placeholder="End Date"
+            value={filters.endDate}
+            onChange={(date) => setFilters((f) => ({ ...f, endDate: date || undefined }))}
+            allowClear
+          />
+          <Space>
+            <Button
+              type="primary"
+              onClick={() => fetchPayments(1, pagination.pageSize)}
+            >
+              Apply
+            </Button>
+            <Button
+              onClick={() => {
+                setFilters({});
+                setPagination((p) => ({ ...p, current: 1 }));
+              }}
+            >
+              Reset
+            </Button>
+          </Space>
         </div>
       </Card>
 
       {/* Payments Table */}
-      <Card title="All Payments">
+      <Card 
+        title={
+          <div className="flex items-center justify-between">
+            <Space>
+              <DollarOutlined />
+              <span>All Payments</span>
+              {/* <Tag color="blue">{paymentsTotal} total</Tag> */}
+            </Space>
+          </div>
+        }
+        // extra={
+        //   <Button
+        //     size="small"
+        //     icon={<ReloadOutlined />}
+        //     onClick={() => fetchPayments(pagination.current, pagination.pageSize)}
+        //     loading={loading}
+        //   >
+        //     Refresh
+        //   </Button>
+        // }
+      >
         <Table
           columns={columns}
           dataSource={payments}
           rowKey="id"
           loading={loading}
           pagination={{
-            ...pagination,
+            current: pagination.current,
+            pageSize: pagination.pageSize,
             total: paymentsTotal,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} payments`,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} payments`,
           }}
           onChange={handleTableChange}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1200 }}
+          size="middle"
           locale={{
-            emptyText: <Empty description="No payments found" />,
+            emptyText: (
+              <Empty 
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <div className="py-4">
+                    <p className="text-gray-500 mb-2">No payments found</p>
+                    <p className="text-xs text-gray-400">
+                      Payments are recorded automatically when Stripe webhooks are received.
+                      <br />
+                      Make sure your Stripe webhook endpoint is configured correctly.
+                    </p>
+                  </div>
+                }
+              />
+            ),
           }}
         />
       </Card>

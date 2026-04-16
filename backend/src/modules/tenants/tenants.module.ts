@@ -7,9 +7,10 @@ import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { User } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
+import { Payment } from '@database/entities/payment.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Tenant, SubscriptionPlan, User, Gate, AccessEvent])],
+  imports: [TypeOrmModule.forFeature([Tenant, SubscriptionPlan, User, Gate, AccessEvent, Payment])],
   controllers: [TenantsController],
   providers: [TenantsService],
   exports: [TenantsService],

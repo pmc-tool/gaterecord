@@ -1,8 +1,9 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { Repository, Between, MoreThanOrEqual, LessThanOrEqual, SelectQueryBuilder } from 'typeorm';
 import { AccessEvent, AccessResult } from '@database/entities/access-event.entity';
 import { User, UserRole } from '@database/entities/user.entity';
+import { Tenant } from '@database/entities/tenant.entity';
 import { AccessEventQueryDto, AccessEventStatsDto } from './dto/access-event.dto';
 
 @Injectable()
@@ -10,12 +11,61 @@ export class AccessEventsService {
   constructor(
     @InjectRepository(AccessEvent)
     private accessEventRepository: Repository<AccessEvent>,
+    @InjectRepository(Tenant)
+    private tenantRepository: Repository<Tenant>,
   ) {}
+
+  /**
+   * Apply role-based access control filtering to access event queries
+   * - SUPER_ADMIN: All events across all tenants
+   * - BUILDING_ADMIN, SECURITY, STAFF: All events for their tenant
+   * - RESIDENT: Only events where they are the subject (residentId = user.id)
+   */
+  private applyRbacFilter(
+    qb: SelectQueryBuilder<AccessEvent>,
+    currentUser: User,
+    tenantIdFilter?: string,
+  ): void {
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      // Super admin can see all, optionally filter by tenant
+      if (tenantIdFilter) {
+        qb.andWhere('event.tenant_id = :tenantId', { tenantId: tenantIdFilter });
+      }
+    } else if (currentUser.role === UserRole.RESIDENT) {
+      // Residents can only see their own events
+      qb.andWhere('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+      qb.andWhere('event.resident_id = :residentId', { residentId: currentUser.id });
+    } else {
+      // BUILDING_ADMIN, SECURITY, STAFF: All tenant events
+      qb.andWhere('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+    }
+  }
+
+  /**
+   * Get log retention days for user's tenant subscription plan
+   */
+  async getLogRetentionDays(currentUser: User): Promise<number> {
+    // Super admin has unlimited access (return large number)
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      return 9999;
+    }
+
+    if (!currentUser.tenantId) {
+      return 30; // Default fallback
+    }
+
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: currentUser.tenantId },
+      relations: ['subscriptionPlan'],
+    });
+
+    return tenant?.subscriptionPlan?.logRetentionDays || 30;
+  }
 
   async findAll(
     query: AccessEventQueryDto,
     currentUser: User,
-  ): Promise<{ events: AccessEvent[]; total: number; page: number; limit: number }> {
+  ): Promise<{ events: AccessEvent[]; total: number; allowedCount: number; deniedCount: number; page: number; limit: number }> {
     const page = query.page || 1;
     const limit = Math.min(query.limit || 20, 100);
     const skip = (page - 1) * limit;
@@ -24,10 +74,8 @@ export class AccessEventsService {
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
 
-    // Tenant isolation
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
-    }
+    // Apply role-based access control
+    this.applyRbacFilter(qb, currentUser, query.tenantId);
 
     // Filters
     if (query.gateId) {
@@ -36,6 +84,10 @@ export class AccessEventsService {
 
     if (query.method) {
       qb.andWhere('event.method = :method', { method: query.method });
+    }
+
+    if (query.subjectType) {
+      qb.andWhere('event.subject_type = :subjectType', { subjectType: query.subjectType });
     }
 
     if (query.result) {
@@ -50,12 +102,26 @@ export class AccessEventsService {
       qb.andWhere('event.timestamp <= :endDate', { endDate: query.endDate });
     }
 
+    // Clone query builder for stats counts (before pagination)
+    const statsQb = qb.clone();
+
     // Ordering and pagination
     qb.orderBy('event.timestamp', 'DESC').skip(skip).take(limit);
 
     const [events, total] = await qb.getManyAndCount();
 
-    return { events, total, page, limit };
+    // Get allowed and denied counts for ALL matching records (without pagination)
+    const allowedCount = await statsQb
+      .clone()
+      .andWhere('event.result = :allowedResult', { allowedResult: 'allowed' })
+      .getCount();
+
+    const deniedCount = await statsQb
+      .clone()
+      .andWhere('event.result = :deniedResult', { deniedResult: 'denied' })
+      .getCount();
+
+    return { events, total, allowedCount, deniedCount, page, limit };
   }
 
   async getStats(
@@ -68,10 +134,8 @@ export class AccessEventsService {
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
 
-    // Tenant isolation
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
-    }
+    // Apply role-based access control
+    this.applyRbacFilter(qb, currentUser);
 
     qb.andWhere('event.timestamp BETWEEN :startDate AND :endDate', {
       startDate,
@@ -112,9 +176,8 @@ export class AccessEventsService {
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
 
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
-    }
+    // Apply role-based access control
+    this.applyRbacFilter(qb, currentUser);
 
     if (gateId) {
       qb.andWhere('event.gate_id = :gateId', { gateId });
@@ -124,13 +187,22 @@ export class AccessEventsService {
   }
 
   async exportToCsv(query: AccessEventQueryDto, currentUser: User): Promise<string> {
+    // Get retention days limit for non-super admin users
+    const retentionDays = await this.getLogRetentionDays(currentUser);
+    const retentionCutoff = new Date();
+    retentionCutoff.setDate(retentionCutoff.getDate() - retentionDays);
+
     // Get all matching events (no pagination for export)
     const qb = this.accessEventRepository
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
 
+    // Apply role-based access control
+    this.applyRbacFilter(qb, currentUser, query.tenantId);
+
+    // Apply retention days limit for non-super admins
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.where('event.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+      qb.andWhere('event.timestamp >= :retentionCutoff', { retentionCutoff });
     }
 
     if (query.gateId) {
@@ -139,6 +211,10 @@ export class AccessEventsService {
 
     if (query.method) {
       qb.andWhere('event.method = :method', { method: query.method });
+    }
+
+    if (query.subjectType) {
+      qb.andWhere('event.subject_type = :subjectType', { subjectType: query.subjectType });
     }
 
     if (query.result) {

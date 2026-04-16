@@ -14,6 +14,8 @@ import {
   Badge,
   Tooltip,
   Typography,
+  Row,
+  Col,
 } from 'antd';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
@@ -80,11 +82,21 @@ export default function GatesPage() {
   const [form] = Form.useForm();
   const { user } = useAuthStore();
   const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+  const [filters, setFilters] = useState({
+    tenantId: undefined as string | undefined,
+    type: undefined as string | undefined,
+    state: undefined as string | undefined,
+  });
 
   const fetchGates = async () => {
     setLoading(true);
     try {
-      const response = await api.get('/gates');
+      const params = new URLSearchParams();
+      if (filters.tenantId) params.append('tenantId', filters.tenantId);
+      if (filters.type) params.append('type', filters.type);
+      if (filters.state) params.append('state', filters.state);
+
+      const response = await api.get(`/gates?${params.toString()}`);
       setGates(response.data);
     } catch (error) {
       message.error('Failed to fetch gates');
@@ -97,7 +109,7 @@ export default function GatesPage() {
     try {
       if (isSuperAdmin) {
         const response = await api.get('/admin/tenants');
-        setTenants(response.data);
+        setTenants(response.data.data || response.data);
       } else if (user?.tenant) {
         // For building admin, use tenant from user profile
         setTenants([{ id: user.tenant.id, name: user.tenant.name }]);
@@ -110,7 +122,7 @@ export default function GatesPage() {
   const fetchDevices = async () => {
     try {
       const response = await api.get('/devices');
-      setDevices(response.data);
+      setDevices(response.data.data || response.data);
     } catch (error) {
       console.error('Failed to fetch devices');
     }
@@ -134,7 +146,7 @@ export default function GatesPage() {
     // Refresh devices and get latest list
     try {
       const response = await api.get('/devices');
-      const latestDevices = response.data as Device[];
+      const latestDevices = (response.data.data || response.data) as Device[];
       setDevices(latestDevices);
       // Find the first device linked to this gate (for the dropdown)
       const linkedDevice = latestDevices.find((d: Device) => d.gateId === gate.id);
@@ -204,9 +216,10 @@ export default function GatesPage() {
       fetchDevices(); // Refresh devices to get updated linkage
       fetchGates();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      const errorMsg = err.response?.data?.message || 'Failed to save gate';
-      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : errorMsg);
+      // API interceptor converts errors to plain Error with message
+      const err = error as Error & { response?: { data?: { message?: string | string[] } } };
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to save gate';
+      message.error(Array.isArray(errorMsg) ? errorMsg.join(', ') : String(errorMsg));
     }
   };
 
@@ -346,12 +359,82 @@ export default function GatesPage() {
           </Space>
         }
       >
+        <div className="mb-4">
+          <Row gutter={[16, 16]} align="middle">
+            {isSuperAdmin && (
+              <Col>
+                <Select
+                  placeholder="Select Tenant"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={filters.tenantId}
+                  onChange={(value) => setFilters({ ...filters, tenantId: value })}
+                  options={tenants.map(t => ({ value: t.id, label: t.name }))}
+                />
+              </Col>
+            )}
+            <Col>
+              <Select
+                placeholder="Type"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.type}
+                onChange={(value) => setFilters({ ...filters, type: value })}
+              >
+                <Select.Option value="vehicle">Vehicle</Select.Option>
+                <Select.Option value="pedestrian">Pedestrian</Select.Option>
+                <Select.Option value="mixed">Mixed</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Select
+                placeholder="Status"
+                allowClear
+                style={{ width: 150 }}
+                value={filters.state}
+                onChange={(value) => setFilters({ ...filters, state: value })}
+              >
+                <Select.Option value="CLOSED">Closed</Select.Option>
+                <Select.Option value="OPENING">Opening</Select.Option>
+                <Select.Option value="OPEN">Open</Select.Option>
+                <Select.Option value="CLOSING">Closing</Select.Option>
+                <Select.Option value="OBSTACLE_HOLD">Obstacle Hold</Select.Option>
+                <Select.Option value="FAULT">Fault</Select.Option>
+                <Select.Option value="MANUAL_OVERRIDE">Manual Override</Select.Option>
+              </Select>
+            </Col>
+            <Col>
+              <Space>
+                <Button type="primary" onClick={fetchGates}>
+                  Apply
+                </Button>
+                <Button onClick={() => {
+                  setFilters({
+                    tenantId: undefined,
+                    type: undefined,
+                    state: undefined,
+                  });
+                  fetchGates();
+                }}>
+                  Reset
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+        </div>
+
         <Table
           columns={columns}
           dataSource={gates}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          scroll={{ x: 700 }}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} gates`,
+          }}
         />
       </Card>
 

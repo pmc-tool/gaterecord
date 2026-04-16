@@ -1,8 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Spin } from 'antd';
 import { useAuthStore } from './store/authStore';
 import AppLayout from './components/layout/AppLayout';
 import LandingPage from './pages/landing/LandingPage';
 import LoginPage from './pages/login/LoginPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import VerifyOtpPage from './pages/auth/VerifyOtpPage';
+import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import GatesPage from './pages/gates/GatesPage';
 import GateSimulatorPage from './pages/gates/GateSimulatorPage';
@@ -23,9 +28,26 @@ import SignupPage from './pages/signup/SignupPage';
 import SignupSuccessPage from './pages/signup/SignupSuccessPage';
 import BillingSettingsPage from './pages/billing/BillingSettingsPage';
 import PaymentsAdminPage from './pages/admin/PaymentsAdminPage';
+import ProfilePage from './pages/profile/ProfilePage';
+import SettingsPage from './pages/settings/SettingsPage';
+import NotificationsPage from './pages/notifications/NotificationsPage';
+import PrivacyPage from './pages/static/Privacy';
+import TermsPage from './pages/static/Terms';
+import SecurityPage from './pages/static/Security';
+import AboutPage from './pages/static/About';
+import BlogPage from './pages/static/Blog';
+import ContactPage from './pages/static/Contact';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, isLoading } = useAuthStore();
+
+  if (isLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <Spin size="large" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
@@ -35,7 +57,28 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, checkAuth, tokens } = useAuthStore();
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Check auth and refresh user data on app mount
+  useEffect(() => {
+    const initAuth = async () => {
+      if (tokens) {
+        await checkAuth();
+      }
+      setIsInitialized(true);
+    };
+    initAuth();
+  }, []);
+
+  // Show loading while initializing
+  if (!isInitialized) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <Spin size="large" />
+      </div>
+    );
+  }
 
   return (
     <BrowserRouter>
@@ -47,6 +90,20 @@ function App() {
         <Route
           path="/login"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+        />
+
+        {/* Password Reset Flow */}
+        <Route
+          path="/forgot-password"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <ForgotPasswordPage />}
+        />
+        <Route
+          path="/verify-otp"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <VerifyOtpPage />}
+        />
+        <Route
+          path="/reset-password"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <ResetPasswordPage />}
         />
 
         {/* Signup */}
@@ -67,6 +124,14 @@ function App() {
         {/* Public report unauthorized page (no auth required - accessed via email link) */}
         <Route path="/report-unauthorized" element={<ReportUnauthorizedPage />} />
 
+        {/* Public legal pages */}
+        <Route path="/about" element={<AboutPage />} />
+        <Route path="/blog" element={<BlogPage />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/security" element={<SecurityPage />} />
+
         {/* Protected app routes */}
         <Route
           element={
@@ -76,6 +141,9 @@ function App() {
           }
         >
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="profile" element={<ProfilePage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
           <Route path="gates" element={<GatesPage />} />
           <Route path="simulator" element={<GateSimulatorPage />} />
           <Route path="events" element={<EventsPage />} />

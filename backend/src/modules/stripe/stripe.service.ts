@@ -1163,6 +1163,17 @@ export class StripeService implements OnModuleInit {
     tenant.subscriptionStartedAt = new Date();
     tenant.cancelAtPeriodEnd = false;
 
+    // Fetch subscription to get period end dates
+    if (session.subscription) {
+      try {
+        const subscription = await this.stripe.subscriptions.retrieve(session.subscription as string);
+        tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+        tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
+      } catch (err) {
+        this.logger.warn(`Could not retrieve subscription ${session.subscription}: ${err}`);
+      }
+    }
+
     await this.tenantRepository.save(tenant);
     this.logger.log(`Checkout completed for tenant ${tenant.name} - Plan: ${plan.name}`);
 
@@ -1223,6 +1234,17 @@ export class StripeService implements OnModuleInit {
       '-' +
       Date.now().toString(36);
 
+    // Fetch subscription to get period end dates
+    let currentPeriodEnd: Date | undefined;
+    if (session.subscription) {
+      try {
+        const subscription = await this.stripe.subscriptions.retrieve(session.subscription as string);
+        currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+      } catch (err) {
+        this.logger.warn(`Could not retrieve subscription ${session.subscription}: ${err}`);
+      }
+    }
+
     // Create tenant
     const tenant = this.tenantRepository.create({
       name: buildingName,
@@ -1237,6 +1259,8 @@ export class StripeService implements OnModuleInit {
       stripeSubscriptionId: session.subscription as string,
       subscriptionStatus: SubscriptionStatus.ACTIVE,
       subscriptionStartedAt: new Date(),
+      subscriptionExpiresAt: currentPeriodEnd,
+      currentPeriodEnd: currentPeriodEnd,
       cancelAtPeriodEnd: false,
       settings: {
         signupDate: new Date().toISOString(),
@@ -1297,6 +1321,10 @@ export class StripeService implements OnModuleInit {
         tenant.stripeSubscriptionId = subscription.id;
         tenant.subscriptionStatus = this.mapStripeStatus(subscription.status);
         tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+        tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
+        if (!tenant.subscriptionStartedAt) {
+          tenant.subscriptionStartedAt = new Date();
+        }
         await this.tenantRepository.save(tenant);
         this.logger.log(`Subscription created for tenant ${tenant.name}`);
       }
@@ -1309,6 +1337,10 @@ export class StripeService implements OnModuleInit {
     tenant.stripeSubscriptionId = subscription.id;
     tenant.subscriptionStatus = this.mapStripeStatus(subscription.status);
     tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+    tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
+    if (!tenant.subscriptionStartedAt) {
+      tenant.subscriptionStartedAt = new Date();
+    }
     await this.tenantRepository.save(tenant);
     this.logger.log(`Subscription created for tenant ${tenant.name}`);
   }
@@ -1329,6 +1361,7 @@ export class StripeService implements OnModuleInit {
     const previousStatus = tenant.subscriptionStatus;
     tenant.subscriptionStatus = this.mapStripeStatus(subscription.status);
     tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+    tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
     tenant.cancelAtPeriodEnd = subscription.cancel_at_period_end;
 
     // Update tenant status based on subscription
@@ -1706,14 +1739,82 @@ export class StripeService implements OnModuleInit {
             relations: ['tenant'],
           });
 
-          if (!retryUser || !retryUser.tenant) {
-            return {
-              success: false,
-              message: 'Account not yet created. Please wait a moment and try again.',
-            };
+          if (retryUser && retryUser.tenant) {
+            return { success: true, tenantId: retryUser.tenant.id };
           }
 
-          return { success: true, tenantId: retryUser.tenant.id };
+          // Fallback: Create account directly from session metadata
+          // This handles cases where webhook is delayed or failed
+          this.logger.log(`Webhook hasn't created account yet, creating from session metadata`);
+          
+          const metadata = session.metadata!;
+          const planId = metadata.planId;
+          const plan = await this.planRepository.findOne({ where: { id: planId } });
+          
+          if (!plan) {
+            return { success: false, message: 'Plan not found' };
+          }
+
+          const buildingName = metadata.buildingName;
+          const slug = buildingName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/(^-|-$)/g, '') + '-' + Date.now().toString(36);
+
+          // Get subscription period from Stripe
+          let currentPeriodEnd: Date | undefined;
+          if (session.subscription) {
+            try {
+              const stripeSubscription = typeof session.subscription === 'string' 
+                ? await this.stripe.subscriptions.retrieve(session.subscription)
+                : session.subscription;
+              currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
+            } catch (err) {
+              this.logger.warn(`Could not retrieve subscription: ${err}`);
+            }
+          }
+
+          // Create tenant
+          const tenant = this.tenantRepository.create({
+            name: buildingName,
+            slug,
+            contactEmail: email.toLowerCase(),
+            contactPhone: metadata.phone || '',
+            address: metadata.buildingAddress || '',
+            status: TenantStatus.ACTIVE,
+            subscriptionPlanId: plan.id,
+            billingCycle: (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY,
+            stripeCustomerId: session.customer as string,
+            stripeSubscriptionId: session.subscription as string,
+            subscriptionStatus: SubscriptionStatus.ACTIVE,
+            subscriptionStartedAt: new Date(),
+            subscriptionExpiresAt: currentPeriodEnd,
+            currentPeriodEnd: currentPeriodEnd,
+            cancelAtPeriodEnd: false,
+            settings: {
+              signupDate: new Date().toISOString(),
+              paidOnSignup: true,
+            },
+          });
+
+          const savedTenant = await this.tenantRepository.save(tenant);
+
+          // Create user
+          const newUser = this.userRepository.create({
+            email: email.toLowerCase(),
+            passwordHash: metadata.passwordHash,
+            firstName: metadata.firstName,
+            lastName: metadata.lastName,
+            phone: metadata.phone || '',
+            role: UserRole.BUILDING_ADMIN,
+            status: UserStatus.ACTIVE,
+            tenantId: savedTenant.id,
+          });
+
+          await this.userRepository.save(newUser);
+          this.logger.log(`Created account via verify-payment fallback: ${email}`);
+
+          return { success: true, tenantId: savedTenant.id };
         }
 
         return { success: true, tenantId: user.tenant.id };
@@ -2542,10 +2643,13 @@ export class StripeService implements OnModuleInit {
     page?: number;
     limit?: number;
     tenantId?: string;
+    planId?: string;
     status?: PaymentStatus;
     transactionType?: TransactionType;
+    billingCycle?: string;
     startDate?: Date;
     endDate?: Date;
+    searchTerm?: string;
   }): Promise<{ payments: Payment[]; total: number; page: number; totalPages: number }> {
     const page = options.page || 1;
     const limit = options.limit || 20;
@@ -2561,12 +2665,27 @@ export class StripeService implements OnModuleInit {
       query.andWhere('payment.tenantId = :tenantId', { tenantId: options.tenantId });
     }
 
+    if (options.planId) {
+      query.andWhere('payment.subscriptionPlanId = :planId', { planId: options.planId });
+    }
+
+    if (options.searchTerm) {
+      query.andWhere(
+        '(tenant.name ILIKE :search OR payment.customerEmail ILIKE :search OR payment.customerName ILIKE :search OR payment.description ILIKE :search)',
+        { search: `%${options.searchTerm}%` }
+      );
+    }
+
     if (options.status) {
       query.andWhere('payment.status = :status', { status: options.status });
     }
 
     if (options.transactionType) {
       query.andWhere('payment.transactionType = :type', { type: options.transactionType });
+    }
+
+    if (options.billingCycle) {
+      query.andWhere('payment.billingCycle = :billingCycle', { billingCycle: options.billingCycle });
     }
 
     if (options.startDate) {
@@ -2668,5 +2787,449 @@ export class StripeService implements OnModuleInit {
     });
 
     return { payments, total };
+  }
+
+  // ==================== Advanced Payment Analytics ====================
+
+  /**
+   * Get revenue breakdown by billing cycle (monthly vs yearly)
+   */
+  async getRevenueByBillingCycle(options?: {
+    startDate?: Date;
+    endDate?: Date;
+    tenantId?: string;
+  }): Promise<{
+    monthly: { revenue: number; count: number; refunds: number };
+    yearly: { revenue: number; count: number; refunds: number };
+    unknown: { revenue: number; count: number; refunds: number };
+    total: { revenue: number; count: number; refunds: number };
+  }> {
+    const baseQuery = this.paymentRepository.createQueryBuilder('payment');
+
+    if (options?.startDate) {
+      baseQuery.andWhere('payment.createdAt >= :startDate', { startDate: options.startDate });
+    }
+    if (options?.endDate) {
+      baseQuery.andWhere('payment.createdAt <= :endDate', { endDate: options.endDate });
+    }
+    if (options?.tenantId) {
+      baseQuery.andWhere('payment.tenantId = :tenantId', { tenantId: options.tenantId });
+    }
+
+    // Get revenue by billing cycle
+    const revenueResult = await baseQuery
+      .clone()
+      .select('payment.billingCycle', 'billingCycle')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'revenue')
+      .addSelect('COUNT(*)', 'count')
+      .where('payment.transactionType = :type', { type: TransactionType.CHARGE })
+      .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+      .groupBy('payment.billingCycle')
+      .getRawMany();
+
+    // Get refunds by billing cycle
+    const refundResult = await baseQuery
+      .clone()
+      .select('payment.billingCycle', 'billingCycle')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'refunds')
+      .where('payment.transactionType = :type', { type: TransactionType.REFUND })
+      .groupBy('payment.billingCycle')
+      .getRawMany();
+
+    // Map results
+    const revenueMap = new Map(revenueResult.map((r) => [r.billingCycle || 'unknown', r]));
+    const refundMap = new Map(refundResult.map((r) => [r.billingCycle || 'unknown', r]));
+
+    const monthly = {
+      revenue: parseFloat(revenueMap.get('monthly')?.revenue || '0'),
+      count: parseInt(revenueMap.get('monthly')?.count || '0'),
+      refunds: parseFloat(refundMap.get('monthly')?.refunds || '0'),
+    };
+
+    const yearly = {
+      revenue: parseFloat(revenueMap.get('yearly')?.revenue || '0'),
+      count: parseInt(revenueMap.get('yearly')?.count || '0'),
+      refunds: parseFloat(refundMap.get('yearly')?.refunds || '0'),
+    };
+
+    const unknown = {
+      revenue: parseFloat(revenueMap.get('unknown')?.revenue || '0'),
+      count: parseInt(revenueMap.get('unknown')?.count || '0'),
+      refunds: parseFloat(refundMap.get('unknown')?.refunds || '0'),
+    };
+
+    return {
+      monthly,
+      yearly,
+      unknown,
+      total: {
+        revenue: monthly.revenue + yearly.revenue + unknown.revenue,
+        count: monthly.count + yearly.count + unknown.count,
+        refunds: monthly.refunds + yearly.refunds + unknown.refunds,
+      },
+    };
+  }
+
+  /**
+   * Get revenue for a specific date range
+   */
+  async getRevenueByDateRange(
+    startDate: Date,
+    endDate: Date,
+    options?: { tenantId?: string; billingCycle?: string },
+  ): Promise<{
+    revenue: number;
+    refunds: number;
+    netRevenue: number;
+    transactionCount: number;
+    averageTransactionAmount: number;
+    dailyBreakdown: { date: string; revenue: number; refunds: number; count: number }[];
+  }> {
+    const baseQuery = this.paymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.createdAt >= :startDate', { startDate })
+      .andWhere('payment.createdAt <= :endDate', { endDate });
+
+    if (options?.tenantId) {
+      baseQuery.andWhere('payment.tenantId = :tenantId', { tenantId: options.tenantId });
+    }
+    if (options?.billingCycle) {
+      baseQuery.andWhere('payment.billingCycle = :billingCycle', { billingCycle: options.billingCycle });
+    }
+
+    // Get total revenue
+    const revenueResult = await baseQuery
+      .clone()
+      .andWhere('payment.transactionType = :type', { type: TransactionType.CHARGE })
+      .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+      .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
+      .addSelect('COUNT(*)', 'count')
+      .getRawOne();
+
+    // Get total refunds
+    const refundResult = await baseQuery
+      .clone()
+      .andWhere('payment.transactionType = :type', { type: TransactionType.REFUND })
+      .select('COALESCE(SUM(payment.amount), 0)', 'refunds')
+      .getRawOne();
+
+    // Get daily breakdown
+    const dailyQuery = await baseQuery
+      .clone()
+      .select("TO_CHAR(payment.createdAt, 'YYYY-MM-DD')", 'date')
+      .addSelect('payment.transactionType', 'type')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'amount')
+      .addSelect('COUNT(*)', 'count')
+      .andWhere('(payment.transactionType = :charge OR payment.transactionType = :refund)', {
+        charge: TransactionType.CHARGE,
+        refund: TransactionType.REFUND,
+      })
+      .groupBy("TO_CHAR(payment.createdAt, 'YYYY-MM-DD')")
+      .addGroupBy('payment.transactionType')
+      .orderBy("TO_CHAR(payment.createdAt, 'YYYY-MM-DD')", 'ASC')
+      .getRawMany();
+
+    // Aggregate daily breakdown
+    const dailyMap = new Map<string, { revenue: number; refunds: number; count: number }>();
+    dailyQuery.forEach((row) => {
+      if (!dailyMap.has(row.date)) {
+        dailyMap.set(row.date, { revenue: 0, refunds: 0, count: 0 });
+      }
+      const day = dailyMap.get(row.date)!;
+      if (row.type === TransactionType.CHARGE) {
+        day.revenue += parseFloat(row.amount);
+        day.count += parseInt(row.count);
+      } else if (row.type === TransactionType.REFUND) {
+        day.refunds += parseFloat(row.amount);
+      }
+    });
+
+    const dailyBreakdown = Array.from(dailyMap.entries()).map(([date, data]) => ({
+      date,
+      ...data,
+    }));
+
+    const revenue = parseFloat(revenueResult?.revenue || '0');
+    const refunds = parseFloat(refundResult?.refunds || '0');
+    const count = parseInt(revenueResult?.count || '0');
+
+    return {
+      revenue,
+      refunds,
+      netRevenue: revenue - refunds,
+      transactionCount: count,
+      averageTransactionAmount: count > 0 ? revenue / count : 0,
+      dailyBreakdown,
+    };
+  }
+
+  /**
+   * Get revenue by plan with lifetime stats
+   */
+  async getRevenueByPlan(options?: {
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<
+    {
+      planId: string;
+      planName: string;
+      monthlyRevenue: number;
+      yearlyRevenue: number;
+      totalRevenue: number;
+      monthlySubscriberCount: number;
+      yearlySubscriberCount: number;
+      refunds: number;
+      netRevenue: number;
+    }[]
+  > {
+    const plans = await this.planRepository.find({ where: { isActive: true } });
+
+    const results = await Promise.all(
+      plans.map(async (plan) => {
+        const baseQuery = this.paymentRepository
+          .createQueryBuilder('payment')
+          .where('payment.subscriptionPlanId = :planId', { planId: plan.id });
+
+        if (options?.startDate) {
+          baseQuery.andWhere('payment.createdAt >= :startDate', { startDate: options.startDate });
+        }
+        if (options?.endDate) {
+          baseQuery.andWhere('payment.createdAt <= :endDate', { endDate: options.endDate });
+        }
+
+        // Monthly revenue
+        const monthlyResult = await baseQuery
+          .clone()
+          .andWhere('payment.billingCycle = :cycle', { cycle: 'monthly' })
+          .andWhere('payment.transactionType = :type', { type: TransactionType.CHARGE })
+          .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+          .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
+          .addSelect('COUNT(DISTINCT payment.tenantId)', 'subscribers')
+          .getRawOne();
+
+        // Yearly revenue
+        const yearlyResult = await baseQuery
+          .clone()
+          .andWhere('payment.billingCycle = :cycle', { cycle: 'yearly' })
+          .andWhere('payment.transactionType = :type', { type: TransactionType.CHARGE })
+          .andWhere('payment.status = :status', { status: PaymentStatus.SUCCEEDED })
+          .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
+          .addSelect('COUNT(DISTINCT payment.tenantId)', 'subscribers')
+          .getRawOne();
+
+        // Refunds
+        const refundResult = await baseQuery
+          .clone()
+          .andWhere('payment.transactionType = :type', { type: TransactionType.REFUND })
+          .select('COALESCE(SUM(payment.amount), 0)', 'refunds')
+          .getRawOne();
+
+        const monthlyRevenue = parseFloat(monthlyResult?.revenue || '0');
+        const yearlyRevenue = parseFloat(yearlyResult?.revenue || '0');
+        const refunds = parseFloat(refundResult?.refunds || '0');
+
+        return {
+          planId: plan.id,
+          planName: plan.name,
+          monthlyRevenue,
+          yearlyRevenue,
+          totalRevenue: monthlyRevenue + yearlyRevenue,
+          monthlySubscriberCount: parseInt(monthlyResult?.subscribers || '0'),
+          yearlySubscriberCount: parseInt(yearlyResult?.subscribers || '0'),
+          refunds,
+          netRevenue: monthlyRevenue + yearlyRevenue - refunds,
+        };
+      }),
+    );
+
+    return results.sort((a, b) => b.totalRevenue - a.totalRevenue);
+  }
+
+  /**
+   * Advanced payment search with multiple filters
+   */
+  async searchPayments(filters: {
+    page?: number;
+    limit?: number;
+    tenantId?: string;
+    planId?: string;
+    status?: PaymentStatus | PaymentStatus[];
+    transactionType?: TransactionType | TransactionType[];
+    billingCycle?: string;
+    paymentType?: PaymentType;
+    minAmount?: number;
+    maxAmount?: number;
+    startDate?: Date;
+    endDate?: Date;
+    searchTerm?: string; // Search in customer name/email
+    sortBy?: 'createdAt' | 'amount' | 'status';
+    sortOrder?: 'ASC' | 'DESC';
+  }): Promise<{
+    payments: Payment[];
+    total: number;
+    page: number;
+    totalPages: number;
+    summary: {
+      totalAmount: number;
+      refundedAmount: number;
+      netAmount: number;
+    };
+  }> {
+    const page = filters.page || 1;
+    const limit = filters.limit || 20;
+    const skip = (page - 1) * limit;
+
+    const query = this.paymentRepository
+      .createQueryBuilder('payment')
+      .leftJoinAndSelect('payment.tenant', 'tenant')
+      .leftJoinAndSelect('payment.subscriptionPlan', 'plan');
+
+    // Apply filters
+    if (filters.tenantId) {
+      query.andWhere('payment.tenantId = :tenantId', { tenantId: filters.tenantId });
+    }
+
+    if (filters.planId) {
+      query.andWhere('payment.subscriptionPlanId = :planId', { planId: filters.planId });
+    }
+
+    if (filters.status) {
+      if (Array.isArray(filters.status)) {
+        query.andWhere('payment.status IN (:...statuses)', { statuses: filters.status });
+      } else {
+        query.andWhere('payment.status = :status', { status: filters.status });
+      }
+    }
+
+    if (filters.transactionType) {
+      if (Array.isArray(filters.transactionType)) {
+        query.andWhere('payment.transactionType IN (:...types)', { types: filters.transactionType });
+      } else {
+        query.andWhere('payment.transactionType = :type', { type: filters.transactionType });
+      }
+    }
+
+    if (filters.billingCycle) {
+      query.andWhere('payment.billingCycle = :billingCycle', { billingCycle: filters.billingCycle });
+    }
+
+    if (filters.paymentType) {
+      query.andWhere('payment.paymentType = :paymentType', { paymentType: filters.paymentType });
+    }
+
+    if (filters.minAmount !== undefined) {
+      query.andWhere('payment.amount >= :minAmount', { minAmount: filters.minAmount });
+    }
+
+    if (filters.maxAmount !== undefined) {
+      query.andWhere('payment.amount <= :maxAmount', { maxAmount: filters.maxAmount });
+    }
+
+    if (filters.startDate) {
+      query.andWhere('payment.createdAt >= :startDate', { startDate: filters.startDate });
+    }
+
+    if (filters.endDate) {
+      query.andWhere('payment.createdAt <= :endDate', { endDate: filters.endDate });
+    }
+
+    if (filters.searchTerm) {
+      query.andWhere(
+        '(payment.customerName ILIKE :search OR payment.customerEmail ILIKE :search OR tenant.name ILIKE :search)',
+        { search: `%${filters.searchTerm}%` },
+      );
+    }
+
+    // Sorting
+    const sortBy = filters.sortBy || 'createdAt';
+    const sortOrder = filters.sortOrder || 'DESC';
+    query.orderBy(`payment.${sortBy}`, sortOrder);
+
+    // Get paginated results
+    const [payments, total] = await query.skip(skip).take(limit).getManyAndCount();
+
+    // Calculate summary for filtered results
+    const summaryQuery = query.clone();
+    const chargeSum = await summaryQuery
+      .select('COALESCE(SUM(CASE WHEN payment.transactionType = :charge THEN payment.amount ELSE 0 END), 0)', 'charges')
+      .addSelect('COALESCE(SUM(CASE WHEN payment.transactionType = :refund THEN payment.amount ELSE 0 END), 0)', 'refunds')
+      .setParameter('charge', TransactionType.CHARGE)
+      .setParameter('refund', TransactionType.REFUND)
+      .getRawOne();
+
+    const totalAmount = parseFloat(chargeSum?.charges || '0');
+    const refundedAmount = parseFloat(chargeSum?.refunds || '0');
+
+    return {
+      payments,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+      summary: {
+        totalAmount,
+        refundedAmount,
+        netAmount: totalAmount - refundedAmount,
+      },
+    };
+  }
+
+  /**
+   * Get transaction status breakdown
+   */
+  async getTransactionStatusBreakdown(options?: {
+    startDate?: Date;
+    endDate?: Date;
+    tenantId?: string;
+  }): Promise<{
+    succeeded: { count: number; amount: number };
+    pending: { count: number; amount: number };
+    failed: { count: number; amount: number };
+    refunded: { count: number; amount: number };
+    disputed: { count: number; amount: number };
+    total: { count: number; amount: number };
+  }> {
+    const baseQuery = this.paymentRepository.createQueryBuilder('payment');
+
+    if (options?.startDate) {
+      baseQuery.andWhere('payment.createdAt >= :startDate', { startDate: options.startDate });
+    }
+    if (options?.endDate) {
+      baseQuery.andWhere('payment.createdAt <= :endDate', { endDate: options.endDate });
+    }
+    if (options?.tenantId) {
+      baseQuery.andWhere('payment.tenantId = :tenantId', { tenantId: options.tenantId });
+    }
+
+    const result = await baseQuery
+      .select('payment.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'amount')
+      .groupBy('payment.status')
+      .getRawMany();
+
+    const statusMap = new Map(result.map((r) => [r.status, r]));
+
+    const getStats = (status: PaymentStatus) => ({
+      count: parseInt(statusMap.get(status)?.count || '0'),
+      amount: parseFloat(statusMap.get(status)?.amount || '0'),
+    });
+
+    const succeeded = getStats(PaymentStatus.SUCCEEDED);
+    const pending = getStats(PaymentStatus.PENDING);
+    const failed = getStats(PaymentStatus.FAILED);
+    const refunded = getStats(PaymentStatus.REFUNDED);
+    const disputed = getStats(PaymentStatus.DISPUTED);
+
+    return {
+      succeeded,
+      pending,
+      failed,
+      refunded,
+      disputed,
+      total: {
+        count: succeeded.count + pending.count + failed.count + refunded.count + disputed.count,
+        amount: succeeded.amount + pending.amount + failed.amount + refunded.amount + disputed.amount,
+      },
+    };
   }
 }
