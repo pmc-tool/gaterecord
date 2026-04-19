@@ -43,15 +43,15 @@ export default function PasswordRequirements({ password }: PasswordRequirementsP
         <CheckCircleOutlined className="text-blue-500" />
         <Text strong className="text-gray-700">Password Requirements</Text>
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {requirements.map((req, index) => {
           const isMet = password ? req.test(password) : false;
           return (
             <div key={index} className="flex items-center gap-2">
               {isMet ? (
-                <CheckCircleOutlined className="text-green-500 text-sm" />
+                <CheckCircleOutlined className="text-green-500 text-sm flex-shrink-0" />
               ) : (
-                <CloseCircleOutlined className="text-gray-300 text-sm" />
+                <CloseCircleOutlined className="text-gray-300 text-sm flex-shrink-0" />
               )}
               <Text 
                 className={`text-sm ${isMet ? 'text-green-600' : 'text-gray-500'}`}

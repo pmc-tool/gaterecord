@@ -326,7 +326,7 @@ export default function VehiclesPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Register RFID Card">
             <Button
               icon={<CreditCardOutlined />}

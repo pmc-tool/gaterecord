@@ -25,6 +25,7 @@ import dayjs from 'dayjs';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
+import Title from 'antd/es/typography/Title';
 
 interface AccessEvent {
   id: string;
@@ -250,6 +251,13 @@ export default function EventsPage() {
 
   return (
     <div className="space-y-4">
+
+ {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Access Event Logs</Title>
+      </div>
+    
+
       <Row gutter={16}>
         <Col span={8}>
           <Card>
@@ -279,7 +287,6 @@ export default function EventsPage() {
       </Row>
 
       <Card
-        title="Access Event Logs"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchEvents}>

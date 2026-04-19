@@ -174,7 +174,8 @@ export function NotificationsPage() {
       title: 'Type',
       dataIndex: 'type',
       key: 'type',
-      width: 150,
+      width: 140,
+      // responsive: ['md'],
       render: (type: NotificationType) => (
         <Space>
           <span>{NOTIFICATION_TYPE_ICONS[type]}</span>
@@ -190,7 +191,8 @@ export function NotificationsPage() {
       title: 'Priority',
       dataIndex: 'priority',
       key: 'priority',
-      width: 100,
+      width: 90,
+      // responsive: ['lg'],
       render: (priority: NotificationPriority) => (
         <Tag color={PRIORITY_COLORS[priority]}>
           {priority.toUpperCase()}
@@ -201,11 +203,13 @@ export function NotificationsPage() {
       title: 'Title',
       dataIndex: 'title',
       key: 'title',
+      width: 160,
+      ellipsis: true,
       render: (title: string, record: Notification) => (
-        <div>
-          <Text strong={!record.isRead}>{title}</Text>
+        <div className="flex items-center gap-1 flex-wrap">
+          <Text strong={!record.isRead} className="whitespace-nowrap">{title}</Text>
           {!record.isRead && (
-            <Tag color="blue" className="ml-2">Unread</Tag>
+            <Tag color="blue" className="text-xs">Unread</Tag>
           )}
         </div>
       ),
@@ -214,38 +218,42 @@ export function NotificationsPage() {
       title: 'Message',
       dataIndex: 'message',
       key: 'message',
+      width: 200,
       ellipsis: true,
-      render: (message: string) => (
-        <Text type="secondary" className="text-sm">{message}</Text>
+      // responsive: ['sm'],
+      render: (msg: string) => (
+        <Text type="secondary" className="text-sm whitespace-nowrap overflow-hidden text-ellipsis block">{msg}</Text>
       ),
     },
     {
       title: 'Time',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      width: 180,
-      render: (date: string) => new Date(date).toLocaleString(),
+      width: 130,
+      render: (date: string) => (
+        <span className="whitespace-nowrap text-sm">
+          {new Date(date).toLocaleDateString()}
+        </span>
+      ),
       sorter: true,
       defaultSortOrder: 'descend',
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 80,
+      width: 60,
       render: (_, record: Notification) => (
-        <Space>
-          <Button
-            type="text"
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDelete(record.id);
-            }}
-            title="Delete"
-          />
-        </Space>
+        <Button
+          type="text"
+          size="small"
+          danger
+          icon={<DeleteOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDelete(record.id);
+          }}
+          title="Delete"
+        />
       ),
     },
   ];
@@ -254,7 +262,7 @@ export function NotificationsPage() {
     <div>
       <div className="flex justify-between items-center mb-6">
         <Title level={2} className="mb-0">
-          <BellOutlined className="mr-2" />
+          {/* <BellOutlined className="mr-2" /> */}
           Notifications
         </Title>
         <Space>
@@ -323,7 +331,8 @@ export function NotificationsPage() {
             loading={loading}
             pagination={pagination}
             onChange={handleTableChange}
-            scroll={{ x: 700 }}
+            scroll={{ x: 400 }}
+            size="small"
             onRow={(record) => ({
               onClick: () => handleRowClick(record),
               className: `cursor-pointer ${!record.isRead ? 'bg-blue-50' : ''}`,

@@ -21,9 +21,33 @@ body {
 /* ================================
    Responsive Table Utilities
    ================================ */
-/* Make Ant Design tables horizontally scrollable on mobile */
+/* 
+ * Responsive table design:
+ * - Desktop: All columns visible
+ * - Mobile: Horizontal scroll to see all columns (single scrollbar)
+ * - Pagination should not create additional scrollbar
+ */
+
+/* Main table wrapper - allows content to determine scroll */
 .ant-table-wrapper {
+  width: 100%;
+}
+
+/* Table container handles the horizontal scroll */
+.ant-table-container {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Table content scrolls when scroll prop is set */
+.ant-table-content {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Table body for fixed header tables */
+.ant-table-body {
+  overflow-x: auto !important;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -31,25 +55,51 @@ body {
   min-width: 100%;
 }
 
+/* Pagination: prevent horizontal overflow, wrap items */
+.ant-table-wrapper .ant-table-pagination {
+  flex-wrap: wrap;
+  max-width: 100%;
+  overflow-x: hidden;
+  padding: 16px 0;
+}
+
+/* Card body: clip horizontal overflow so only table scrolls */
+.ant-card-body {
+  overflow-x: clip;
+}
+
 @media (max-width: 768px) {
-  .ant-table-wrapper {
-    margin: 0 -8px;
-    padding: 0 8px;
+  /* Ensure smooth scrolling on mobile */
+  .ant-table-container,
+  .ant-table-content,
+  .ant-table-body {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
   }
   
-  .ant-table {
-    min-width: 600px;
-  }
-  
+  /* Compact padding for mobile */
   .ant-table-thead > tr > th,
   .ant-table-tbody > tr > td {
     padding: 8px 6px !important;
     font-size: 13px;
   }
   
-  /* Compact table cells on mobile */
+  /* Prevent text wrapping so columns maintain proper width */
   .ant-table-cell {
     white-space: nowrap;
+  }
+  
+  /* Ensure spin wrapper doesn't block scroll */
+  .ant-table-wrapper .ant-spin-nested-loading,
+  .ant-table-wrapper .ant-spin-container {
+    overflow: visible;
+  }
+  
+  /* Mobile-friendly pagination */
+  .ant-table-wrapper .ant-table-pagination {
+    justify-content: center;
+    gap: 4px;
   }
 }
 
@@ -418,4 +468,11 @@ body {
     margin: 0 !important;
     padding: 0 !important;
   }
+}
+
+/* Prevent actions column from wrapping on small devices */
+.actions-nowrap {
+  white-space: nowrap !important;
+  min-width: 120px;
+  max-width: 180px;
 }

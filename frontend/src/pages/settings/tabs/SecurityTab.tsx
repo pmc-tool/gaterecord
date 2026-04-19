@@ -162,13 +162,13 @@ export default function SecurityTab() {
                 <CheckCircleOutlined className="mr-2" />
                 Password Requirements
               </Text>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {passwordRequirements.map((req, index) => (
-                  <Space key={index} size="small">
+                  <Space key={index} size="small" className="flex-nowrap">
                     {req.met ? (
-                      <CheckCircleOutlined className="text-green-500" />
+                      <CheckCircleOutlined className="text-green-500 flex-shrink-0" />
                     ) : (
-                      <CloseCircleOutlined className="text-gray-400" />
+                      <CloseCircleOutlined className="text-gray-400 flex-shrink-0" />
                     )}
                     <Text type={req.met ? undefined : 'secondary'}>{req.label}</Text>
                   </Space>

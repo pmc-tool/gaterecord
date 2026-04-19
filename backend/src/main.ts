@@ -39,6 +39,9 @@ async function bootstrap() {
     'http://192.168.88.8:5174',
     'https://gaterecord.com',
     'https://www.gaterecord.com',
+    'https://dev.gaterecord.com',
+    'https://www.dev.gaterecord.com',
+
   ];
 
   app.enableCors({

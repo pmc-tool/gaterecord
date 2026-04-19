@@ -4,6 +4,7 @@ import { LockOutlined, BellOutlined, HistoryOutlined } from '@ant-design/icons';
 import SecurityTab from './tabs/SecurityTab';
 import NotificationsTab from './tabs/NotificationsTab';
 import LoginActivityTab from './tabs/LoginActivityTab';
+import './settings-tabs-scrollbar.css';
 
 const { Title } = Typography;
 
@@ -44,7 +45,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto px-2 sm:px-4 pb-8">
       <Title level={2} className="text-center mb-6">
         Settings
       </Title>
@@ -53,9 +54,10 @@ export default function SettingsPage() {
         activeKey={activeTab}
         onChange={setActiveTab}
         items={tabItems}
+        tabPosition="top"
         centered
         size="large"
-        className="settings-tabs"
+        className="settings-tabs-horizontal"
       />
     </div>
   );

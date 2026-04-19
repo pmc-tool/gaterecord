@@ -30,6 +30,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
+import Title from 'antd/es/typography/Title';
 
 interface GateDevice {
   id: string;
@@ -317,8 +318,10 @@ export default function GatesPage() {
     {
       title: 'Actions',
       key: 'actions',
+      width: 120,
+      className: 'actions-nowrap',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEdit(record)} />
           </Tooltip>
@@ -346,8 +349,12 @@ export default function GatesPage() {
 
   return (
     <div>
+       {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Gates Management</Title>
+      </div>
+    
       <Card
-        title="Gates Management"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchGates}>
