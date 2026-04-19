@@ -444,7 +444,7 @@ export function SecurityAlertsPage() {
               className={filters.status === 'acknowledged' ? 'border-2 border-orange-500' : ''}
             >
               <Statistic
-                title="Acknowledged"
+                title="Acknowledge"
                 value={stats.acknowledged}
                 valueStyle={{ color: '#faad14' }}
                 prefix={<BellOutlined />}

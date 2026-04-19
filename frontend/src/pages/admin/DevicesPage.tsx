@@ -658,7 +658,6 @@ export default function DevicesPage() {
 
       {/* Devices List */}
       <Card
-        title="Devices"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => fetchDevices(pagination.page, pagination.limit, searchText, filterTenantId, filterGateId, filterStatus)}>

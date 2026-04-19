@@ -21,9 +21,26 @@ body {
 /* ================================
    Responsive Table Utilities
    ================================ */
-/* Make Ant Design tables horizontally scrollable on mobile */
+/* 
+ * Fix for double horizontal scrollbar on small devices:
+ * - Table content scrolls horizontally (single scrollbar)
+ * - Pagination stays fixed width, no second scrollbar
+ */
+
+/* Wrapper should not create its own scrollbar - let table content handle it */
 .ant-table-wrapper {
-  overflow-x: auto;
+  overflow: visible;
+}
+
+/* Table content area is the ONLY scrollable area */
+.ant-table-wrapper .ant-table-content {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* For tables with fixed scroll prop */
+.ant-table-wrapper .ant-table-body {
+  overflow-x: auto !important;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -31,14 +48,30 @@ body {
   min-width: 100%;
 }
 
+/* Pagination should NOT overflow - stays within container bounds */
+.ant-table-wrapper .ant-table-pagination {
+  overflow: hidden;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+/* Prevent Card container from creating second scrollbar */
+.ant-card-body {
+  overflow-x: hidden;
+}
+
+/* Allow only the table content to scroll inside card */
+.ant-card-body .ant-table-content,
+.ant-card-body .ant-table-body {
+  overflow-x: auto !important;
+}
+
 @media (max-width: 768px) {
-  .ant-table-wrapper {
-    margin: 0 -8px;
-    padding: 0 8px;
-  }
-  
-  .ant-table {
-    min-width: 600px;
+  /* Ensure table scrolls properly on mobile */
+  .ant-table-wrapper .ant-table-content,
+  .ant-table-wrapper .ant-table-body {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
   }
   
   .ant-table-thead > tr > th,
@@ -47,9 +80,15 @@ body {
     font-size: 13px;
   }
   
-  /* Compact table cells on mobile */
+  /* Keep cells from wrapping to ensure columns maintain width */
   .ant-table-cell {
     white-space: nowrap;
+  }
+  
+  /* Prevent any wrapper from blocking table scroll */
+  .ant-table-wrapper .ant-spin-nested-loading,
+  .ant-table-wrapper .ant-spin-container {
+    overflow: visible;
   }
 }
 
