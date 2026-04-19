@@ -480,7 +480,7 @@ export default function DevicesPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="View Details">
             <Button
               icon={<DesktopOutlined />}
@@ -594,7 +594,7 @@ export default function DevicesPage() {
 
       {/* Stats Row */}
       <Row gutter={16}>
-        <Col span={6}>
+        <Col xs={24} sm={24} md={8}>
           <Card>
             <Statistic
               title="Total Devices"
@@ -603,7 +603,7 @@ export default function DevicesPage() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={24} sm={24} md={8}>
           <Card>
             <Statistic
               title="Online"
@@ -613,22 +613,13 @@ export default function DevicesPage() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={24} sm={24} md={8}>
           <Card>
             <Statistic
               title="Offline"
               value={offlineCount}
               valueStyle={{ color: offlineCount > 0 ? '#ff4d4f' : undefined }}
               prefix={<Badge status="error" />}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="Active Setup Codes"
-              value={setupCodes.length}
-              prefix={<QrcodeOutlined />}
             />
           </Card>
         </Col>

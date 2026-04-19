@@ -252,8 +252,8 @@ export default function LandingPage() {
       <header className="fixed inset-x-0 top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100">
         <nav className="flex items-center justify-between p-4 lg:px-8 max-w-7xl mx-auto">
           <div className="flex lg:flex-1">
-            <a href="#" className="-m-1.5 p-1.5">
-              <img src="/logo.png" alt="GateRecord" className="h-12 object-contain" />
+            <a href="/" className="-m-1.5 p-1.5">
+              <img src="/logo.svg" alt="Yaad GateRecord" className="h-12 object-contain" />
             </a>
           </div>
           <div className="flex lg:hidden">
@@ -305,7 +305,7 @@ export default function LandingPage() {
           <div className="absolute top-0 right-0 h-full w-full max-w-xs bg-white shadow-2xl flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <img src="/logo.png" alt="GateRecord" className="h-10 object-contain" />
+              <img src="/logo.svg" alt="GateRecord" className="h-10 object-contain" />
               <button
                 type="button"
                 className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -380,7 +380,7 @@ export default function LandingPage() {
                 </div> */}
               </div>
               <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl lg:text-7xl">
-                Smart Gate Access for{' '}
+                Yaad Smart Gate Access for{' '}
                 <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                   Modern Communities
                 </span>
@@ -785,7 +785,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 lg:gap-16">
             <div className="col-span-2 md:col-span-1">
               <div className="mb-4">
-                <img src="/logo.png" alt="GateRecord" className="h-12 object-contain" />
+                <img src="/logo.svg" alt="GateRecord" className="h-12 object-contain" />
               </div>
               <p className="text-gray-400 text-sm leading-relaxed">
                 Smart gate access control for modern communities. Secure, reliable, and easy to manage.

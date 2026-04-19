@@ -27,6 +27,7 @@ import type { ColumnsType } from 'antd/es/table';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
+import Title from 'antd/es/typography/Title';
 
 interface User {
   id: string;
@@ -211,7 +212,7 @@ export default function UsersPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEdit(record)} />
           </Tooltip>
@@ -239,8 +240,14 @@ export default function UsersPage() {
 
   return (
     <div>
+
+ {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Users Management</Title>
+      </div>
+
+
       <Card
-        title="Users Management"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchUsers}>

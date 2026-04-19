@@ -294,7 +294,7 @@ export default function PlansManagementPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Edit">
             <Button
               icon={<EditOutlined />}
@@ -333,17 +333,20 @@ export default function PlansManagementPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <Title level={3}>Subscription Plans</Title>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => fetchPlans(pagination.page, pagination.limit, statusFilter, searchText)}>
-            Refresh
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            Create Plan
-          </Button>
-        </Space>
       </div>
 
-      <Card>
+      <Card
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchPlans(pagination.page, pagination.limit, statusFilter, searchText)}>
+              Refresh
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+              Create Plan
+            </Button>
+          </Space>
+        }
+      >
         <div className="mb-4 p-4 bg-gray-50 rounded-lg">
           <Row gutter={16} align="middle">
             <Col>

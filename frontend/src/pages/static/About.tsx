@@ -26,7 +26,7 @@ export default function About() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.png" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"

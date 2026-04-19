@@ -1,0 +1,44 @@
+/* Force horizontal tabs in a single row */
+.settings-tabs-horizontal .ant-tabs-nav-list {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+}
+
+.settings-tabs-horizontal .ant-tabs-nav {
+  overflow-x: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.settings-tabs-horizontal .ant-tabs-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tabs-horizontal .ant-tabs-tab {
+  flex-shrink: 0;
+}
+
+/* Hide the "..." more dropdown button */
+.settings-tabs-horizontal .ant-tabs-nav-more,
+.settings-tabs-horizontal .ant-tabs-dropdown-trigger {
+  display: none !important;
+}
+
+/* Make tab nav wrapper scrollable */
+.settings-tabs-horizontal .ant-tabs-nav-wrap {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.settings-tabs-horizontal .ant-tabs-nav-wrap::-webkit-scrollbar {
+  display: none;
+}
+
+/* Remove overflow mask/fade effect */
+.settings-tabs-horizontal .ant-tabs-nav-wrap::before,
+.settings-tabs-horizontal .ant-tabs-nav-wrap::after {
+  display: none !important;
+}

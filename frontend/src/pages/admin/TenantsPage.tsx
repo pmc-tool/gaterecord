@@ -30,6 +30,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import api from '../../services/api';
+import Title from 'antd/es/typography/Title';
 
 interface SubscriptionPlan {
   id: string;
@@ -211,7 +212,7 @@ export default function TenantsPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="View Details">
             <Button icon={<EyeOutlined />} size="small" onClick={() => handleView(record)} />
           </Tooltip>
@@ -236,8 +237,14 @@ export default function TenantsPage() {
 
   return (
     <div>
+
+       {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Building Management</Title>
+      </div>  
+
+
       <Card
-        title="Buildings / Tenants"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => fetchTenants(pagination.page, pagination.limit, searchText, statusFilter, startDate?.format('YYYY-MM-DD'), endDate?.format('YYYY-MM-DD'))}>

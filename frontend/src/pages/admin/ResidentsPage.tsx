@@ -329,8 +329,10 @@ export default function ResidentsPage() {
     {
       title: 'Actions',
       key: 'actions',
+      width: 140,
+      className: 'actions-nowrap',
       render: (_, record) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Register RFID Card">
             <Button
               icon={<CreditCardOutlined />}

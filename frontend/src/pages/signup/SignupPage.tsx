@@ -340,7 +340,7 @@ export default function SignupPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center mb-4">
-            <img src="/logo.png" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
           </Link>
           <Title level={2} className="mb-2">Create Your Account</Title>
           <Text type="secondary">Set up your building's gate management system</Text>

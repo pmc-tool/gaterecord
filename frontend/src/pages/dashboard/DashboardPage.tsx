@@ -294,14 +294,14 @@ function SecurityAlertsDashboard() {
                 <Badge count={alerts.length} style={{ backgroundColor: '#ff4d4f' }} />
               )}
             </h3>
-            <p className="text-xs text-gray-500">Real-time security monitoring</p>
+            {/* <p className="text-xs text-gray-500">Real-time security monitoring</p> */}
           </div>
         </div>
         <Button onClick={() => navigate('/security-alerts')}>View All</Button>
       </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={12} sm={6}>
+         <Col xs={24} sm={12} lg={6}>
           <StatCard
             title="Active"
             value={stats?.active || 0}
@@ -310,7 +310,7 @@ function SecurityAlertsDashboard() {
             bgColor={(stats?.active || 0) > 0 ? 'bg-red-100' : 'bg-green-100'}
           />
         </Col>
-        <Col xs={12} sm={6}>
+         <Col xs={24} sm={12} lg={6}>
           <StatCard
             title="Acknowledged"
             value={stats?.acknowledged || 0}
@@ -319,7 +319,7 @@ function SecurityAlertsDashboard() {
             bgColor="bg-amber-100"
           />
         </Col>
-        <Col xs={12} sm={6}>
+         <Col xs={24} sm={12} lg={6}>
           <StatCard
             title="Resolved Today"
             value={stats?.resolved || 0}
@@ -328,7 +328,7 @@ function SecurityAlertsDashboard() {
             bgColor="bg-green-100"
           />
         </Col>
-        <Col xs={12} sm={6}>
+         <Col xs={24} sm={12} lg={6}>
           <StatCard
             title="Total Today"
             value={stats?.today || 0}
@@ -558,7 +558,7 @@ function SuperAdminDashboard() {
         <SectionHeader
           icon={<DollarOutlined />}
           title="Financial Overview"
-          subtitle="Revenue and growth metrics"
+          // subtitle="Revenue and growth metrics"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -611,7 +611,7 @@ function SuperAdminDashboard() {
         <SectionHeader
           icon={<CloudOutlined />}
           title="Platform Overview"
-          subtitle="System-wide statistics"
+          // subtitle="System-wide statistics"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -704,9 +704,6 @@ function SuperAdminDashboard() {
         className="shadow-sm"
         title={
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
-              <DollarOutlined />
-            </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-semibold text-gray-900 m-0">Revenue by Plan</h3>
@@ -887,7 +884,7 @@ function SuperAdminDashboard() {
           <SectionHeader
             icon={<WarningOutlined />}
             title="Alerts & Warnings"
-            subtitle="Items requiring attention"
+            // subtitle="Items requiring attention"
           />
           <Row gutter={[24, 24]}>
             {data.expiringTrials.length > 0 && (

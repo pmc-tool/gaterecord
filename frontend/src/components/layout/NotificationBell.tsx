@@ -140,16 +140,16 @@ export function NotificationBell() {
   }, [notifications]);
 
   const dropdownContent = (
-    <div className="w-96 bg-white rounded-xl shadow-xl border border-gray-100">
+    <div className="w-[90vw] max-w-96 bg-white rounded-xl shadow-xl border border-gray-100">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-        <Text strong className="text-lg">Notifications</Text>
+      <div className="flex items-center justify-between px-3 sm:px-5 py-3 sm:py-4 border-b border-gray-100">
+        <Text strong className="text-base sm:text-lg">Notifications</Text>
         {unreadCount > 0 && (
           <Button 
             type="link" 
             size="small" 
             onClick={handleMarkAllAsRead}
-            className="text-blue-500 hover:text-blue-600 font-medium"
+            className="text-blue-500 hover:text-blue-600 font-medium text-xs sm:text-sm"
           >
             Mark all as read
           </Button>
@@ -158,37 +158,37 @@ export function NotificationBell() {
 
       {/* Content */}
       {loading && notifications.length === 0 ? (
-        <div className="flex justify-center py-12">
+        <div className="flex justify-center py-8 sm:py-12">
           <Spin />
         </div>
       ) : notifications.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description="No unread notifications"
-          className="py-12"
+          className="py-8 sm:py-12"
         />
       ) : (
-        <div className="max-h-[400px] overflow-y-auto">
+        <div className="max-h-[50vh] sm:max-h-[400px] overflow-y-auto">
           {groupedNotifications.map((group) => (
             <div key={group.date}>
               {/* Date Header */}
-              <div className="px-5 py-2 bg-gray-50 border-b border-gray-100">
+              <div className="px-3 sm:px-5 py-2 bg-gray-50 border-b border-gray-100">
                 <Text className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   {formatDateHeader(group.date)}
                 </Text>
               </div>
               
               {/* Notifications for this date */}
-              <div className="px-4 py-2">
+              <div className="px-2 sm:px-4 py-2">
                 {group.notifications.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => handleNotificationClick(item)}
-                    className="flex items-start gap-3 p-3 mb-2 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:shadow-md cursor-pointer transition-all duration-200 group"
+                    className="flex items-start gap-2 sm:gap-3 p-2 sm:p-3 mb-2 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:shadow-md cursor-pointer transition-all duration-200 group"
                   >
                     {/* Icon/Thumbnail */}
-                    <div className={`w-14 h-14 rounded-lg flex items-center justify-center flex-shrink-0 ${NOTIFICATION_TYPE_COLORS[item.type] || 'bg-gray-100'}`}>
-                      <span className="text-2xl">
+                    <div className={`w-10 h-10 sm:w-14 sm:h-14 rounded-lg flex items-center justify-center flex-shrink-0 ${NOTIFICATION_TYPE_COLORS[item.type] || 'bg-gray-100'}`}>
+                      <span className="text-xl sm:text-2xl">
                         {NOTIFICATION_TYPE_ICONS[item.type] || '📢'}
                       </span>
                     </div>
@@ -222,13 +222,13 @@ export function NotificationBell() {
       )}
 
       {/* Footer */}
-      <div className="border-t border-gray-100 px-5 py-3">
+      <div className="border-t border-gray-100 px-3 sm:px-5 py-2 sm:py-3">
         <button
           onClick={() => {
             navigate('/notifications');
             setDropdownOpen(false);
           }}
-          className="flex items-center justify-center gap-2 w-full text-blue-500 hover:text-blue-600 font-medium text-sm transition-colors"
+          className="flex items-center justify-center gap-2 w-full text-blue-500 hover:text-blue-600 font-medium text-xs sm:text-sm transition-colors"
         >
           View all Notifications
           <RightOutlined className="text-xs" />
@@ -244,6 +244,7 @@ export function NotificationBell() {
       onOpenChange={setDropdownOpen}
       dropdownRender={() => dropdownContent}
       placement="bottomRight"
+      overlayStyle={{ position: 'fixed', maxWidth: '95vw', right: 8 }}
     >
       <div className="flex items-center">
         <Badge count={unreadCount} size="small" offset={[-2, 2]}>

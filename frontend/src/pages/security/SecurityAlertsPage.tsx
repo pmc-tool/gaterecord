@@ -369,7 +369,7 @@ export function SecurityAlertsPage() {
       key: 'actions',
       width: 200,
       render: (_, record) => (
-        <Space size="small">
+        <Space wrap={false} size="small">
           {record.status === 'active' && (
             <>
               <Button

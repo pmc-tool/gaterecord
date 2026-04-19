@@ -387,7 +387,7 @@ export default function PaymentsAdminPage() {
       width: 100,
       fixed: 'right',
       render: (_, record: Payment) => (
-        <Space>
+        <Space wrap={false} size="small">
           <Tooltip title="Issue Refund">
             <Button
               size="small"
@@ -453,24 +453,11 @@ export default function PaymentsAdminPage() {
   return (
     <div className="p-6">
       {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Title level={2}>
-            <DollarOutlined className="mr-2" />
-            Payments & Revenue
-          </Title>
-          <Text type="secondary">Monitor financial metrics and manage payments</Text>
-        </div>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => {
-            fetchFinancialOverview();
-            fetchPayments(pagination.current, pagination.pageSize);
-          }}
-        >
-          Refresh
-        </Button>
+      {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Payments & Revenue</Title>
       </div>
+
 
       {/* Commented out: Financial Overview Cards
       <Row gutter={[16, 16]} className="mb-6">
@@ -575,7 +562,17 @@ export default function PaymentsAdminPage() {
       */}
 
       {/* Filters */}
-      <Card className="mb-4">
+      <Card className="mb-4"
+
+      extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchPayments()} loading={loading}>
+              Refresh
+            </Button>
+          </Space>
+        }
+      
+      >
         <div className="flex flex-wrap gap-4 items-center">
           <Select
             placeholder="Select Tenant"

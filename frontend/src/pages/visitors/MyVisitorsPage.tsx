@@ -39,6 +39,7 @@ import dayjs from 'dayjs';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
+import Title from 'antd/es/typography/Title';
 
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -419,7 +420,7 @@ export default function MyVisitorsPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space size="small">
+        <Space wrap={false} size="small">
           <Tooltip title="View QR Code">
             <Button
               icon={<QrcodeOutlined />}
@@ -465,14 +466,21 @@ export default function MyVisitorsPage() {
 
   return (
     <div className="space-y-4">
+
+     {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Visitor Pass Management</Title>
+      </div>
+    
+
       {/* Statistics */}
       <Row gutter={16}>
-        <Col span={4}>
+        <Col xs={12} sm={12} md={4}>
           <Card>
             <Statistic title="Total Passes" value={stats.total} />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col xs={12} sm={12} md={5}>
           <Card>
             <Statistic
               title="Active"
@@ -481,7 +489,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col xs={12} sm={12} md={5}>
           <Card>
             <Statistic
               title="Used"
@@ -490,7 +498,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col xs={12} sm={12} md={5}>
           <Card>
             <Statistic
               title="Expired"
@@ -499,7 +507,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col span={5}>
+        <Col xs={12} sm={12} md={5}>
           <Card>
             <Statistic
               title="Cancelled"
@@ -512,7 +520,6 @@ export default function MyVisitorsPage() {
 
       {/* Main Table */}
       <Card
-        title={isStaff ? "Visitor Pass Management" : "My Visitor Passes"}
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchPasses}>

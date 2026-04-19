@@ -396,7 +396,11 @@ export function GateSimulatorPage() {
 
   return (
     <div>
-      <Title level={4}>Gate Simulator</Title>
+       {/* Headline */}
+      <div className="flex justify-between items-center">
+        <Title level={3}>Gate Simulator</Title>
+      </div>
+
       <Paragraph type="secondary">
         Test gate operations without physical hardware. Select a gate and simulate various events.
       </Paragraph>
