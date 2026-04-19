@@ -21,6 +21,7 @@ import { CloudPlusTcpModule } from './modules/cloud-plus-typeB-tcp/cloud-plus-tc
 import { StripeModule } from './modules/stripe/stripe.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -62,7 +63,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     StripeModule,
     SettingsModule,
   ],
-  controllers: [],
+  controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,
