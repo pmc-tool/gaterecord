@@ -41,14 +41,17 @@ async function bootstrap() {
     'https://www.gaterecord.com',
     'https://dev.gaterecord.com',
     'https://www.dev.gaterecord.com',
-
   ];
 
   app.enableCors({
     origin: defaultOrigins,
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
-
   // Swagger
   const config = new DocumentBuilder()
     .setTitle('Gate Management API')
