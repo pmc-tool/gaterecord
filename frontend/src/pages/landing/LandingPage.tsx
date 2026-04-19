@@ -218,8 +218,8 @@ export default function LandingPage() {
 
       // Calculate discounted price
       const now = new Date();
-      const originalPrice = plan.monthlyPrice;
-      const discountPercent = plan.discountPercent || 0;
+      const originalPrice = Number(plan.monthlyPrice);
+      const discountPercent = Number(plan.discountPercent) || 0;
       const discountValidUntil = plan.discountValidUntil ? new Date(plan.discountValidUntil) : null;
       const isDiscountActive =
         discountPercent > 0 &&
@@ -228,13 +228,18 @@ export default function LandingPage() {
       const discountedPrice = isDiscountActive
         ? originalPrice * (1 - discountPercent / 100) 
         : originalPrice;
-      const hasDiscount = isDiscountActive;
+      const hasDiscount = isDiscountActive && discountedPrice !== originalPrice;
+
+      // Format price: show decimals only if needed
+      const formatPrice = (p: number) => {
+        return p % 1 === 0 ? String(p) : p.toFixed(2);
+      };
 
       return {
         id: plan.id,
         name: plan.name,
-        price: isCustomPrice ? 'Custom' : String(Math.round(discountedPrice)),
-        originalPrice: isCustomPrice ? null : (hasDiscount ? String(Math.round(originalPrice)) : null),
+        price: isCustomPrice ? 'Custom' : formatPrice(discountedPrice),
+        originalPrice: isCustomPrice ? null : (hasDiscount ? formatPrice(originalPrice) : null),
         discountPercent: hasDiscount ? discountPercent : null,
         discountLabel: hasDiscount ? (plan.discountLabel || `${discountPercent}% OFF`) : null,
         description: plan.description || `Perfect for ${plan.name.toLowerCase()} communities`,
