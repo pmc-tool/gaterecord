@@ -253,7 +253,7 @@ export default function LandingPage() {
         <nav className="flex items-center justify-between p-4 lg:px-8 max-w-7xl mx-auto">
           <div className="flex lg:flex-1">
             <a href="/" className="-m-1.5 p-1.5">
-              <img src="/logo.svg" alt="Yaad GateRecord" className="h-12 object-contain" />
+              <img src="/logo.svg" alt="YAAD GateRecord" className="h-12 object-contain" />
             </a>
           </div>
           <div className="flex lg:hidden">
@@ -380,7 +380,7 @@ export default function LandingPage() {
                 </div> */}
               </div>
               <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl lg:text-7xl">
-                Yaad Smart Gate Access for{' '}
+                YAAD Smart Gate Access for{' '}
                 <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                   Modern Communities
                 </span>

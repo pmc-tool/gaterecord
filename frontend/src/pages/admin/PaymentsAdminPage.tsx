@@ -385,7 +385,6 @@ export default function PaymentsAdminPage() {
       title: 'Actions',
       key: 'actions',
       width: 100,
-      fixed: 'right',
       render: (_, record: Payment) => (
         <Space wrap={false} size="small">
           <Tooltip title="Issue Refund">
@@ -459,108 +458,6 @@ export default function PaymentsAdminPage() {
       </div>
 
 
-      {/* Commented out: Financial Overview Cards
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="MRR"
-              value={financialOverview?.mrr || 0}
-              precision={0}
-              prefix="$"
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="ARR"
-              value={financialOverview?.arr || 0}
-              precision={0}
-              prefix="$"
-              valueStyle={{ color: '#52c41a' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Total Revenue"
-              value={financialOverview?.totalRevenue || 0}
-              precision={0}
-              prefix="$"
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Active Subscriptions"
-              value={financialOverview?.activeSubscriptions || 0}
-              prefix={<UserOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Churn Rate"
-              value={financialOverview?.churnRate || 0}
-              precision={1}
-              suffix="%"
-              valueStyle={{
-                color: (financialOverview?.churnRate || 0) > 5 ? '#ff4d4f' : '#52c41a',
-              }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card>
-            <Statistic
-              title="ARPU"
-              value={financialOverview?.arpu || 0}
-              precision={2}
-              prefix="$"
-            />
-          </Card>
-        </Col>
-      </Row>
-      */}
-
-      {/* Commented out: Revenue Growth and Revenue Trend sections
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={24} lg={8}>
-          <Card size="small">
-            <div className="flex items-center justify-between">
-              <div>
-                <Text type="secondary">Revenue Growth</Text>
-                <div className="flex items-center gap-2">
-                  <Title level={4} className="mb-0">
-                    {((financialOverview?.revenueGrowth || 0) * 100).toFixed(1)}%
-                  </Title>
-                  {(financialOverview?.revenueGrowth || 0) >= 0 ? (
-                    <RiseOutlined style={{ color: '#52c41a' }} />
-                  ) : (
-                    <FallOutlined style={{ color: '#ff4d4f' }} />
-                  )}
-                </div>
-              </div>
-              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center">
-                <BarChartOutlined className="text-2xl text-blue-600" />
-              </div>
-            </div>
-          </Card>
-        </Col>
-
-        <Col xs={24} lg={16}>
-          <Card title="Revenue Trend (Last 6 Months)" size="small">
-            {renderRevenueChart()}
-          </Card>
-        </Col>
-      </Row>
-      */}
-
       {/* Filters */}
       <Card className="mb-4"
 
@@ -607,10 +504,10 @@ export default function PaymentsAdminPage() {
             value={filters.type}
             onChange={(value) => setFilters((f) => ({ ...f, type: value }))}
             options={[
-              { label: '+ Charge', value: 'charge' },
-              { label: '− Refund', value: 'refund' },
-              { label: '★ Credit', value: 'credit' },
-              { label: '! Chargeback', value: 'chargeback' },
+              { label: 'Charge', value: 'charge' },
+              { label: 'Refund', value: 'refund' },
+              { label: 'Credit', value: 'credit' },
+              { label: 'Chargeback', value: 'chargeback' },
             ]}
           />
           <Select
@@ -620,11 +517,11 @@ export default function PaymentsAdminPage() {
             value={filters.status}
             onChange={(value) => setFilters((f) => ({ ...f, status: value }))}
             options={[
-              { label: '✓ Succeeded', value: 'succeeded' },
-              { label: '◷ Pending', value: 'pending' },
-              { label: '✗ Failed', value: 'failed' },
-              { label: '↩ Refunded', value: 'refunded' },
-              { label: '! Disputed', value: 'disputed' },
+              { label: 'Succeeded', value: 'succeeded' },
+              { label: 'Pending', value: 'pending' },
+              { label: 'Failed', value: 'failed' },
+              { label: 'Refunded', value: 'refunded' },
+              { label: 'Disputed', value: 'disputed' },
             ]}
           />
           <Select

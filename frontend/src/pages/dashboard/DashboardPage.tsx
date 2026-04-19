@@ -469,12 +469,12 @@ function DashboardHeader({ userName, role }: { userName: string; role: string })
             <span className="capitalize">{role.replace('_', ' ')}</span>
           </p>
         </div>
-        <div className="flex items-center gap-2 text-sm">
+        {/* <div className="flex items-center gap-2 text-sm">
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 rounded-full">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
             System Online
           </div>
-        </div>
+        </div> */}
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ export class HealthController {
   health() {
     return {
       status: 'ok',
-      service: 'Yaad GateRecord Server is running',
+      service: 'YAAD GateRecord Server is running',
       timestamp: new Date().toISOString(),
       version: '1.0.0',
     };

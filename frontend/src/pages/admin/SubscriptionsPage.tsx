@@ -490,10 +490,10 @@ export default function SubscriptionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <Title level={3} className="mb-0">Subscription & Earnings Dashboard</Title>
-        <Tag color="blue" className="text-sm">
+        {/* <Tag color="blue" className="text-sm">
           <CalendarOutlined className="mr-1" />
           Updated: {new Date().toLocaleDateString()}
-        </Tag>
+        </Tag> */}
       </div>
 
       {/* Alerts Section */}
