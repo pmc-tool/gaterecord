@@ -765,14 +765,20 @@ export default function DevicesPage() {
           rowKey="id"
           loading={loading}
           scroll={{ x: 900 }}
-          pagination={{
+                    pagination={{
             current: pagination.page,
             pageSize: pagination.limit,
             total: pagination.total,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} devices`,
-            onChange: (page, pageSize) => fetchDevices(page, pageSize, searchText, filterTenantId, filterGateId, filterStatus),
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} events`,
+            onChange: (page, pageSize) => {
+              setPagination((prev) => ({ ...prev, page, limit: pageSize }));
+            },
+            onShowSizeChange: (current, size) => {
+              setPagination((prev) => ({ ...prev, page: current, limit: size }));
+            },
+            responsive: true,
           }}
         />
       </Card>

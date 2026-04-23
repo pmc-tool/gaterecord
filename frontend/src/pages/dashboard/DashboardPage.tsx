@@ -90,7 +90,7 @@ interface StatCardProps {
 
 function StatCard({ title, value, prefix, suffix, trend, trendLabel, color, bgColor, precision = 0 }: StatCardProps) {
   return (
-    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200">
+    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200 h-full w-full">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <p className="text-gray-500 text-sm font-medium mb-1">{title}</p>
@@ -722,7 +722,8 @@ function SuperAdminDashboard() {
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} plans`,
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} plans`,
+
           }}
           size="middle"
           className="[&_.ant-table-thead_th]:bg-gray-50 [&_.ant-table-thead_th]:text-xs [&_.ant-table-thead_th]:font-semibold [&_.ant-table-thead_th]:text-gray-600"
@@ -1101,8 +1102,8 @@ function RegularDashboard() {
       {showSecurityAlerts && <SecurityAlertsDashboard />}
 
       {/* Stats Cards */}
-      <Row gutter={[16, 16]} className="mb-8">
-        <Col xs={24} sm={12} lg={6}>
+      <Row gutter={[16, 16]} className="mb-8" align="stretch">
+        <Col xs={24} sm={12} lg={6} className="flex">
           <StatCard
             title="Total Gates"
             value={gates.length}
@@ -1111,7 +1112,7 @@ function RegularDashboard() {
             bgColor="bg-blue-100"
           />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={6} className="flex">
           <StatCard
             title="Online Gates"
             value={onlineGates}
@@ -1121,7 +1122,7 @@ function RegularDashboard() {
             suffix={`of ${gates.length}`}
           />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={6} className="flex">
           <StatCard
             title="Today's Events"
             value={stats?.totalEvents || 0}
@@ -1130,9 +1131,9 @@ function RegularDashboard() {
             bgColor="bg-purple-100"
           />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-            <div className="flex items-start justify-between mb-3">
+        <Col xs={24} sm={12} lg={6} className="flex">
+          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 h-full w-full flex flex-col">
+            <div className="flex items-start justify-between flex-1">
               <div>
                 <p className="text-gray-500 text-sm font-medium">Success Rate</p>
                 <span className="text-2xl font-bold text-gray-900">{successRate}%</span>
@@ -1141,15 +1142,17 @@ function RegularDashboard() {
                 <SafetyCertificateOutlined className="text-xl text-emerald-600" />
               </div>
             </div>
-            <Progress
-              percent={successRate}
-              size="small"
-              showInfo={false}
-              strokeColor={{ '0%': '#10b981', '100%': '#059669' }}
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-2">
-              <span>{stats?.allowedCount || 0} allowed</span>
-              <span>{stats?.deniedCount || 0} denied</span>
+            <div className="mt-auto">
+              <Progress
+                percent={successRate}
+                size="small"
+                showInfo={false}
+                strokeColor={{ '0%': '#10b981', '100%': '#059669' }}
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-2">
+                <span>{stats?.allowedCount || 0} allowed</span>
+                <span>{stats?.deniedCount || 0} denied</span>
+              </div>
             </div>
           </div>
         </Col>

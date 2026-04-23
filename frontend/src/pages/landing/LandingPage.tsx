@@ -770,13 +770,13 @@ export default function LandingPage() {
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               to="/signup"
-              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full bg-white px-8 py-4 text-base font-semibold text-blue-600 shadow-lg hover:bg-blue-50 transition-all no-underline"
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full bg-white px-5 py-4 text-base font-semibold text-blue-600 shadow-lg hover:bg-blue-50 transition-all no-underline"
             >
               Start Free Trial
             </Link>
             <a
               href="mailto:sales@gaterecord.com"
-              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-2 ring-white/30 px-8 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-2 ring-white/30 px-5 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
             >
               Contact Sales
             </a>

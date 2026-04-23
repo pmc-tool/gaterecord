@@ -32,6 +32,7 @@ import {
   Tooltip,
   Descriptions,
   Progress,
+  Result,
 } from 'antd';
 import {
   DollarOutlined,
@@ -52,6 +53,8 @@ import {
   FinancialOverview,
   RefundCalculation,
 } from '../../services/billing.service';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -69,6 +72,7 @@ interface PlanOption {
 }
 
 export default function PaymentsAdminPage() {
+  const { user, isLoading: authLoading } = useAuthStore();
   const [loading, setLoading] = useState(true);
   const [financialOverview, setFinancialOverview] = useState<FinancialOverview | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -100,11 +104,15 @@ export default function PaymentsAdminPage() {
   const [creditLoading, setCreditLoading] = useState(false);
   const [creditForm] = Form.useForm();
 
+  // Check for super admin role
+  const isSuperAdmin = user?.role === UserRole.SUPER_ADMIN;
+
   const fetchFinancialOverview = async () => {
     try {
       const data = await adminBillingService.getFinancialOverview();
       setFinancialOverview(data);
-    } catch {
+    } catch (err) {
+      console.error('Failed to load financial overview:', err);
       message.error('Failed to load financial overview');
     }
   };
@@ -170,12 +178,14 @@ export default function PaymentsAdminPage() {
   };
 
   useEffect(() => {
+    if (!isSuperAdmin) return;
     Promise.all([fetchFinancialOverview(), fetchPayments(), fetchRevenueData(), fetchTenants(), fetchPlans()]);
-  }, []);
+  }, [isSuperAdmin]);
 
   useEffect(() => {
+    if (!isSuperAdmin) return;
     fetchPayments(1, pagination.pageSize);
-  }, [filters]);
+  }, [filters, isSuperAdmin]);
 
   const handleTableChange = (newPagination: TablePaginationConfig) => {
     fetchPayments(newPagination.current || 1, newPagination.pageSize || 20);
@@ -328,7 +338,7 @@ export default function PaymentsAdminPage() {
       key: 'amount',
       width: 110,
       align: 'right',
-      render: (amount: number, record: Payment) => (
+      render: (amount: number | string, record: Payment) => (
         <div className="text-right">
           <div
             className="font-bold"
@@ -337,16 +347,16 @@ export default function PaymentsAdminPage() {
             }}
           >
             {record.transactionType === 'refund' || record.transactionType === 'chargeback' ? '-' : '+'}
-            ${(amount || 0).toFixed(2)}
+            ${Number(amount || 0).toFixed(2)}
           </div>
-          {record.feeAmount && record.feeAmount > 0 && (
+          {record.feeAmount && Number(record.feeAmount) > 0 && (
             <Text type="secondary" className="text-xs">
-              Fee: ${record.feeAmount.toFixed(2)}
+              Fee: ${Number(record.feeAmount).toFixed(2)}
             </Text>
           )}
         </div>
       ),
-      sorter: (a, b) => (a.amount || 0) - (b.amount || 0),
+      sorter: (a, b) => Number(a.amount || 0) - Number(b.amount || 0),
     },
     {
       title: 'Net',
@@ -354,7 +364,7 @@ export default function PaymentsAdminPage() {
       width: 90,
       align: 'right',
       render: (_, record: Payment) => {
-        const net = record.netAmount || (record.amount || 0) - (record.feeAmount || 0);
+        const net = Number(record.netAmount || 0) || (Number(record.amount || 0) - Number(record.feeAmount || 0));
         return (
           <Text type="secondary" className="font-medium">
             ${net.toFixed(2)}
@@ -381,30 +391,30 @@ export default function PaymentsAdminPage() {
         return <Tag color={color}>{text}</Tag>;
       },
     },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 100,
-      render: (_, record: Payment) => (
-        <Space wrap={false} size="small">
-          <Tooltip title="Issue Refund">
-            <Button
-              size="small"
-              icon={<UndoOutlined />}
-              onClick={() => openRefundModal(record.tenantId)}
-              disabled={record.transactionType !== 'charge' || record.status !== 'succeeded'}
-            />
-          </Tooltip>
-          <Tooltip title="Issue Credit">
-            <Button
-              size="small"
-              icon={<GiftOutlined />}
-              onClick={() => openCreditModal(record.tenantId)}
-            />
-          </Tooltip>
-        </Space>
-      ),
-    },
+    // {
+    //   title: 'Actions',
+    //   key: 'actions',
+    //   width: 100,
+    //   render: (_, record: Payment) => (
+    //     <Space wrap={false} size="small">
+    //       <Tooltip title="Issue Refund">
+    //         <Button
+    //           size="small"
+    //           icon={<UndoOutlined />}
+    //           onClick={() => openRefundModal(record.tenantId)}
+    //           disabled={record.transactionType !== 'charge' || record.status !== 'succeeded'}
+    //         />
+    //       </Tooltip>
+    //       <Tooltip title="Issue Credit">
+    //         <Button
+    //           size="small"
+    //           icon={<GiftOutlined />}
+    //           onClick={() => openCreditModal(record.tenantId)}
+    //         />
+    //       </Tooltip>
+    //     </Space>
+    //   ),
+    // },
   ];
 
   const formatCurrency = (value: number) => {
@@ -441,7 +451,52 @@ export default function PaymentsAdminPage() {
     );
   };
 
-  if (loading && !financialOverview) {
+  // Show loading while auth is being determined
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  // If no user after auth loaded, something is wrong - show access denied
+  if (!user) {
+    return (
+      <div className="p-6">
+        <Result
+          status="warning"
+          title="Authentication Required"
+          subTitle="Please log in to access this page."
+          extra={
+            <Button type="primary" href="/login">
+              Go to Login
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  // Role check - only SUPER_ADMIN can access this page
+  if (!isSuperAdmin) {
+    return (
+      <div className="p-6">
+        <Result
+          status="403"
+          title="Access Denied"
+          subTitle="This page is only accessible to Super Administrators."
+          extra={
+            <Button type="primary" href="/dashboard">
+              Go to Dashboard
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (loading && !financialOverview && payments.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
         <Spin size="large" />
@@ -599,7 +654,8 @@ export default function PaymentsAdminPage() {
             total: paymentsTotal,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} payments`,
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} payments`,
+            // selectProps: { listHeight: 256 },
           }}
           onChange={handleTableChange}
           scroll={{ x: 1200 }}

@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Card,
   Row,
@@ -43,10 +44,12 @@ import {
   SettingOutlined,
   ExportOutlined,
   InfoCircleOutlined,
+  RocketOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { PlansModal } from '../../components/billing/PlansModal';
 import {
   billingService,
   SubscriptionDetails,
@@ -55,12 +58,16 @@ import {
   RefundResult,
   RefundCalculation,
 } from '../../services/billing.service';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
 
 dayjs.extend(relativeTime);
 
 const { Title, Text, Paragraph } = Typography;
 
 export default function BillingSettingsPage() {
+  const { user } = useAuthStore();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionDetails | null>(null);
@@ -83,6 +90,9 @@ export default function BillingSettingsPage() {
   const [refundLoading, setRefundLoading] = useState(false);
   const [refundCalculating, setRefundCalculating] = useState(false);
   const [refundReason, setRefundReason] = useState('');
+
+  // Plans modal state
+  const [plansModalOpen, setPlansModalOpen] = useState(false);
 
   const [pauseForm] = Form.useForm();
 
@@ -118,6 +128,23 @@ export default function BillingSettingsPage() {
     fetchData();
     return () => console.log('BillingSettingsPage unmounted');
   }, []);
+
+  // Handle checkout success/cancel redirects from Stripe
+  useEffect(() => {
+    const success = searchParams.get('success');
+    const canceled = searchParams.get('canceled');
+    
+    if (success === 'true') {
+      message.success('Subscription activated successfully! Welcome aboard.');
+      // Remove query params from URL
+      setSearchParams({}, { replace: true });
+      // Refresh data to show updated subscription
+      fetchData();
+    } else if (canceled === 'true') {
+      message.info('Checkout was canceled. No charges were made.');
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const fetchPayments = async (page: number) => {
     try {
@@ -266,14 +293,14 @@ export default function BillingSettingsPage() {
       title: 'Amount',
       dataIndex: 'amount',
       key: 'amount',
-      render: (amount: number, record: Payment) => (
+      render: (amount: number | string, record: Payment) => (
         <Text
           strong
           style={{
             color: record.transactionType === 'refund' ? '#ff4d4f' : '#52c41a',
           }}
         >
-          {record.transactionType === 'refund' ? '-' : '+'}${amount.toFixed(2)}
+          {record.transactionType === 'refund' ? '-' : '+'}${Number(amount || 0).toFixed(2)}
         </Text>
       ),
       width: 100,
@@ -340,6 +367,25 @@ export default function BillingSettingsPage() {
     },
   ];
 
+  // Super admin should use admin payments page
+  if (user?.role === UserRole.SUPER_ADMIN) {
+    return (
+      <div className="p-6">
+        <Alert
+          type="info"
+          message="Super Admin Access"
+          description={
+            <span>
+              As a Super Admin, please use the{' '}
+              <a href="/admin/payments">Admin Payments page</a> to view all tenant payments and financial overview.
+            </span>
+          }
+          showIcon
+        />
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="p-6">
@@ -361,6 +407,8 @@ export default function BillingSettingsPage() {
     );
   }
 
+  // Show "No Active Subscription" only if subscription is null
+  // (Trial users will have subscription data with isTrial=true)
   if (!subscription) {
     return (
       <div className="p-6">
@@ -373,6 +421,13 @@ export default function BillingSettingsPage() {
       </div>
     );
   }
+
+  // Calculate trial days remaining
+  const trialDaysRemaining = subscription.isTrial && subscription.trialEndDate
+    ? Math.max(0, Math.ceil((new Date(subscription.trialEndDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
+  
+  const isTrialExpired = subscription.isTrial && trialDaysRemaining === 0;
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -395,10 +450,10 @@ export default function BillingSettingsPage() {
               </div>
               <div>
                 <Title level={4} className="mb-0">
-                  {subscription.planName}
+                  {subscription.planName}{subscription.isTrial ? ' (Trial)' : ''}
                 </Title>
                 <Text type="secondary" className="capitalize">
-                  {subscription.billingCycle} billing
+                  {subscription.isTrial ? 'Free Trial' : `${subscription.billingCycle} Billing`}
                 </Text>
               </div>
               {getStatusTag(pauseStatus?.isPaused ? 'paused' : subscription.status)}
@@ -407,16 +462,17 @@ export default function BillingSettingsPage() {
             <Row gutter={[16, 16]}>
               <Col span={8}>
                 <Statistic
-                  title="Amount"
+                  title={subscription.isTrial ? 'Price' : 'Amount'}
                   value={subscription.monthlyAmount}
-                  prefix="$"
-                  suffix={subscription.billingCycle === 'yearly' ? '/year' : '/month'}
+                  prefix={subscription.isTrial ? '' : '$'}
+                  suffix={subscription.isTrial ? 'Free' : (subscription.billingCycle === 'yearly' ? '/year' : '/month')}
+                  formatter={(value) => subscription.isTrial ? '' : `${value}`}
                 />
               </Col>
               <Col span={8}>
                 <Statistic
-                  title="Next Billing"
-                  value={dayjs(subscription.nextBillingDate).format('MMM D, YYYY')}
+                  title={subscription.isTrial ? 'Trial Ends' : 'Next Billing'}
+                  value={dayjs(subscription.isTrial ? subscription.trialEndDate : subscription.nextBillingDate).format('MMM D, YYYY')}
                   prefix={<CalendarOutlined />}
                 />
               </Col>
@@ -427,6 +483,22 @@ export default function BillingSettingsPage() {
                 />
               </Col>
             </Row>
+
+            {/* Trial Expiration Warning */}
+            {subscription.isTrial && (
+              <Alert
+                type={isTrialExpired ? 'error' : trialDaysRemaining <= 3 ? 'warning' : 'info'}
+                className="mt-4"
+                message={isTrialExpired ? 'Trial Expired' : `${trialDaysRemaining} days left in your free trial`}
+                description={
+                  isTrialExpired
+                    ? 'Your free trial has expired. Please upgrade to continue using all features.'
+                    : `Your trial ends on ${dayjs(subscription.trialEndDate).format('MMM D, YYYY')}. Upgrade now to keep all your data and access.`
+                }
+                showIcon
+                icon={isTrialExpired ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}
+              />
+            )}
 
             {/* Pause Info */}
             {pauseStatus?.isPaused && (
@@ -471,41 +543,55 @@ export default function BillingSettingsPage() {
 
           <Col xs={24} md={8}>
             <Space direction="vertical" className="w-full">
-              <Button
-                type="primary"
-                icon={<ExportOutlined />}
-                block
-                onClick={handleOpenPortal}
-              >
-                Manage in Stripe
-              </Button>
+              {/* Upgrade button for trial users */}
+              {subscription.isTrial ? (
+                <Button
+                  type="primary"
+                  icon={<RocketOutlined />}
+                  block
+                  onClick={() => setPlansModalOpen(true)}
+                >
+                  Upgrade Now
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    type="primary"
+                    icon={<ExportOutlined />}
+                    block
+                    onClick={handleOpenPortal}
+                  >
+                    Manage in Stripe
+                  </Button>
 
-              {pauseStatus?.isPaused ? (
-                <Button
-                  icon={<PlayCircleOutlined />}
-                  block
-                  onClick={handleUnpauseSubscription}
-                >
-                  Resume Subscription
-                </Button>
-              ) : pauseStatus?.canPause ? (
-                <Button
-                  icon={<PauseCircleOutlined />}
-                  block
-                  onClick={() => setPauseModalOpen(true)}
-                >
-                  Pause Subscription
-                </Button>
-              ) : null}
+                  {pauseStatus?.isPaused ? (
+                    <Button
+                      icon={<PlayCircleOutlined />}
+                      block
+                      onClick={handleUnpauseSubscription}
+                    >
+                      Resume Subscription
+                    </Button>
+                  ) : pauseStatus?.canPause ? (
+                    <Button
+                      icon={<PauseCircleOutlined />}
+                      block
+                      onClick={() => setPauseModalOpen(true)}
+                    >
+                      Pause Subscription
+                    </Button>
+                  ) : null}
 
-              {!subscription.cancelAtPeriodEnd && subscription.status === 'active' && (
-                <Button
-                  danger
-                  block
-                  onClick={() => setCancelModalOpen(true)}
-                >
-                  Cancel Subscription
-                </Button>
+                  {!subscription.cancelAtPeriodEnd && subscription.status === 'active' && (
+                    <Button
+                      danger
+                      block
+                      onClick={() => setCancelModalOpen(true)}
+                    >
+                      Cancel Subscription
+                    </Button>
+                  )}
+                </>
               )}
 
               {/* Refund Request button temporarily disabled
@@ -709,7 +795,7 @@ export default function BillingSettingsPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <Text>Original Amount:</Text>
-                    <Text strong>${(refundCalculation.originalAmount / 100).toFixed(2)} {refundCalculation.currency.toUpperCase()}</Text>
+                    <Text strong>${(Number(refundCalculation.originalAmount) / 100).toFixed(2)} {refundCalculation.currency.toUpperCase()}</Text>
                   </div>
                   <div className="flex justify-between">
                     <Text>Days Remaining:</Text>
@@ -717,7 +803,7 @@ export default function BillingSettingsPage() {
                   </div>
                   <div className="flex justify-between">
                     <Text>Refund Amount:</Text>
-                    <Text strong className="text-green-600">${(refundCalculation.refundableAmount / 100).toFixed(2)} {refundCalculation.currency.toUpperCase()}</Text>
+                    <Text strong className="text-green-600">${(Number(refundCalculation.refundableAmount) / 100).toFixed(2)} {refundCalculation.currency.toUpperCase()}</Text>
                   </div>
                 </div>
               }
@@ -743,7 +829,7 @@ export default function BillingSettingsPage() {
                 onClick={handleRequestRefund}
                 loading={refundLoading}
               >
-                Confirm Refund of ${(refundCalculation.refundableAmount / 100).toFixed(2)}
+                Confirm Refund of ${(Number(refundCalculation.refundableAmount) / 100).toFixed(2)}
               </Button>
 
               <Button
@@ -767,6 +853,12 @@ export default function BillingSettingsPage() {
           />
         )}
       </Modal>
+
+      {/* Plans Modal for upgrading */}
+      <PlansModal
+        open={plansModalOpen}
+        onClose={() => setPlansModalOpen(false)}
+      />
     </div>
   );
 }

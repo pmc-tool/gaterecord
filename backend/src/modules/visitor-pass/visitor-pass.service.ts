@@ -367,16 +367,14 @@ export class VisitorPassService {
 
   async getQrCode(id: string, currentUser: User): Promise<string> {
     const pass = await this.findOne(id, currentUser);
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const publicUrl = `${frontendUrl}/visitor-passes/${pass.qrToken}`;
-    return QRCode.toDataURL(publicUrl);
+    // Only encode the qrToken, not the full URL - gate scanner extracts just the token
+    return QRCode.toDataURL(pass.qrToken);
   }
 
   async getQrCodeByToken(qrToken: string): Promise<string> {
     const pass = await this.findByToken(qrToken);
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const publicUrl = `${frontendUrl}/visitor-passes/${pass.qrToken}`;
-    return QRCode.toDataURL(publicUrl);
+    // Only encode the qrToken, not the full URL - gate scanner extracts just the token
+    return QRCode.toDataURL(pass.qrToken);
   }
 
   // Get statistics for current user's visitor passes

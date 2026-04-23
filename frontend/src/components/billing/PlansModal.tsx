@@ -50,6 +50,7 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [isOnTrial, setIsOnTrial] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -60,9 +61,10 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
   const fetchPlans = async () => {
     try {
       setLoading(true);
-      const response = await billingService.getAvailablePlans();
-      setCurrentPlan(response.currentPlan);
-      setAvailablePlans(response.availablePlans);
+      const plansResponse = await billingService.getAvailablePlans();
+      setCurrentPlan(plansResponse.currentPlan);
+      setAvailablePlans(plansResponse.availablePlans);
+      setIsOnTrial(plansResponse.isOnTrial || false);
     } catch (error) {
       console.error('Failed to fetch plans:', error);
       message.error('Failed to load plans');
@@ -74,7 +76,10 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
   const handlePlanSelect = async (plan: AvailablePlan) => {
     setSelectedPlan(plan);
     setConfirmModalOpen(true);
-    await fetchPreview(plan.id, selectedBillingCycle);
+    // Only fetch preview for non-trial users (trial users don't have a subscription to prorate)
+    if (!isOnTrial) {
+      await fetchPreview(plan.id, selectedBillingCycle);
+    }
   };
 
   const fetchPreview = async (planId: string, cycle: 'monthly' | 'yearly') => {
@@ -91,7 +96,8 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
 
   const handleBillingCycleChange = async (cycle: 'monthly' | 'yearly') => {
     setSelectedBillingCycle(cycle);
-    if (selectedPlan) {
+    // Only fetch preview for non-trial users
+    if (selectedPlan && !isOnTrial) {
       await fetchPreview(selectedPlan.id, cycle);
     }
   };
@@ -101,8 +107,27 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
 
     try {
       setUpgradeLoading(true);
-      await billingService.changePlan(selectedPlan.id, selectedBillingCycle, true);
-      message.success(`Successfully changed to ${selectedPlan.name} plan!`);
+      
+      // For trial users, create a checkout session to start a new subscription
+      if (isOnTrial) {
+        const checkout = await billingService.createCheckoutSession(selectedPlan.id, selectedBillingCycle);
+        // Redirect to Stripe checkout
+        window.location.href = checkout.url;
+        return;
+      }
+      
+      // For existing subscribers, change the plan
+      const result = await billingService.changePlan(selectedPlan.id, selectedBillingCycle, true);
+      
+      // Show appropriate message based on upgrade vs downgrade
+      if (result.isUpgrade) {
+        message.success(`Successfully upgraded to ${selectedPlan.name} plan!`);
+      } else {
+        message.success(
+          `Your plan will change to ${selectedPlan.name} on ${new Date(result.effectiveDate).toLocaleDateString()}`,
+        );
+      }
+      
       setConfirmModalOpen(false);
       onClose();
       // Reload the page to reflect changes
@@ -115,19 +140,27 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
     }
   };
 
-  // All plans including current for display
-  const allPlans = currentPlan
-    ? [
-        {
-          ...currentPlan,
-          description: '',
-          isUpgrade: false,
-          isCurrent: true,
-          priceDifference: { monthly: 0, yearly: 0 },
-        },
-        ...availablePlans.map((p) => ({ ...p, isCurrent: false })),
-      ].sort((a, b) => a.monthlyPrice - b.monthlyPrice)
-    : availablePlans.map((p) => ({ ...p, isCurrent: false }));
+  // All plans for display
+  // For trial users: show ALL available plans (including their current trial plan) as upgrade options
+  // For non-trial users: show current plan + other available plans
+  const allPlans = isOnTrial
+    ? availablePlans.map((p) => ({ 
+        ...p, 
+        isCurrent: false,
+        isUpgrade: true, // All plans are upgrades from free trial
+      }))
+    : currentPlan
+      ? [
+          {
+            ...currentPlan,
+            description: '',
+            isUpgrade: false,
+            isCurrent: true,
+            priceDifference: { monthly: 0, yearly: 0 },
+          },
+          ...availablePlans.map((p) => ({ ...p, isCurrent: false })),
+        ].sort((a, b) => a.monthlyPrice - b.monthlyPrice)
+      : availablePlans.map((p) => ({ ...p, isCurrent: false }));
 
   return (
     <>
@@ -146,10 +179,12 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
             <div>
               <Title level={3} className="mb-1">
                 <RocketOutlined className="mr-2 text-blue-500" />
-                Choose Your Plan
+                {isOnTrial ? 'Subscribe to a Plan' : 'Choose Your Plan'}
               </Title>
               <Text type="secondary">
-                Select the plan that best fits your needs
+                {isOnTrial 
+                  ? 'Select a plan to continue after your trial ends' 
+                  : 'Select the plan that best fits your needs'}
               </Text>
             </div>
             {/* <Button onClick={onClose}>Close</Button> */}
@@ -249,6 +284,14 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
                         <Button disabled block>
                           Current Plan
                         </Button>
+                      ) : isOnTrial ? (
+                        <Button
+                          type="primary"
+                          block
+                          icon={<ArrowUpOutlined />}
+                        >
+                          Subscribe
+                        </Button>
                       ) : (
                         <Button
                           type={isUpgrade ? 'primary' : 'default'}
@@ -272,7 +315,7 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
         title={
           <Space>
             <RocketOutlined />
-            <span>{selectedPlan?.isUpgrade ? 'Upgrade' : 'Change'} Plan</span>
+            <span>{isOnTrial ? 'Subscribe to Plan' : (selectedPlan?.isUpgrade ? 'Upgrade' : 'Change') + ' Plan'}</span>
           </Space>
         }
         open={confirmModalOpen}
@@ -294,8 +337,8 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
                   </Title>
                   <Text type="secondary">{selectedPlan.description}</Text>
                 </div>
-                <Tag color={selectedPlan.isUpgrade ? 'green' : 'orange'}>
-                  {selectedPlan.isUpgrade ? 'Upgrade' : 'Downgrade'}
+                <Tag color={isOnTrial ? 'blue' : (selectedPlan.isUpgrade ? 'green' : 'orange')}>
+                  {isOnTrial ? 'New Subscription' : (selectedPlan.isUpgrade ? 'Upgrade' : 'Downgrade')}
                 </Tag>
               </div>
 
@@ -340,7 +383,35 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
               </div>
 
               {/* Preview */}
-              {previewLoading ? (
+              {isOnTrial ? (
+                // Trial user - show simple subscription info
+                <Alert
+                  type="info"
+                  message="Start Your Subscription"
+                  description={
+                    <div className="mt-2">
+                      <div className="flex justify-between">
+                        <Text>Plan:</Text>
+                        <Text strong>{selectedPlan.name}</Text>
+                      </div>
+                      <div className="flex justify-between">
+                        <Text>Price:</Text>
+                        <Text strong>
+                          ${selectedBillingCycle === 'monthly' ? selectedPlan.monthlyPrice : selectedPlan.yearlyPrice}/
+                          {selectedBillingCycle === 'monthly' ? 'month' : 'year'}
+                        </Text>
+                      </div>
+                      <div className="mt-3 p-2 bg-blue-50 rounded text-sm">
+                        <Text type="secondary">
+                          You'll be redirected to Stripe to complete your payment securely. Your subscription will start immediately after payment.
+                        </Text>
+                      </div>
+                    </div>
+                  }
+                  showIcon
+                  className="mb-4"
+                />
+              ) : previewLoading ? (
                 <div className="text-center py-4">
                   <Spin size="small" />
                   <Text type="secondary" className="ml-2">
@@ -350,37 +421,76 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
               ) : (
                 planPreview && (
                   <Alert
-                    type="info"
-                    message="Billing Summary"
+                    type={planPreview.isUpgrade ? 'info' : 'warning'}
+                    message={planPreview.isUpgrade ? 'Upgrade Summary' : 'Downgrade Summary'}
                     description={
                       <div className="mt-2">
                         <div className="flex justify-between">
                           <Text>Current plan:</Text>
                           <Text>
-                            {planPreview.currentPlan.name} (${planPreview.currentPlan.price})
+                            {planPreview.currentPlan.name} (${planPreview.currentPlan.price.toFixed(2)}/
+                            {selectedBillingCycle === 'monthly' ? 'mo' : 'yr'})
                           </Text>
                         </div>
                         <div className="flex justify-between">
                           <Text>New plan:</Text>
                           <Text>
-                            {planPreview.newPlan.name} (${planPreview.newPlan.price})
+                            {planPreview.newPlan.name} (${planPreview.newPlan.price.toFixed(2)}/
+                            {selectedBillingCycle === 'monthly' ? 'mo' : 'yr'})
                           </Text>
                         </div>
-                        {planPreview.amountDue > 0 && (
-                          <div className="flex justify-between mt-2 pt-2 border-t">
-                            <Text strong>Amount due now:</Text>
-                            <Text strong type="danger">
-                              ${planPreview.amountDue.toFixed(2)}
-                            </Text>
-                          </div>
-                        )}
-                        {planPreview.creditAmount > 0 && (
-                          <div className="flex justify-between mt-2 pt-2 border-t">
-                            <Text strong>Credit applied:</Text>
-                            <Text strong type="success">
-                              ${planPreview.creditAmount.toFixed(2)}
-                            </Text>
-                          </div>
+
+                        {planPreview.isUpgrade ? (
+                          // UPGRADE: Show immediate charge
+                          <>
+                            <div className="flex justify-between text-gray-500 mt-2">
+                              <Text type="secondary">Days remaining in period:</Text>
+                              <Text type="secondary">{planPreview.daysRemaining} days</Text>
+                            </div>
+                            {planPreview.amountDue > 0 && (
+                              <div className="flex justify-between mt-2 pt-2 border-t">
+                                <Text strong>Prorated charge (due now):</Text>
+                                <Text strong type="danger">
+                                  ${planPreview.amountDue.toFixed(2)}
+                                </Text>
+                              </div>
+                            )}
+                            <div className="mt-3 p-2 bg-blue-50 rounded text-sm">
+                              <Text type="secondary">
+                                You'll be charged the prorated difference for the remaining{' '}
+                                {planPreview.daysRemaining} days. Your new rate of $
+                                {planPreview.newPlan.price.toFixed(2)}/
+                                {selectedBillingCycle === 'monthly' ? 'month' : 'year'} starts
+                                immediately.
+                              </Text>
+                            </div>
+                          </>
+                        ) : (
+                          // DOWNGRADE: Show scheduled change
+                          <>
+                            <div className="flex justify-between mt-2 pt-2 border-t">
+                              <Text strong>Effective date:</Text>
+                              <Text strong>
+                                {new Date(planPreview.effectiveDate).toLocaleDateString()}
+                              </Text>
+                            </div>
+                            <div className="flex justify-between">
+                              <Text strong>Amount due now:</Text>
+                              <Text strong type="success">
+                                $0.00
+                              </Text>
+                            </div>
+                            <div className="mt-3 p-2 bg-yellow-50 rounded text-sm">
+                              <Text type="secondary">
+                                You'll keep your current {planPreview.currentPlan.name} plan features
+                                until{' '}
+                                {new Date(planPreview.effectiveDate).toLocaleDateString()}. After
+                                that, you'll be billed ${planPreview.newPlan.price.toFixed(2)}/
+                                {selectedBillingCycle === 'monthly' ? 'month' : 'year'} for the{' '}
+                                {planPreview.newPlan.name} plan.
+                              </Text>
+                            </div>
+                          </>
                         )}
                       </div>
                     }
@@ -393,7 +503,7 @@ export function PlansModal({ open, onClose }: PlansModalProps) {
             <div className="flex justify-end gap-2">
               <Button onClick={() => setConfirmModalOpen(false)}>Cancel</Button>
               <Button type="primary" onClick={handleChangePlan} loading={upgradeLoading}>
-                {selectedPlan.isUpgrade ? 'Upgrade' : 'Change'} to {selectedPlan.name}
+                {isOnTrial ? 'Subscribe Now' : (selectedPlan.isUpgrade ? 'Upgrade Now' : 'Schedule Downgrade')}
               </Button>
             </div>
           </>

@@ -151,6 +151,9 @@ export interface StripeSubscriptionDetails {
   billingCycle: BillingCycle;
   monthlyAmount: number;
   nextBillingDate: Date;
+  // Trial info
+  isTrial?: boolean;
+  trialEndDate?: Date;
   // Pause info
   isPaused?: boolean;
   pausedAt?: Date;

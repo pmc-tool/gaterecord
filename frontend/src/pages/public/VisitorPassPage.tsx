@@ -10,6 +10,7 @@ import {
   CalendarOutlined,
   EnvironmentOutlined,
 } from '@ant-design/icons';
+import { QRCodeSVG } from 'qrcode.react';
 import dayjs from 'dayjs';
 import axios from 'axios';
 
@@ -62,7 +63,6 @@ const statusConfig: Record<string, { color: string; icon: React.ReactNode; label
 export default function VisitorPassPage() {
   const { qrToken } = useParams<{ qrToken: string }>();
   const [pass, setPass] = useState<VisitorPassPublic | null>(null);
-  const [qrCode, setQrCode] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,13 +71,8 @@ export default function VisitorPassPage() {
       if (!qrToken) return;
 
       try {
-        const [passRes, qrRes] = await Promise.all([
-          axios.get(`${API_URL}/visitor-passes/public/${qrToken}`),
-          axios.get(`${API_URL}/visitor-passes/public/${qrToken}/qr`),
-        ]);
-
+        const passRes = await axios.get(`${API_URL}/visitor-passes/public/${qrToken}`);
         setPass(passRes.data);
-        setQrCode(qrRes.data.qrCode);
       } catch (err) {
         setError('Visitor pass not found or has been removed.');
       } finally {
@@ -201,14 +196,11 @@ export default function VisitorPassPage() {
         </div>
 
         {/* QR Code */}
-        {isValid && !isExpired && !notYetValid && qrCode && (
+        {isValid && !isExpired && !notYetValid && pass.qrToken && (
           <div className="text-center mb-4">
-            <img
-              src={qrCode}
-              alt="QR Code"
-              className="mx-auto border-4 border-white shadow-lg rounded-lg"
-              style={{ width: 220, height: 220 }}
-            />
+            <div className="mx-auto border-4 border-white shadow-lg rounded-lg inline-block p-2 bg-white">
+              <QRCodeSVG value={pass.qrToken} size={200} />
+            </div>
             <Text type="secondary" className="text-sm mt-2 block">
               Show this QR code at the gate
             </Text>

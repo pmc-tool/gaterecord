@@ -53,7 +53,7 @@ export class EmailService {
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    const from = this.configService.get<string>('SMTP_FROM', 'GateRecord <noreply@gaterecord.com>');
+    const from = this.configService.get<string>('SMTP_FROM', 'YAAD GateRecord <noreply@gaterecord.com>');
     const domain = this.configService.get<string>('APP_DOMAIN', 'gaterecord.com');
 
     try {
@@ -65,7 +65,7 @@ export class EmailService {
         text: options.text || this.stripHtml(options.html),
         headers: {
           'X-Priority': '1',
-          'X-Mailer': 'GateRecord Notification Service',
+          'X-Mailer': 'YAAD GateRecord Notification Service',
           'List-Unsubscribe': `<mailto:unsubscribe@${domain}>`,
           'Precedence': 'bulk',
         },
@@ -149,7 +149,7 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from GateRecord.</p>
+            <p>This is an automated message from YAAD GateRecord.</p>
             <p>If you didn't expect this email, please ignore it.</p>
           </div>
         </div>
@@ -239,7 +239,7 @@ export class EmailService {
             <p style="color: #888; font-size: 12px;">If this visitor is expected, no action is needed. This email is for your awareness only.</p>
           </div>
           <div class="footer">
-            <p>This is an automated security notification from GateRecord.</p>
+            <p>This is an automated security notification from YAAD GateRecord.</p>
             <p>Event ID: ${accessEventId}</p>
           </div>
         </div>
@@ -311,7 +311,7 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>GateRecord Security System</p>
+            <p>YAAD GateRecord Security System</p>
             <p>Event ID: ${accessEventId}</p>
           </div>
         </div>
@@ -342,7 +342,41 @@ export class EmailService {
     userName: string,
     buildingName: string,
     loginUrl: string,
+    subscriptionInfo?: {
+      type: 'trial' | 'subscription';
+      planName: string;
+      trialDays?: number;
+      price?: number;
+      billingCycle?: 'monthly' | 'yearly';
+    },
   ): Promise<boolean> {
+    // Default subscription info for backwards compatibility
+    const subInfo = subscriptionInfo || { type: 'trial', planName: 'Basic', trialDays: 14 };
+    
+    const subscriptionBadge = subInfo.type === 'trial'
+      ? `<span style="background: #52c41a; color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px;">🎉 ${subInfo.trialDays || 14}-Day Free Trial</span>`
+      : `<span style="background: #722ed1; color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px;">⭐ Premium Subscriber</span>`;
+
+    const subscriptionDetails = subInfo.type === 'trial'
+      ? `
+        <div class="subscription-box trial">
+          <h3>🎁 Your Free Trial</h3>
+          <p><strong>Plan:</strong> ${subInfo.planName}</p>
+          <p><strong>Duration:</strong> ${subInfo.trialDays || 14} days</p>
+          <p><strong>Status:</strong> Active - No credit card required</p>
+          <p style="color: #faad14; margin-top: 10px;">⏰ Your trial will expire in ${subInfo.trialDays || 14} days. We'll send you a reminder before it ends.</p>
+        </div>
+      `
+      : `
+        <div class="subscription-box paid">
+          <h3>💎 Your Subscription</h3>
+          <p><strong>Plan:</strong> ${subInfo.planName}</p>
+          <p><strong>Price:</strong> $${subInfo.price?.toFixed(2) || '0.00'}/${subInfo.billingCycle === 'yearly' ? 'year' : 'month'}</p>
+          <p><strong>Status:</strong> <span style="color: #52c41a;">Active</span></p>
+          <p style="color: #52c41a; margin-top: 10px;">✅ Thank you for subscribing! You have full access to all features.</p>
+        </div>
+      `;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -356,6 +390,10 @@ export class EmailService {
           .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
           .button { display: inline-block; background: #52c41a; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
           .info-box { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #1890ff; }
+          .subscription-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .subscription-box.trial { border: 2px solid #52c41a; }
+          .subscription-box.paid { border: 2px solid #722ed1; }
+          .subscription-box h3 { margin-top: 0; }
           .feature-list { list-style: none; padding: 0; }
           .feature-list li { padding: 10px 0; border-bottom: 1px solid #eee; }
           .feature-list li:last-child { border-bottom: none; }
@@ -366,12 +404,15 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1>Welcome to GateRecord!</h1>
+            <h1>Welcome to YAAD GateRecord!</h1>
             <p>Your account has been successfully created</p>
+            <div style="margin-top: 15px;">${subscriptionBadge}</div>
           </div>
           <div class="content">
             <p>Hello <strong>${userName}</strong>,</p>
-            <p>Welcome to GateRecord! Your building <strong>${buildingName}</strong> is now set up and ready to use.</p>
+            <p>Welcome to YAAD GateRecord! Your building <strong>${buildingName}</strong> is now set up and ready to use.</p>
+
+            ${subscriptionDetails}
 
             <div class="info-box">
               <p><strong>What's Next?</strong></p>
@@ -393,8 +434,8 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from GateRecord.</p>
-            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+            <p>This is an automated message from YAAD GateRecord.</p>
+            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -403,7 +444,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `Welcome to GateRecord - ${buildingName}`,
+      subject: `Welcome to YAAD GateRecord - ${buildingName} (${subInfo.type === 'trial' ? 'Free Trial' : 'Subscription Active'})`,
       html,
     });
   }
@@ -449,7 +490,7 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1>Welcome to GateRecord!</h1>
+            <h1>Welcome to YAAD GateRecord!</h1>
             <p>Your account has been created</p>
           </div>
           <div class="content">
@@ -479,7 +520,7 @@ export class EmailService {
             </div>
 
             <div style="text-align: center;">
-              <a href="${loginUrl}" class="button">Login to GateRecord</a>
+              <a href="${loginUrl}" class="button">Login to YAAD GateRecord</a>
             </div>
 
             <p style="color: #888; font-size: 13px;">
@@ -487,9 +528,9 @@ export class EmailService {
             </p>
           </div>
           <div class="footer">
-            <p>This is an automated message from GateRecord.</p>
+            <p>This is an automated message from YAAD GateRecord.</p>
             <p>If you did not expect this email, please contact your administrator.</p>
-            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -498,7 +539,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `Your GateRecord Account - ${buildingName}`,
+      subject: `Your YAAD GateRecord Account - ${buildingName}`,
       html,
     });
   }
@@ -516,7 +557,7 @@ export class EmailService {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <title>Password Reset - GateRecord</title>
+        <title>Password Reset - YAAD GateRecord</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5; }
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -537,13 +578,13 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <div class="logo">GateRecord</div>
+            <div class="logo">YAAD GateRecord</div>
             <h1>Password Reset</h1>
             <p>Your verification code</p>
           </div>
           <div class="content">
             <p>Hello <strong>${userName}</strong>,</p>
-            <p>We received a request to reset your password for your GateRecord account. Use the verification code below to proceed:</p>
+            <p>We received a request to reset your password for your YAAD GateRecord account. Use the verification code below to proceed:</p>
 
             <div class="otp-box">
               <p style="margin: 0 0 10px; color: #666; font-size: 14px;">Your verification code</p>
@@ -560,9 +601,9 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from GateRecord.</p>
+            <p>This is an automated message from YAAD GateRecord.</p>
             <p>Please do not reply to this email.</p>
-            <p>© ${new Date().getFullYear()} GateRecord. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -571,7 +612,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: 'Password Reset Code - GateRecord',
+      subject: 'Password Reset Code - YAAD GateRecord',
       html,
     });
   }
@@ -644,7 +685,7 @@ export class EmailService {
             </center>
           </div>
           <div class="footer">
-            <p>GateRecord - Smart Gate Management</p>
+            <p>YAAD YAAD GateRecord - Smart Gate Management</p>
             <p style="font-size: 11px; color: #9ca3af;">You received this email because you have notifications enabled. <a href="${frontendUrl}/settings">Manage your preferences</a></p>
           </div>
         </div>
@@ -654,7 +695,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `${emoji} ${title} - GateRecord`,
+      subject: `${emoji} ${title} - YAAD GateRecord`,
       html,
     });
   }

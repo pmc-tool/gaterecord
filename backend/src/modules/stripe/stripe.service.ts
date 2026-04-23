@@ -17,6 +17,9 @@ import { Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import Stripe from 'stripe';
 import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
+
+import { EmailService } from '@modules/notification/email.service';
 
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import {
@@ -89,6 +92,7 @@ export class StripeService implements OnModuleInit {
   constructor(
     private configService: ConfigService,
     private eventEmitter: EventEmitter2,
+    private emailService: EmailService,
     @InjectRepository(SubscriptionPlan)
     private planRepository: Repository<SubscriptionPlan>,
     @InjectRepository(Tenant)
@@ -118,10 +122,42 @@ export class StripeService implements OnModuleInit {
     }
   }
 
+  /**
+   * Extract subscription ID from session.subscription
+   * Can be either a string ID or an expanded Subscription object
+   */
+  private extractSubscriptionId(subscription: string | Stripe.Subscription | null): string | null {
+    if (!subscription) return null;
+    if (typeof subscription === 'string') return subscription;
+    if (typeof subscription === 'object' && 'id' in subscription) return subscription.id;
+    return null;
+  }
+
   // ==================== Product & Price Management ====================
 
   /**
+   * Calculate the effective price after applying discount
+   * Checks if discount is valid (not expired) before applying
+   */
+  private calculateEffectivePrice(basePrice: number, discountPercent: number, discountValidUntil: Date | null): number {
+    // Check if discount is valid
+    if (discountPercent <= 0) {
+      return basePrice;
+    }
+
+    // Check if discount has expired
+    if (discountValidUntil && new Date(discountValidUntil) < new Date()) {
+      return basePrice;
+    }
+
+    // Apply discount
+    const discountedPrice = basePrice * (1 - discountPercent / 100);
+    return Math.round(discountedPrice * 100) / 100; // Round to 2 decimals
+  }
+
+  /**
    * Sync a plan to Stripe - creates/updates Product and Prices
+   * Applies any active discounts to the Stripe price
    */
   async syncPlanToStripe(planId: string): Promise<SubscriptionPlan> {
     this.ensureStripe();
@@ -156,8 +192,20 @@ export class StripeService implements OnModuleInit {
       plan.stripeProductId = product.id;
     }
 
+    // Calculate effective prices with discount applied
+    const effectiveMonthlyPrice = this.calculateEffectivePrice(
+      Number(plan.monthlyPrice),
+      Number(plan.discountPercent),
+      plan.discountValidUntil,
+    );
+    const effectiveYearlyPrice = this.calculateEffectivePrice(
+      Number(plan.yearlyPrice),
+      Number(plan.discountPercent),
+      plan.discountValidUntil,
+    );
+
     // Create Monthly Price (or update by creating new if changed)
-    const monthlyPriceCents = Math.round(Number(plan.monthlyPrice) * 100);
+    const monthlyPriceCents = Math.round(effectiveMonthlyPrice * 100);
     if (
       !plan.stripePriceIdMonthly ||
       (await this.priceNeedsUpdate(plan.stripePriceIdMonthly, monthlyPriceCents))
@@ -171,13 +219,18 @@ export class StripeService implements OnModuleInit {
         unit_amount: monthlyPriceCents,
         currency: 'usd',
         recurring: { interval: 'month' },
-        metadata: { planId: plan.id, billingCycle: 'monthly' },
+        metadata: {
+          planId: plan.id,
+          billingCycle: 'monthly',
+          originalPrice: String(plan.monthlyPrice),
+          discountPercent: String(plan.discountPercent || 0),
+        },
       });
       plan.stripePriceIdMonthly = monthlyPrice.id;
     }
 
     // Create Yearly Price
-    const yearlyPriceCents = Math.round(Number(plan.yearlyPrice) * 100);
+    const yearlyPriceCents = Math.round(effectiveYearlyPrice * 100);
     if (
       !plan.stripePriceIdYearly ||
       (await this.priceNeedsUpdate(plan.stripePriceIdYearly, yearlyPriceCents))
@@ -190,13 +243,20 @@ export class StripeService implements OnModuleInit {
         unit_amount: yearlyPriceCents,
         currency: 'usd',
         recurring: { interval: 'year' },
-        metadata: { planId: plan.id, billingCycle: 'yearly' },
+        metadata: {
+          planId: plan.id,
+          billingCycle: 'yearly',
+          originalPrice: String(plan.yearlyPrice),
+          discountPercent: String(plan.discountPercent || 0),
+        },
       });
       plan.stripePriceIdYearly = yearlyPrice.id;
     }
 
     await this.planRepository.save(plan);
-    this.logger.log(`Synced plan ${plan.name} to Stripe: ${product.id}`);
+    this.logger.log(
+      `Synced plan ${plan.name} to Stripe: ${product.id} (Monthly: $${effectiveMonthlyPrice}, Yearly: $${effectiveYearlyPrice})`,
+    );
     return plan;
   }
 
@@ -289,6 +349,9 @@ export class StripeService implements OnModuleInit {
     const customerId = await this.ensureStripeCustomer(tenant);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
 
+    // Check if user is already on trial - don't give them another trial period
+    const isAlreadyOnTrial = tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
+    
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
@@ -300,15 +363,16 @@ export class StripeService implements OnModuleInit {
         },
       ],
       subscription_data: {
-        trial_period_days: plan.trialDays > 0 ? plan.trialDays : undefined,
+        // Only add trial days for NEW users, not for users converting from trial to paid
+        trial_period_days: (!isAlreadyOnTrial && plan.trialDays > 0) ? plan.trialDays : undefined,
         metadata: {
           tenantId: tenant.id,
           planId: plan.id,
           billingCycle: dto.billingCycle,
         },
       },
-      success_url: dto.successUrl || `${frontendUrl}/settings/billing?success=true`,
-      cancel_url: dto.cancelUrl || `${frontendUrl}/settings/billing?canceled=true`,
+      success_url: dto.successUrl || `${frontendUrl}/billing/settings?success=true`,
+      cancel_url: dto.cancelUrl || `${frontendUrl}/billing/settings?canceled=true`,
       metadata: {
         tenantId: tenant.id,
         planId: plan.id,
@@ -441,7 +505,7 @@ export class StripeService implements OnModuleInit {
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
-      return_url: returnUrl || `${frontendUrl}/settings/billing`,
+      return_url: returnUrl || `${frontendUrl}/billing/settings`,
     });
 
     return { url: session.url };
@@ -460,7 +524,28 @@ export class StripeService implements OnModuleInit {
       relations: ['subscriptionPlan'],
     });
 
-    if (!tenant?.stripeSubscriptionId) {
+    if (!tenant) {
+      return null;
+    }
+
+    // Handle trial users (no Stripe subscription yet)
+    if (!tenant.stripeSubscriptionId) {
+      // If tenant is in trialing status, return trial info
+      if (tenant.subscriptionStatus === SubscriptionStatus.TRIALING) {
+        return {
+          subscriptionId: 'trial',
+          status: 'trialing',
+          currentPeriodEnd: tenant.subscriptionExpiresAt || new Date(),
+          cancelAtPeriodEnd: false,
+          planName: tenant.subscriptionPlan?.name || 'Basic',
+          billingCycle: tenant.billingCycle,
+          monthlyAmount: 0,
+          nextBillingDate: tenant.subscriptionExpiresAt || new Date(),
+          isTrial: true,
+          trialEndDate: tenant.subscriptionExpiresAt,
+          isPaused: false,
+        };
+      }
       return null;
     }
 
@@ -772,6 +857,7 @@ export class StripeService implements OnModuleInit {
       maxUsers: number;
       features: string[];
     } | null;
+    isOnTrial: boolean;
     availablePlans: {
       id: string;
       name: string;
@@ -797,6 +883,9 @@ export class StripeService implements OnModuleInit {
       throw new NotFoundException('Tenant not found');
     }
 
+    // Check if tenant is on trial
+    const isOnTrial = tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
+
     // Get all active public plans
     const allPlans = await this.planRepository.find({
       where: { isActive: true, isPublic: true },
@@ -804,7 +893,7 @@ export class StripeService implements OnModuleInit {
     });
 
     const currentPlan = tenant.subscriptionPlan;
-    const currentMonthly = Number(currentPlan?.monthlyPrice) || 0;
+    const currentMonthly = isOnTrial ? 0 : Number(currentPlan?.monthlyPrice) || 0;
 
     // Convert features object to array for current plan
     const currentPlanFeatures: string[] = [];
@@ -828,8 +917,11 @@ export class StripeService implements OnModuleInit {
             features: currentPlanFeatures,
           }
         : null,
+      isOnTrial,
       availablePlans: allPlans
-        .filter((p) => p.id !== currentPlan?.id)
+        // For trial users, include ALL plans (so they can subscribe to any plan including their current trial plan)
+        // For non-trial users, exclude the current plan
+        .filter((p) => isOnTrial || p.id !== currentPlan?.id)
         .map((plan) => {
           // Convert features object to array of enabled feature names
           const featuresArray: string[] = [];
@@ -854,7 +946,7 @@ export class StripeService implements OnModuleInit {
             isUpgrade: Number(plan.monthlyPrice) > currentMonthly,
             priceDifference: {
               monthly: Number(plan.monthlyPrice) - currentMonthly,
-              yearly: Number(plan.yearlyPrice) - Number(currentPlan?.yearlyPrice || 0),
+              yearly: Number(plan.yearlyPrice) - (isOnTrial ? 0 : Number(currentPlan?.yearlyPrice || 0)),
             },
           };
         }),
@@ -863,6 +955,9 @@ export class StripeService implements OnModuleInit {
 
   /**
    * Preview plan change (calculate prorated amounts)
+   * Netflix-style proration:
+   * - UPGRADES: Charge prorated difference immediately
+   * - DOWNGRADES: Change takes effect at billing period end (no immediate charge)
    */
   async previewPlanChange(
     tenantId: string,
@@ -876,6 +971,8 @@ export class StripeService implements OnModuleInit {
     creditAmount: number;
     effectiveDate: Date;
     isUpgrade: boolean;
+    daysRemaining: number;
+    immediateChange: boolean;
   }> {
     this.ensureStripe();
 
@@ -905,27 +1002,71 @@ export class StripeService implements OnModuleInit {
 
     // Get current subscription
     const subscription = await this.stripe.subscriptions.retrieve(tenant.stripeSubscriptionId);
+    const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+    const currentPeriodStart = new Date(subscription.current_period_start * 1000);
+    const now = new Date();
 
-    // Create invoice preview using upcoming invoice with subscription changes
-    const preview = await this.stripe.invoices.retrieveUpcoming({
-      customer: tenant.stripeCustomerId!,
-      subscription: tenant.stripeSubscriptionId,
-      subscription_items: [
-        {
-          id: subscription.items.data[0].id,
-          price: newPriceId,
-        },
-      ],
-      subscription_proration_behavior: 'create_prorations',
-    });
+    // Calculate remaining days in current period
+    const totalDays = Math.ceil(
+      (currentPeriodEnd.getTime() - currentPeriodStart.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    const daysRemaining = Math.max(
+      0,
+      Math.ceil((currentPeriodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+    );
+    const prorationFactor = daysRemaining / totalDays;
 
-    const currentPrice =
+    const currentPrice = Number(
       tenant.billingCycle === BillingCycle.MONTHLY
         ? tenant.subscriptionPlan?.monthlyPrice || 0
-        : tenant.subscriptionPlan?.yearlyPrice || 0;
+        : tenant.subscriptionPlan?.yearlyPrice || 0,
+    );
 
-    const newPrice =
-      billingCycle === BillingCycle.MONTHLY ? newPlan.monthlyPrice : newPlan.yearlyPrice;
+    const newPrice = Number(
+      billingCycle === BillingCycle.MONTHLY ? newPlan.monthlyPrice : newPlan.yearlyPrice,
+    );
+
+    const isUpgrade = newPrice > currentPrice;
+
+    // Netflix-style proration calculation
+    let prorationAmount = 0;
+    let amountDue = 0;
+    let creditAmount = 0;
+    let effectiveDate: Date;
+    let immediateChange: boolean;
+
+    if (isUpgrade) {
+      // UPGRADE: Charge immediately for prorated difference
+      // Credit for unused portion of current plan
+      const unusedCredit = currentPrice * prorationFactor;
+      // Charge for remaining portion of new plan
+      const newPlanCharge = newPrice * prorationFactor;
+      // Net proration = what they owe for the upgrade
+      prorationAmount = newPlanCharge - unusedCredit;
+      amountDue = Math.max(0, prorationAmount);
+      creditAmount = 0;
+      effectiveDate = now;
+      immediateChange = true;
+
+      this.logger.debug(
+        `Upgrade proration: ${daysRemaining}/${totalDays} days remaining. ` +
+          `Credit: $${unusedCredit.toFixed(2)}, New charge: $${newPlanCharge.toFixed(2)}, ` +
+          `Amount due: $${amountDue.toFixed(2)}`,
+      );
+    } else {
+      // DOWNGRADE: No immediate charge, change at period end
+      // User keeps current plan features until period ends
+      prorationAmount = 0;
+      amountDue = 0;
+      creditAmount = 0; // No credit, they use full value of current plan
+      effectiveDate = currentPeriodEnd;
+      immediateChange = false;
+
+      this.logger.debug(
+        `Downgrade scheduled for ${currentPeriodEnd.toISOString()}. ` +
+          `No immediate charge. New rate: $${newPrice}/period`,
+      );
+    }
 
     return {
       currentPlan: {
@@ -936,19 +1077,21 @@ export class StripeService implements OnModuleInit {
         name: newPlan.name,
         price: newPrice,
       },
-      prorationAmount: (preview.total - (preview.subtotal || 0)) / 100,
-      amountDue: preview.total / 100,
-      creditAmount: preview.total < 0 ? Math.abs(preview.total) / 100 : 0,
-      effectiveDate: new Date(),
-      isUpgrade: newPrice > currentPrice,
+      prorationAmount: Math.round(prorationAmount * 100) / 100, // Round to 2 decimals
+      amountDue: Math.round(amountDue * 100) / 100,
+      creditAmount: Math.round(creditAmount * 100) / 100,
+      effectiveDate,
+      isUpgrade,
+      daysRemaining,
+      immediateChange,
     };
   }
 
   /**
    * Change subscription plan (upgrade or downgrade)
-   * - Handles proration automatically
-   * - Updates Stripe subscription
-   * - Updates local database
+   * Netflix-style billing:
+   * - UPGRADES: Immediate change with proration (pay prorated difference now)
+   * - DOWNGRADES: Scheduled for period end (keep current plan, new price on renewal)
    */
   async changePlan(
     tenantId: string,
@@ -962,6 +1105,8 @@ export class StripeService implements OnModuleInit {
     amountCharged: number;
     creditApplied: number;
     effectiveDate: Date;
+    isUpgrade: boolean;
+    isScheduled: boolean;
   }> {
     this.ensureStripe();
 
@@ -1005,57 +1150,132 @@ export class StripeService implements OnModuleInit {
     // Get current subscription
     const subscription = await this.stripe.subscriptions.retrieve(tenant.stripeSubscriptionId);
     const currentItemId = subscription.items.data[0].id;
+    const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+    const currentPeriodStart = new Date(subscription.current_period_start * 1000);
+    const now = new Date();
+
     const previousPlanId = tenant.subscriptionPlanId;
     const previousPlanName = tenant.subscriptionPlan?.name;
-    const previousPrice =
+    const previousPrice = Number(
       tenant.billingCycle === BillingCycle.MONTHLY
         ? tenant.subscriptionPlan?.monthlyPrice || 0
-        : tenant.subscriptionPlan?.yearlyPrice || 0;
-    const newPrice =
-      billingCycle === BillingCycle.MONTHLY ? newPlan.monthlyPrice : newPlan.yearlyPrice;
+        : tenant.subscriptionPlan?.yearlyPrice || 0,
+    );
+    const newPrice = Number(
+      billingCycle === BillingCycle.MONTHLY ? newPlan.monthlyPrice : newPlan.yearlyPrice,
+    );
     const isUpgrade = newPrice > previousPrice;
 
-    // Update subscription in Stripe
-    const updatedSubscription = await this.stripe.subscriptions.update(
-      tenant.stripeSubscriptionId,
-      {
-        items: [
-          {
-            id: currentItemId,
-            price: newPriceId,
-          },
-        ],
-        proration_behavior: options.immediate ? 'create_prorations' : 'none',
+    let amountCharged = 0;
+    let creditApplied = 0;
+    let effectiveDate: Date;
+    let isScheduled = false;
+
+    if (isUpgrade || options.immediate) {
+      // UPGRADE: Apply immediately with proration
+      // Calculate prorated amounts
+      const totalDays = Math.ceil(
+        (currentPeriodEnd.getTime() - currentPeriodStart.getTime()) / (1000 * 60 * 60 * 24),
+      );
+      const daysRemaining = Math.max(
+        0,
+        Math.ceil((currentPeriodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+      );
+      const prorationFactor = daysRemaining / totalDays;
+
+      // Credit for unused current plan + charge for new plan remaining period
+      const unusedCredit = previousPrice * prorationFactor;
+      const newPlanCharge = newPrice * prorationFactor;
+      amountCharged = Math.max(0, Math.round((newPlanCharge - unusedCredit) * 100) / 100);
+
+      // Update subscription in Stripe (immediate with proration)
+      await this.stripe.subscriptions.update(tenant.stripeSubscriptionId, {
+        items: [{ id: currentItemId, price: newPriceId }],
+        proration_behavior: 'create_prorations',
         metadata: {
           ...subscription.metadata,
           planId: newPlanId,
           billingCycle,
           previousPlanId,
+          changeType: 'upgrade',
         },
-      },
-    );
+      });
 
-    // Calculate amounts from the latest invoice
-    let amountCharged = 0;
-    let creditApplied = 0;
+      effectiveDate = now;
+      isScheduled = false;
 
-    if (options.immediate) {
-      try {
-        const upcomingInvoice = await this.stripe.invoices.retrieveUpcoming({
-          customer: tenant.stripeCustomerId!,
-        });
-        amountCharged = Math.max(0, upcomingInvoice.total / 100);
-        creditApplied = upcomingInvoice.total < 0 ? Math.abs(upcomingInvoice.total) / 100 : 0;
-      } catch {
-        // No upcoming invoice
+      // Update local database immediately
+      tenant.subscriptionPlanId = newPlanId;
+      tenant.billingCycle = billingCycle;
+
+      this.logger.log(
+        `Upgrade applied immediately: ${previousPlanName} -> ${newPlan.name}. ` +
+          `Charged: $${amountCharged.toFixed(2)} (${daysRemaining}/${totalDays} days)`,
+      );
+    } else {
+      // DOWNGRADE: Schedule for period end (Netflix-style)
+      // Cancel any existing scheduled update first
+      if (subscription.schedule) {
+        try {
+          await this.stripe.subscriptionSchedules.cancel(subscription.schedule as string);
+        } catch (e) {
+          this.logger.warn(`Failed to cancel existing schedule: ${e}`);
+        }
       }
+
+      // Create a schedule for the downgrade at period end
+      const schedule = await this.stripe.subscriptionSchedules.create({
+        from_subscription: tenant.stripeSubscriptionId,
+      });
+
+      // Update the schedule with new phases
+      await this.stripe.subscriptionSchedules.update(schedule.id, {
+        phases: [
+          {
+            // Current phase until period end
+            items: [{ price: subscription.items.data[0].price.id, quantity: 1 }],
+            start_date: subscription.current_period_start,
+            end_date: subscription.current_period_end,
+          },
+          {
+            // New phase with downgraded plan
+            items: [{ price: newPriceId, quantity: 1 }],
+            start_date: subscription.current_period_end,
+            iterations: 1, // Continue indefinitely
+          },
+        ],
+        metadata: {
+          tenantId,
+          previousPlanId,
+          newPlanId,
+          billingCycle,
+          changeType: 'downgrade',
+        },
+      });
+
+      effectiveDate = currentPeriodEnd;
+      isScheduled = true;
+      amountCharged = 0;
+      creditApplied = 0;
+
+      // Store scheduled change info in settings (but don't update plan yet)
+      tenant.settings = {
+        ...((tenant.settings as object) || {}),
+        scheduledPlanChange: {
+          newPlanId,
+          newPlanName: newPlan.name,
+          billingCycle,
+          effectiveDate: currentPeriodEnd.toISOString(),
+          scheduleId: schedule.id,
+        },
+      };
+
+      this.logger.log(
+        `Downgrade scheduled: ${previousPlanName} -> ${newPlan.name} on ${currentPeriodEnd.toISOString()}`,
+      );
     }
 
-    // Update local database
     const previousStatus = tenant.subscriptionStatus;
-    tenant.subscriptionPlanId = newPlanId;
-    tenant.billingCycle = billingCycle;
-    tenant.currentPeriodEnd = new Date(updatedSubscription.current_period_end * 1000);
     await this.tenantRepository.save(tenant);
 
     // Audit log
@@ -1073,36 +1293,41 @@ export class StripeService implements OnModuleInit {
         newPlanName: newPlan.name,
         newPrice,
         billingCycle,
-        immediate: options.immediate,
+        immediate: !isScheduled,
         amountCharged,
         creditApplied,
+        effectiveDate: effectiveDate.toISOString(),
+        isScheduled,
       },
     });
 
     this.logger.log(
-      `Plan ${isUpgrade ? 'upgraded' : 'downgraded'} for tenant ${tenant.name}: ${previousPlanName} -> ${newPlan.name}`,
+      `Plan ${isUpgrade ? 'upgraded' : 'downgrade scheduled'} for tenant ${tenant.name}: ${previousPlanName} -> ${newPlan.name}`,
     );
 
-    // Emit event for any post-upgrade actions
+    // Emit event for any post-change actions
     this.eventEmitter.emit('subscription.planChanged', {
       tenant,
       previousPlanId,
       newPlanId,
       isUpgrade,
+      isScheduled,
     });
 
     return {
       success: true,
       message: isUpgrade
         ? `Successfully upgraded to ${newPlan.name}`
-        : `Successfully changed to ${newPlan.name}`,
+        : `Your plan will change to ${newPlan.name} on ${currentPeriodEnd.toLocaleDateString()}`,
       newPlan: {
         id: newPlan.id,
         name: newPlan.name,
       },
       amountCharged,
       creditApplied,
-      effectiveDate: new Date(),
+      effectiveDate,
+      isUpgrade,
+      isScheduled,
     };
   }
 
@@ -1157,20 +1382,21 @@ export class StripeService implements OnModuleInit {
 
     tenant.subscriptionPlanId = plan.id;
     tenant.billingCycle = billingCycle || BillingCycle.MONTHLY;
-    tenant.stripeSubscriptionId = session.subscription as string;
+    tenant.stripeSubscriptionId = this.extractSubscriptionId(session.subscription)!;
     tenant.subscriptionStatus = SubscriptionStatus.ACTIVE;
     tenant.status = TenantStatus.ACTIVE;
     tenant.subscriptionStartedAt = new Date();
     tenant.cancelAtPeriodEnd = false;
 
     // Fetch subscription to get period end dates
-    if (session.subscription) {
+    const subscriptionId = this.extractSubscriptionId(session.subscription);
+    if (subscriptionId) {
       try {
-        const subscription = await this.stripe.subscriptions.retrieve(session.subscription as string);
+        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
         tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
         tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
       } catch (err) {
-        this.logger.warn(`Could not retrieve subscription ${session.subscription}: ${err}`);
+        this.logger.warn(`Could not retrieve subscription ${subscriptionId}: ${err}`);
       }
     }
 
@@ -1181,13 +1407,81 @@ export class StripeService implements OnModuleInit {
     await this.logAuditEvent({
       tenantId: tenant.id,
       eventType: AuditEventType.SUBSCRIPTION_ACTIVATED,
-      stripeSubscriptionId: session.subscription as string,
+      stripeSubscriptionId: subscriptionId!,
       previousStatus,
       newStatus: SubscriptionStatus.ACTIVE,
       previousPlanId,
       newPlanId: plan.id,
       metadata: { billingCycle, sessionId: session.id },
     });
+
+    // Record payment from checkout (upgrade/new subscription)
+    if (session.amount_total && session.amount_total > 0) {
+      let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
+      let netAmount: number | undefined;
+      let feeAmount: number | undefined;
+      
+      if (session.payment_intent) {
+        try {
+          const paymentIntentId = typeof session.payment_intent === 'string' 
+            ? session.payment_intent 
+            : session.payment_intent.id;
+          const paymentIntent = await this.stripe.paymentIntents.retrieve(paymentIntentId, {
+            expand: ['payment_method', 'latest_charge.balance_transaction'],
+          });
+          if (paymentIntent.payment_method && typeof paymentIntent.payment_method !== 'string') {
+            const pm = paymentIntent.payment_method;
+            if (pm.card) {
+              paymentMethodInfo = {
+                type: 'card',
+                last4: pm.card.last4 || undefined,
+                brand: pm.card.brand || undefined,
+              };
+            }
+          }
+          
+          // Get net amount and fees from balance transaction
+          const latestCharge = paymentIntent.latest_charge as Stripe.Charge | null;
+          if (latestCharge && typeof latestCharge === 'object') {
+            const balanceTransaction = latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
+            if (balanceTransaction && typeof balanceTransaction === 'object') {
+              netAmount = balanceTransaction.net; // In cents
+              feeAmount = balanceTransaction.fee; // In cents
+            }
+          }
+        } catch (e) {
+          this.logger.warn(`Could not fetch payment intent details: ${e}`);
+        }
+      }
+
+      await this.recordPayment({
+        tenantId: tenant.id,
+        amount: session.amount_total,
+        netAmount,
+        feeAmount,
+        currency: session.currency || 'usd',
+        transactionType: TransactionType.CHARGE,
+        paymentType: previousPlanId ? PaymentType.UPGRADE : PaymentType.SUBSCRIPTION,
+        stripePaymentIntentId: typeof session.payment_intent === 'string' 
+          ? session.payment_intent 
+          : session.payment_intent?.id,
+        stripeInvoiceId: typeof session.invoice === 'string' 
+          ? session.invoice 
+          : session.invoice?.id,
+        stripeSubscriptionId: subscriptionId || undefined,
+        billingPeriodStart: tenant.subscriptionStartedAt,
+        billingPeriodEnd: tenant.currentPeriodEnd,
+        billingCycle: billingCycle,
+        paymentMethodType: paymentMethodInfo.type,
+        paymentMethodLast4: paymentMethodInfo.last4,
+        paymentMethodBrand: paymentMethodInfo.brand,
+        description: `Subscription payment - ${plan.name}`,
+        metadata: {
+          sessionId: session.id,
+          previousPlanId,
+        },
+      });
+    }
 
     this.eventEmitter.emit('subscription.activated', { tenant, plan });
   }
@@ -1235,13 +1529,14 @@ export class StripeService implements OnModuleInit {
       Date.now().toString(36);
 
     // Fetch subscription to get period end dates
+    const subscriptionId = this.extractSubscriptionId(session.subscription);
     let currentPeriodEnd: Date | undefined;
-    if (session.subscription) {
+    if (subscriptionId) {
       try {
-        const subscription = await this.stripe.subscriptions.retrieve(session.subscription as string);
+        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
         currentPeriodEnd = new Date(subscription.current_period_end * 1000);
       } catch (err) {
-        this.logger.warn(`Could not retrieve subscription ${session.subscription}: ${err}`);
+        this.logger.warn(`Could not retrieve subscription ${subscriptionId}: ${err}`);
       }
     }
 
@@ -1256,7 +1551,7 @@ export class StripeService implements OnModuleInit {
       subscriptionPlanId: plan.id,
       billingCycle: billingCycle || BillingCycle.MONTHLY,
       stripeCustomerId: session.customer as string,
-      stripeSubscriptionId: session.subscription as string,
+      stripeSubscriptionId: subscriptionId!,
       subscriptionStatus: SubscriptionStatus.ACTIVE,
       subscriptionStartedAt: new Date(),
       subscriptionExpiresAt: currentPeriodEnd,
@@ -1270,7 +1565,10 @@ export class StripeService implements OnModuleInit {
 
     const savedTenant = await this.tenantRepository.save(tenant);
 
-    // Create user
+    // Generate QR code for the building admin
+    const qrCode = `GR-${uuidv4()}`;
+
+    // Create user (building admin)
     const user = this.userRepository.create({
       email: email.toLowerCase(),
       passwordHash,
@@ -1280,19 +1578,49 @@ export class StripeService implements OnModuleInit {
       role: UserRole.BUILDING_ADMIN,
       status: UserStatus.ACTIVE,
       tenantId: savedTenant.id,
+      qrCode,
     });
 
-    await this.userRepository.save(user);
+    const savedUser = await this.userRepository.save(user);
 
     this.logger.log(
       `Signup completed via Stripe: ${email} - Tenant: ${buildingName} - Plan: ${plan.name}`,
     );
 
+    // Calculate effective price with discount for email display
+    const basePrice = billingCycle === BillingCycle.YEARLY
+      ? Number(plan.yearlyPrice)
+      : Number(plan.monthlyPrice);
+    const effectivePrice = this.calculateEffectivePrice(
+      basePrice,
+      Number(plan.discountPercent),
+      plan.discountValidUntil,
+    );
+
+    // Send welcome email with subscription info (don't fail signup if email fails)
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+    this.emailService
+      .sendWelcomeEmail(
+        savedUser.email,
+        `${savedUser.firstName} ${savedUser.lastName}`,
+        savedTenant.name,
+        `${frontendUrl}/dashboard`,
+        {
+          type: 'subscription',
+          planName: plan.name,
+          price: effectivePrice,
+          billingCycle: billingCycle === BillingCycle.YEARLY ? 'yearly' : 'monthly',
+        },
+      )
+      .catch((error) => {
+        this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
+      });
+
     // Audit log
     await this.logAuditEvent({
       tenantId: savedTenant.id,
       eventType: AuditEventType.SUBSCRIPTION_CREATED,
-      stripeSubscriptionId: session.subscription as string,
+      stripeSubscriptionId: subscriptionId!,
       newStatus: SubscriptionStatus.ACTIVE,
       newPlanId: plan.id,
       metadata: {
@@ -1303,7 +1631,77 @@ export class StripeService implements OnModuleInit {
       },
     });
 
-    this.eventEmitter.emit('signup.completed', { tenant: savedTenant, user, plan });
+    // Record initial payment from checkout
+    if (session.amount_total && session.amount_total > 0) {
+      // Get payment method details if available
+      let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
+      let netAmount: number | undefined;
+      let feeAmount: number | undefined;
+      
+      if (session.payment_intent) {
+        try {
+          const paymentIntentId = typeof session.payment_intent === 'string' 
+            ? session.payment_intent 
+            : session.payment_intent.id;
+          const paymentIntent = await this.stripe.paymentIntents.retrieve(paymentIntentId, {
+            expand: ['payment_method', 'latest_charge.balance_transaction'],
+          });
+          if (paymentIntent.payment_method && typeof paymentIntent.payment_method !== 'string') {
+            const pm = paymentIntent.payment_method;
+            if (pm.card) {
+              paymentMethodInfo = {
+                type: 'card',
+                last4: pm.card.last4 || undefined,
+                brand: pm.card.brand || undefined,
+              };
+            }
+          }
+          
+          // Get net amount and fees from balance transaction
+          const latestCharge = paymentIntent.latest_charge as Stripe.Charge | null;
+          if (latestCharge && typeof latestCharge === 'object') {
+            const balanceTransaction = latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
+            if (balanceTransaction && typeof balanceTransaction === 'object') {
+              netAmount = balanceTransaction.net; // In cents
+              feeAmount = balanceTransaction.fee; // In cents
+            }
+          }
+        } catch (e) {
+          this.logger.warn(`Could not fetch payment intent details: ${e}`);
+        }
+      }
+
+      await this.recordPayment({
+        tenantId: savedTenant.id,
+        amount: session.amount_total,
+        netAmount,
+        feeAmount,
+        currency: session.currency || 'usd',
+        transactionType: TransactionType.CHARGE,
+        paymentType: PaymentType.SUBSCRIPTION,
+        stripePaymentIntentId: typeof session.payment_intent === 'string' 
+          ? session.payment_intent 
+          : session.payment_intent?.id,
+        stripeInvoiceId: typeof session.invoice === 'string' 
+          ? session.invoice 
+          : session.invoice?.id,
+        stripeSubscriptionId: subscriptionId || undefined,
+        billingPeriodStart: new Date(),
+        billingPeriodEnd: currentPeriodEnd,
+        billingCycle: billingCycle,
+        paymentMethodType: paymentMethodInfo.type,
+        paymentMethodLast4: paymentMethodInfo.last4,
+        paymentMethodBrand: paymentMethodInfo.brand,
+        description: `Initial subscription payment - ${plan.name}`,
+        metadata: {
+          sessionId: session.id,
+          signupPayment: true,
+        },
+      });
+      this.logger.log(`Recorded initial payment of $${session.amount_total / 100} for ${email}`);
+    }
+
+    this.eventEmitter.emit('signup.completed', { tenant: savedTenant, user: savedUser, plan });
   }
 
   /**
@@ -1466,14 +1864,43 @@ export class StripeService implements OnModuleInit {
     await this.tenantRepository.save(tenant);
     this.logger.log(`Invoice paid for tenant ${tenant.name}`);
 
+    // Check if payment already recorded (prevent duplicates from checkout + invoice webhooks)
+    const existingPayment = await this.paymentRepository.findOne({
+      where: { stripeInvoiceId: invoice.id },
+    });
+    if (existingPayment) {
+      this.logger.log(`Payment already recorded for invoice ${invoice.id}, skipping`);
+      // Still update audit log
+      await this.logAuditEvent({
+        tenantId: tenant.id,
+        eventType: AuditEventType.PAYMENT_SUCCEEDED,
+        stripeSubscriptionId: subscriptionId,
+        amount: invoice.amount_paid ? invoice.amount_paid / 100 : undefined,
+        currency: invoice.currency,
+        metadata: {
+          invoiceId: invoice.id,
+          periodEnd: tenant.currentPeriodEnd?.toISOString(),
+          duplicate: true,
+        },
+      });
+      this.eventEmitter.emit('invoice.paid', { tenant, invoice });
+      return;
+    }
+
     // Record the payment in payments table
     const charge = invoice.charge as string;
     let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
+    let netAmount: number | undefined;
+    let feeAmount: number | undefined;
+    let taxAmount: number | undefined;
 
-    // Get payment method details from the charge
+    // Get payment method details and balance transaction from the charge
     if (charge && this.stripe) {
       try {
-        const chargeObj = await this.stripe.charges.retrieve(charge);
+        const chargeObj = await this.stripe.charges.retrieve(charge, {
+          expand: ['balance_transaction'],
+        });
+        
         if (chargeObj.payment_method_details?.card) {
           paymentMethodInfo = {
             type: 'card',
@@ -1481,14 +1908,29 @@ export class StripeService implements OnModuleInit {
             brand: chargeObj.payment_method_details.card.brand || undefined,
           };
         }
+        
+        // Get net amount and fees from balance transaction
+        const balanceTransaction = chargeObj.balance_transaction as Stripe.BalanceTransaction | null;
+        if (balanceTransaction && typeof balanceTransaction === 'object') {
+          netAmount = balanceTransaction.net; // In cents
+          feeAmount = balanceTransaction.fee; // In cents
+        }
       } catch (e) {
-        // Ignore errors fetching charge details
+        this.logger.warn(`Error fetching charge details for ${charge}: ${e}`);
       }
+    }
+
+    // Get tax from invoice if available
+    if (invoice.tax) {
+      taxAmount = invoice.tax; // In cents
     }
 
     await this.recordPayment({
       tenantId: tenant.id,
       amount: invoice.amount_paid || 0,
+      netAmount,
+      feeAmount,
+      taxAmount,
       currency: invoice.currency,
       transactionType: TransactionType.CHARGE,
       paymentType: PaymentType.SUBSCRIPTION,
@@ -1762,12 +2204,11 @@ export class StripeService implements OnModuleInit {
             .replace(/(^-|-$)/g, '') + '-' + Date.now().toString(36);
 
           // Get subscription period from Stripe
+          const subscriptionId = this.extractSubscriptionId(session.subscription);
           let currentPeriodEnd: Date | undefined;
-          if (session.subscription) {
+          if (subscriptionId) {
             try {
-              const stripeSubscription = typeof session.subscription === 'string' 
-                ? await this.stripe.subscriptions.retrieve(session.subscription)
-                : session.subscription;
+              const stripeSubscription = await this.stripe.subscriptions.retrieve(subscriptionId);
               currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
             } catch (err) {
               this.logger.warn(`Could not retrieve subscription: ${err}`);
@@ -1785,7 +2226,7 @@ export class StripeService implements OnModuleInit {
             subscriptionPlanId: plan.id,
             billingCycle: (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY,
             stripeCustomerId: session.customer as string,
-            stripeSubscriptionId: session.subscription as string,
+            stripeSubscriptionId: subscriptionId!,
             subscriptionStatus: SubscriptionStatus.ACTIVE,
             subscriptionStartedAt: new Date(),
             subscriptionExpiresAt: currentPeriodEnd,
@@ -1799,6 +2240,9 @@ export class StripeService implements OnModuleInit {
 
           const savedTenant = await this.tenantRepository.save(tenant);
 
+          // Generate QR code for the building admin
+          const qrCode = `GR-${uuidv4()}`;
+
           // Create user
           const newUser = this.userRepository.create({
             email: email.toLowerCase(),
@@ -1809,10 +2253,41 @@ export class StripeService implements OnModuleInit {
             role: UserRole.BUILDING_ADMIN,
             status: UserStatus.ACTIVE,
             tenantId: savedTenant.id,
+            qrCode,
           });
 
-          await this.userRepository.save(newUser);
+          const savedUser = await this.userRepository.save(newUser);
           this.logger.log(`Created account via verify-payment fallback: ${email}`);
+
+          // Calculate effective price with discount for email
+          const billingCycle = (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY;
+          const basePrice = billingCycle === BillingCycle.YEARLY
+            ? Number(plan.yearlyPrice)
+            : Number(plan.monthlyPrice);
+          const effectivePrice = this.calculateEffectivePrice(
+            basePrice,
+            Number(plan.discountPercent),
+            plan.discountValidUntil,
+          );
+
+          // Send welcome email with subscription info
+          const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+          this.emailService
+            .sendWelcomeEmail(
+              savedUser.email,
+              `${savedUser.firstName} ${savedUser.lastName}`,
+              savedTenant.name,
+              `${frontendUrl}/dashboard`,
+              {
+                type: 'subscription',
+                planName: plan.name,
+                price: effectivePrice,
+                billingCycle: billingCycle === BillingCycle.YEARLY ? 'yearly' : 'monthly',
+              },
+            )
+            .catch((error) => {
+              this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
+            });
 
           return { success: true, tenantId: savedTenant.id };
         }
@@ -1837,19 +2312,24 @@ export class StripeService implements OnModuleInit {
       }
 
       // Update tenant with subscription info
+      const subscriptionId = this.extractSubscriptionId(session.subscription);
       tenant.subscriptionPlanId = plan.id;
       tenant.billingCycle = billingCycle || BillingCycle.MONTHLY;
-      tenant.stripeSubscriptionId = session.subscription as string;
+      tenant.stripeSubscriptionId = subscriptionId!;
       tenant.subscriptionStatus = SubscriptionStatus.ACTIVE;
       tenant.status = TenantStatus.ACTIVE;
       tenant.subscriptionStartedAt = new Date();
       tenant.cancelAtPeriodEnd = false;
 
       // Set subscription period from the subscription
-      if (session.subscription && typeof session.subscription !== 'string') {
-        const subscription = session.subscription as Stripe.Subscription;
-        tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
-        tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
+      if (subscriptionId) {
+        try {
+          const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+          tenant.currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+          tenant.subscriptionExpiresAt = tenant.currentPeriodEnd;
+        } catch (err) {
+          this.logger.warn(`Could not retrieve subscription: ${err}`);
+        }
       }
 
       await this.tenantRepository.save(tenant);
@@ -2363,6 +2843,7 @@ export class StripeService implements OnModuleInit {
 
   /**
    * Record a successful payment
+   * Includes duplicate prevention by stripeInvoiceId or stripePaymentIntentId
    */
   async recordPayment(data: {
     tenantId: string;
@@ -2386,6 +2867,26 @@ export class StripeService implements OnModuleInit {
     description?: string;
     metadata?: Record<string, unknown>;
   }): Promise<Payment> {
+    // Prevent duplicates by checking if payment already exists
+    if (data.stripeInvoiceId) {
+      const existing = await this.paymentRepository.findOne({
+        where: { stripeInvoiceId: data.stripeInvoiceId },
+      });
+      if (existing) {
+        this.logger.log(`Payment already exists for invoice ${data.stripeInvoiceId}`);
+        return existing;
+      }
+    }
+    if (data.stripePaymentIntentId) {
+      const existing = await this.paymentRepository.findOne({
+        where: { stripePaymentIntentId: data.stripePaymentIntentId },
+      });
+      if (existing) {
+        this.logger.log(`Payment already exists for payment intent ${data.stripePaymentIntentId}`);
+        return existing;
+      }
+    }
+
     const tenant = await this.tenantRepository.findOne({
       where: { id: data.tenantId },
       relations: ['subscriptionPlan'],
