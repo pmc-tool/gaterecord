@@ -490,10 +490,10 @@ export default function SubscriptionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <Title level={3} className="mb-0">Subscription & Earnings Dashboard</Title>
-        <Tag color="blue" className="text-sm">
+        {/* <Tag color="blue" className="text-sm">
           <CalendarOutlined className="mr-1" />
           Updated: {new Date().toLocaleDateString()}
-        </Tag>
+        </Tag> */}
       </div>
 
       {/* Alerts Section */}
@@ -534,7 +534,7 @@ export default function SubscriptionsPage() {
         <SectionHeader
           icon={<DollarOutlined />}
           title="Revenue Metrics"
-          subtitle="Key financial indicators"
+          // subtitle="Key financial indicators"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -594,7 +594,7 @@ export default function SubscriptionsPage() {
         <SectionHeader
           icon={<TeamOutlined />}
           title="Customer Value Metrics"
-          subtitle="Subscriber economics"
+          // subtitle="Subscriber economics"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -611,7 +611,7 @@ export default function SubscriptionsPage() {
           </Col>
           <Col xs={24} sm={12} lg={6}>
             <KPICard
-              title="Customer Lifetime Value"
+              title="Customer Value (2 years)"
               value={metrics.ltv}
               prefix={<TrophyOutlined />}
               description="Predicted total revenue per customer"
@@ -653,7 +653,7 @@ export default function SubscriptionsPage() {
         <SectionHeader
           icon={<SafetyCertificateOutlined />}
           title="Subscription Metrics"
-          subtitle="Current subscriber status"
+          // subtitle="Current subscriber status"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -725,7 +725,7 @@ export default function SubscriptionsPage() {
         <SectionHeader
           icon={<ThunderboltOutlined />}
           title="Business Health Indicators"
-          subtitle="Operational metrics requiring attention"
+          // subtitle="Operational metrics requiring attention"
         />
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={6}>
@@ -917,7 +917,7 @@ export default function SubscriptionsPage() {
             total: pagination.total,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} buildings`,
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} buildings`,
           }}
           onChange={(pag) => handleTableChange({ current: pag.current, pageSize: pag.pageSize })}
           className="[&_.ant-table-thead_th]:bg-gray-50"

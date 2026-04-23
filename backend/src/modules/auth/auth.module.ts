@@ -24,7 +24,7 @@ import { StripeModule } from '../stripe/stripe.module';
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRATION', '15m'),
+          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRATION', '7d'),
         },
       }),
       inject: [ConfigService],

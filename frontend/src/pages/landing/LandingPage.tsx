@@ -218,8 +218,8 @@ export default function LandingPage() {
 
       // Calculate discounted price
       const now = new Date();
-      const originalPrice = plan.monthlyPrice;
-      const discountPercent = plan.discountPercent || 0;
+      const originalPrice = Number(plan.monthlyPrice);
+      const discountPercent = Number(plan.discountPercent) || 0;
       const discountValidUntil = plan.discountValidUntil ? new Date(plan.discountValidUntil) : null;
       const isDiscountActive =
         discountPercent > 0 &&
@@ -228,13 +228,18 @@ export default function LandingPage() {
       const discountedPrice = isDiscountActive
         ? originalPrice * (1 - discountPercent / 100) 
         : originalPrice;
-      const hasDiscount = isDiscountActive;
+      const hasDiscount = isDiscountActive && discountedPrice !== originalPrice;
+
+      // Format price: show decimals only if needed
+      const formatPrice = (p: number) => {
+        return p % 1 === 0 ? String(p) : p.toFixed(2);
+      };
 
       return {
         id: plan.id,
         name: plan.name,
-        price: isCustomPrice ? 'Custom' : String(Math.round(discountedPrice)),
-        originalPrice: isCustomPrice ? null : (hasDiscount ? String(Math.round(originalPrice)) : null),
+        price: isCustomPrice ? 'Custom' : formatPrice(discountedPrice),
+        originalPrice: isCustomPrice ? null : (hasDiscount ? formatPrice(originalPrice) : null),
         discountPercent: hasDiscount ? discountPercent : null,
         discountLabel: hasDiscount ? (plan.discountLabel || `${discountPercent}% OFF`) : null,
         description: plan.description || `Perfect for ${plan.name.toLowerCase()} communities`,
@@ -253,7 +258,7 @@ export default function LandingPage() {
         <nav className="flex items-center justify-between p-4 lg:px-8 max-w-7xl mx-auto">
           <div className="flex lg:flex-1">
             <a href="/" className="-m-1.5 p-1.5">
-              <img src="/logo.svg" alt="Yaad GateRecord" className="h-12 object-contain" />
+              <img src="/logo.svg" alt="YAAD GateRecord" className="h-12 object-contain" />
             </a>
           </div>
           <div className="flex lg:hidden">
@@ -380,7 +385,7 @@ export default function LandingPage() {
                 </div> */}
               </div>
               <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl lg:text-7xl">
-                Yaad Smart Gate Access for{' '}
+                YAAD Smart Gate Access for{' '}
                 <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                   Modern Communities
                 </span>
@@ -765,13 +770,13 @@ export default function LandingPage() {
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               to="/signup"
-              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full bg-white px-8 py-4 text-base font-semibold text-blue-600 shadow-lg hover:bg-blue-50 transition-all no-underline"
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full bg-white px-5 py-4 text-base font-semibold text-blue-600 shadow-lg hover:bg-blue-50 transition-all no-underline"
             >
               Start Free Trial
             </Link>
             <a
               href="mailto:sales@gaterecord.com"
-              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-2 ring-white/30 px-8 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-2 ring-white/30 px-5 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
             >
               Contact Sales
             </a>

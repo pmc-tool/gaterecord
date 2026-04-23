@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Table,
@@ -20,6 +20,7 @@ import {
   Statistic,
   Typography,
 } from 'antd';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   PlusOutlined,
   ReloadOutlined,
@@ -136,7 +137,7 @@ export default function MyVisitorsPage() {
   const [modalVisible, setModalVisible] = useState(false);
   const [qrModalVisible, setQrModalVisible] = useState(false);
   const [selectedPass, setSelectedPass] = useState<VisitorPass | null>(null);
-  const [qrCode, setQrCode] = useState<string>('');
+  const qrRef = useRef<HTMLDivElement>(null);
   const [form] = Form.useForm();
   const [validityType, setValidityType] = useState<ValidityType>(ValidityType.SINGLE_USE);
   const [filters, setFilters] = useState({
@@ -267,8 +268,6 @@ export default function MyVisitorsPage() {
 
       // Show QR code after creation
       setSelectedPass(response.data);
-      const qrRes = await api.get(`/visitor-passes/${response.data.id}/qr`);
-      setQrCode(qrRes.data.qrCode);
       setQrModalVisible(true);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
@@ -276,15 +275,33 @@ export default function MyVisitorsPage() {
     }
   };
 
-  const handleViewQR = async (pass: VisitorPass) => {
-    try {
-      setSelectedPass(pass);
-      const response = await api.get(`/visitor-passes/${pass.id}/qr`);
-      setQrCode(response.data.qrCode);
-      setQrModalVisible(true);
-    } catch (error) {
-      message.error('Failed to load QR code');
-    }
+  const handleViewQR = (pass: VisitorPass) => {
+    setSelectedPass(pass);
+    setQrModalVisible(true);
+  };
+
+  const downloadQR = () => {
+    if (!qrRef.current || !selectedPass) return;
+    const svg = qrRef.current.querySelector('svg');
+    if (!svg) return;
+    
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx?.drawImage(img, 0, 0);
+      const pngUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = pngUrl;
+      link.download = `visitor-pass-${selectedPass.visitorName || 'qr'}.png`;
+      link.click();
+    };
+    
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   };
 
   const handleCancel = async (id: string) => {
@@ -474,13 +491,13 @@ export default function MyVisitorsPage() {
     
 
       {/* Statistics */}
-      <Row gutter={16}>
-        <Col xs={12} sm={12} md={4}>
+      <Row gutter={[16, 16]}>
+        <Col xs={12} sm={12} md={12} lg={12} xl={4}>
           <Card>
             <Statistic title="Total Passes" value={stats.total} />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={5}>
+        <Col xs={12} sm={12} md={12} lg={12} xl={5}>
           <Card>
             <Statistic
               title="Active"
@@ -489,7 +506,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={5}>
+        <Col xs={12} sm={12} md={12} lg={12} xl={5}>
           <Card>
             <Statistic
               title="Used"
@@ -498,7 +515,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={5}>
+        <Col xs={12} sm={12} md={12} lg={12} xl={5}>
           <Card>
             <Statistic
               title="Expired"
@@ -507,7 +524,7 @@ export default function MyVisitorsPage() {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={5}>
+        <Col xs={12} sm={12} md={12} lg={12} xl={5}>
           <Card>
             <Statistic
               title="Cancelled"
@@ -601,12 +618,14 @@ export default function MyVisitorsPage() {
           dataSource={passes}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 900 }}
+          scroll={{ x: 'max-content' }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} visitors`,
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} visitors`,
+            responsive: true,
+
           }}
         />
       </Card>
@@ -815,14 +834,7 @@ export default function MyVisitorsPage() {
           <Button
             key="download"
             type="primary"
-            onClick={() => {
-              if (qrCode) {
-                const link = document.createElement('a');
-                link.href = qrCode;
-                link.download = `visitor-pass-${selectedPass?.visitorName || 'qr'}.png`;
-                link.click();
-              }
-            }}
+            onClick={downloadQR}
           >
             Download QR
           </Button>,
@@ -837,9 +849,9 @@ export default function MyVisitorsPage() {
                 <div className="text-gray-500">{selectedPass.purpose}</div>
               )}
             </div>
-            {qrCode && (
-              <img src={qrCode} alt="QR Code" className="mx-auto mb-4" style={{ width: 250, height: 250 }} />
-            )}
+            <div ref={qrRef} className="mx-auto mb-4 flex justify-center">
+              <QRCodeSVG value={selectedPass.qrToken} size={250} />
+            </div>
             <div className="text-sm text-gray-500">
               <div>Valid from: {dayjs(selectedPass.validFrom).format('MMM D, YYYY HH:mm')}</div>
               <div>Valid until: {dayjs(selectedPass.validUntil).format('MMM D, YYYY HH:mm')}</div>

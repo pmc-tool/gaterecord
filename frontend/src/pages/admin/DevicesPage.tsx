@@ -445,37 +445,37 @@ export default function DevicesPage() {
       key: 'gateName',
       render: (name: string) => name || <span className="text-gray-400">Unassigned</span>,
     },
-    {
-      title: 'Firmware',
-      dataIndex: 'firmwareVersion',
-      key: 'firmwareVersion',
-      render: (version: string) =>
-        version ? <Tag>{version}</Tag> : <span className="text-gray-400">Unknown</span>,
-    },
-    {
-      title: 'Signal',
-      dataIndex: 'wifiSignalStrength',
-      key: 'wifiSignalStrength',
-      render: (rssi: number) => getSignalStrengthTag(rssi),
-    },
-    {
-      title: 'Last Seen',
-      dataIndex: 'lastSeenAt',
-      key: 'lastSeenAt',
-      render: (date: string) =>
-        date ? (
-          <Tooltip title={dayjs(date).format('YYYY-MM-DD HH:mm:ss')}>
-            {dayjs(date).fromNow()}
-          </Tooltip>
-        ) : (
-          <span className="text-gray-400">Never</span>
-        ),
-      sorter: (a, b) => {
-        if (!a.lastSeenAt) return 1;
-        if (!b.lastSeenAt) return -1;
-        return new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime();
-      },
-    },
+    // {
+    //   title: 'Firmware',
+    //   dataIndex: 'firmwareVersion',
+    //   key: 'firmwareVersion',
+    //   render: (version: string) =>
+    //     version ? <Tag>{version}</Tag> : <span className="text-gray-400">Unknown</span>,
+    // },
+    // {
+    //   title: 'Signal',
+    //   dataIndex: 'wifiSignalStrength',
+    //   key: 'wifiSignalStrength',
+    //   render: (rssi: number) => getSignalStrengthTag(rssi),
+    // },
+    // {
+    //   title: 'Last Seen',
+    //   dataIndex: 'lastSeenAt',
+    //   key: 'lastSeenAt',
+    //   render: (date: string) =>
+    //     date ? (
+    //       <Tooltip title={dayjs(date).format('YYYY-MM-DD HH:mm:ss')}>
+    //         {dayjs(date).fromNow()}
+    //       </Tooltip>
+    //     ) : (
+    //       <span className="text-gray-400">Never</span>
+    //     ),
+    //   sorter: (a, b) => {
+    //     if (!a.lastSeenAt) return 1;
+    //     if (!b.lastSeenAt) return -1;
+    //     return new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime();
+    //   },
+    // },
     {
       title: 'Actions',
       key: 'actions',
@@ -491,14 +491,14 @@ export default function DevicesPage() {
               }}
             />
           </Tooltip>
-          <Tooltip title="Test Device">
+          {/* <Tooltip title="Test Device">
             <Button
               icon={<ThunderboltOutlined />}
               size="small"
               onClick={() => handleTestDevice(record)}
               disabled={record.status !== 'online'}
             />
-          </Tooltip>
+          </Tooltip> */}
           <Tooltip title="Edit">
             <Button icon={<EditOutlined />} size="small" onClick={() => handleEditDevice(record)} />
           </Tooltip>
@@ -765,14 +765,20 @@ export default function DevicesPage() {
           rowKey="id"
           loading={loading}
           scroll={{ x: 900 }}
-          pagination={{
+                    pagination={{
             current: pagination.page,
             pageSize: pagination.limit,
             total: pagination.total,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} devices`,
-            onChange: (page, pageSize) => fetchDevices(page, pageSize, searchText, filterTenantId, filterGateId, filterStatus),
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} events`,
+            onChange: (page, pageSize) => {
+              setPagination((prev) => ({ ...prev, page, limit: pageSize }));
+            },
+            onShowSizeChange: (current, size) => {
+              setPagination((prev) => ({ ...prev, page: current, limit: size }));
+            },
+            responsive: true,
           }}
         />
       </Card>
@@ -973,7 +979,7 @@ export default function DevicesPage() {
             <Descriptions.Item label="Status">
               {getStatusTag(selectedDevice.status)}
             </Descriptions.Item>
-            <Descriptions.Item label="Firmware">
+            {/* <Descriptions.Item label="Firmware">
               {selectedDevice.firmwareVersion || '-'}
             </Descriptions.Item>
             <Descriptions.Item label="Gate">
@@ -1000,7 +1006,7 @@ export default function DevicesPage() {
               {selectedDevice.pairedAt
                 ? dayjs(selectedDevice.pairedAt).format('YYYY-MM-DD HH:mm:ss')
                 : '-'}
-            </Descriptions.Item>
+            </Descriptions.Item> */}
           </Descriptions>
         )}
       </Modal>

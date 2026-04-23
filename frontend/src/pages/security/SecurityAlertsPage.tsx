@@ -422,8 +422,8 @@ export function SecurityAlertsPage() {
       </div>
 
       {stats && (
-        <Row gutter={16} className="mb-4">
-          <Col xs={12} sm={6}>
+        <Row gutter={[16, 16]} className="mb-4">
+          <Col xs={12} sm={12} md={12} lg={6} xl={6}>
             <Card
               hoverable
               onClick={() => setFilters({ ...filters, status: 'active' })}
@@ -437,7 +437,7 @@ export function SecurityAlertsPage() {
               />
             </Card>
           </Col>
-          <Col xs={12} sm={6}>
+          <Col xs={12} sm={12} md={12} lg={6} xl={6}>
             <Card
               hoverable
               onClick={() => setFilters({ ...filters, status: 'acknowledged' })}
@@ -451,7 +451,7 @@ export function SecurityAlertsPage() {
               />
             </Card>
           </Col>
-          <Col xs={12} sm={6}>
+          <Col xs={12} sm={12} md={12} lg={6} xl={6}>
             <Card
               hoverable
               onClick={() => setFilters({ ...filters, status: 'resolved' })}
@@ -465,7 +465,7 @@ export function SecurityAlertsPage() {
               />
             </Card>
           </Col>
-          <Col xs={12} sm={6}>
+          <Col xs={12} sm={12} md={12} lg={6} xl={6}>
             <Card
               hoverable
               onClick={() => setFilters({ ...filters, status: undefined })}
@@ -538,7 +538,8 @@ export function SecurityAlertsPage() {
             pageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} alerts`,
+            // showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} alerts`,
+
           }}
           rowClassName={(record) =>
             record.status === 'active' && record.priority === 'critical'

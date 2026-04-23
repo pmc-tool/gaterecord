@@ -376,6 +376,7 @@ export class SimulatorService {
         subjectId: rfidCard.id,
         subjectIdentifier: rfidUid,
         subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
+        residentId: rfidCard.userId,
         result: AccessResult.DENIED,
         denialReason: 'Card not yet valid',
       });
@@ -399,6 +400,7 @@ export class SimulatorService {
         subjectId: rfidCard.id,
         subjectIdentifier: rfidUid,
         subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
+        residentId: rfidCard.userId,
         result: AccessResult.DENIED,
         denialReason: 'Card expired',
       });
@@ -422,6 +424,7 @@ export class SimulatorService {
       subjectId: rfidCard.id,
       subjectIdentifier: rfidUid,
       subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
+      residentId: rfidCard.userId,
       result: AccessResult.ALLOWED,
     });
 
@@ -484,6 +487,7 @@ export class SimulatorService {
           subjectId: user.id,
           subjectIdentifier: qrToken,
           subjectName: `${user.firstName} ${user.lastName}`,
+          residentId: user.id,
           result: AccessResult.DENIED,
           denialReason: 'User does not belong to this building',
         });
@@ -506,6 +510,7 @@ export class SimulatorService {
           subjectId: user.id,
           subjectIdentifier: qrToken,
           subjectName: `${user.firstName} ${user.lastName}`,
+          residentId: user.id,
           result: AccessResult.DENIED,
           denialReason: `User account is ${user.status}`,
         });
@@ -527,6 +532,7 @@ export class SimulatorService {
         subjectId: user.id,
         subjectIdentifier: qrToken,
         subjectName: `${user.firstName} ${user.lastName}`,
+        residentId: user.id,
         result: AccessResult.ALLOWED,
         metadata: {
           userId: user.id,
@@ -584,6 +590,7 @@ export class SimulatorService {
         subjectId: pass.id,
         subjectIdentifier: qrToken,
         subjectName: pass.visitorName,
+        residentId: pass.residentId || pass.createdById,
         result: AccessResult.DENIED,
         denialReason: `Pass status: ${pass.status}`,
       });
@@ -606,6 +613,7 @@ export class SimulatorService {
         subjectId: pass.id,
         subjectIdentifier: qrToken,
         subjectName: pass.visitorName,
+        residentId: pass.residentId || pass.createdById,
         result: AccessResult.DENIED,
         denialReason: 'Pass not valid at this time',
       });
@@ -630,6 +638,7 @@ export class SimulatorService {
         subjectId: pass.id,
         subjectIdentifier: qrToken,
         subjectName: pass.visitorName,
+        residentId: pass.residentId || pass.createdById,
         result: AccessResult.DENIED,
         denialReason: 'Pass usage limit reached',
       });
@@ -662,9 +671,9 @@ export class SimulatorService {
       subjectId: pass.id,
       subjectIdentifier: qrToken,
       subjectName: `${pass.visitorName} (Visitor)`,
+      residentId,
       result: AccessResult.ALLOWED,
       metadata: {
-        residentId,
         residentName,
         residentEmail,
         visitorName: pass.visitorName,

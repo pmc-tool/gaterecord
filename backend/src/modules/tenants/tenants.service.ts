@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, Not } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { Tenant, TenantStatus, BillingCycle, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
@@ -40,6 +40,11 @@ export class TenantsService {
     const existing = await this.planRepository.findOne({ where: { name: dto.name } });
     if (existing) {
       throw new ConflictException('Plan with this name already exists');
+    }
+
+    // Only one plan can be featured at a time
+    if (dto.isFeatured) {
+      await this.planRepository.update({}, { isFeatured: false });
     }
 
     const plan = this.planRepository.create(dto);
@@ -98,6 +103,11 @@ export class TenantsService {
       if (existing) {
         throw new ConflictException('Plan with this name already exists');
       }
+    }
+
+    // Only one plan can be featured at a time
+    if (dto.isFeatured === true) {
+      await this.planRepository.update({ id: Not(id) }, { isFeatured: false });
     }
 
     Object.assign(plan, dto);

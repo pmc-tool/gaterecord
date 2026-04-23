@@ -61,10 +61,17 @@ const stateColors: Record<GateState, string> = {
 
 interface EventLog {
   id: string;
-  timestamp: Date;
-  action: string;
-  success: boolean;
-  message: string;
+  gateId: string;
+  gateName: string;
+  timestamp: string | Date;
+  method: string;
+  subjectType: string;
+  subjectId?: string;
+  subjectIdentifier?: string;
+  subjectName?: string;
+  result: string;
+  denialReason?: string;
+  operatorName?: string;
 }
 
 export function GateSimulatorPage() {
@@ -82,7 +89,14 @@ export function GateSimulatorPage() {
   const [rfidUid, setRfidUid] = useState('');
   const [qrToken, setQrToken] = useState('');
   const [eventLogs, setEventLogs] = useState<EventLog[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [loadingEventLogs, setLoadingEventLogs] = useState(false);
+  const [processingCarRfid, setProcessingCarRfid] = useState(false);
+  const [processingHumanRfid, setProcessingHumanRfid] = useState(false);
+  const [processingVerifyQr, setProcessingVerifyQr] = useState(false);
+  const [processingOpenGate, setProcessingOpenGate] = useState(false);
+  const [processingCloseGate, setProcessingCloseGate] = useState(false);
+  const [processingSimulateOpen, setProcessingSimulateOpen] = useState(false);
+  const [processingSimulateClose, setProcessingSimulateClose] = useState(false);
 
   // Cloud Plus TypeB parameters
   const [serialNumber, setSerialNumber] = useState('');
@@ -154,7 +168,8 @@ export function GateSimulatorPage() {
         'simulator:feedback',
         (data) => {
           if (data.gateId === selectedGateId) {
-            addEventLog(data);
+            // Refresh event logs after simulator feedback
+            addEventLog();
           }
         }
       );
@@ -167,6 +182,35 @@ export function GateSimulatorPage() {
     }
   }, [selectedGateId]);
 
+  // Fetch latest 10 event logs from database
+  useEffect(() => {
+    const fetchEventLogs = async () => {
+      if (!selectedGateId) {
+        setEventLogs([]);
+        return;
+      }
+
+      setLoadingEventLogs(true);
+      try {
+        const response = await api.get('/events/live', {
+          params: {
+            gateId: selectedGateId,
+            limit: 10,
+          },
+        });
+        const events = response.data.data || response.data;
+        setEventLogs(Array.isArray(events) ? events : []);
+      } catch (error) {
+        console.error('Failed to fetch event logs:', error);
+        setEventLogs([]);
+      } finally {
+        setLoadingEventLogs(false);
+      }
+    };
+
+    fetchEventLogs();
+  }, [selectedGateId]);
+
   // Cleanup scanner on unmount
   useEffect(() => {
     return () => {
@@ -176,17 +220,22 @@ export function GateSimulatorPage() {
     };
   }, [isScanning]);
 
-  const addEventLog = (feedback: SimulatorFeedback) => {
-    setEventLogs((prev) => [
-      {
-        id: feedback.eventId || Date.now().toString(),
-        timestamp: new Date(),
-        action: feedback.action,
-        success: feedback.success,
-        message: feedback.message,
-      },
-      ...prev.slice(0, 49),
-    ]);
+  const addEventLog = async () => {
+    // Refresh event logs from database after an action
+    if (!selectedGateId) return;
+    
+    try {
+      const response = await api.get('/events/live', {
+        params: {
+          gateId: selectedGateId,
+          limit: 10,
+        },
+      });
+      const events = response.data.data || response.data;
+      setEventLogs(Array.isArray(events) ? events : []);
+    } catch (error) {
+      console.error('Failed to refresh event logs:', error);
+    }
   };
 
   const triggerEvent = async (event: SimulatorEvent, data?: Partial<TriggerEventDto>) => {
@@ -195,13 +244,41 @@ export function GateSimulatorPage() {
       return;
     }
 
-    setIsProcessing(true);
     try {
       const result = await simulatorService.triggerEvent(selectedGateId, {
         event,
         ...data,
       });
-      addEventLog(result);
+      await addEventLog();
+      updateGateState(selectedGateId, result.gateState);
+
+      if (result.success) {
+        message.success(result.message);
+      } else {
+        message.warning(result.message);
+      }
+    } catch (error) {
+      message.error('Failed to trigger event');
+    }
+  };
+
+  const triggerEventWithLoading = async (
+    event: SimulatorEvent,
+    setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+    data?: Partial<TriggerEventDto>
+  ) => {
+    if (!selectedGateId) {
+      message.error('Please select a gate first');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await simulatorService.triggerEvent(selectedGateId, {
+        event,
+        ...data,
+      });
+      await addEventLog();
       updateGateState(selectedGateId, result.gateState);
 
       if (result.success) {
@@ -212,7 +289,7 @@ export function GateSimulatorPage() {
     } catch (error) {
       message.error('Failed to trigger event');
     } finally {
-      setIsProcessing(false);
+      setLoading(false);
     }
   };
 
@@ -221,7 +298,7 @@ export function GateSimulatorPage() {
       message.error('Please enter RFID UID');
       return;
     }
-    triggerEvent(SimulatorEvent.CAR_RFID_DETECTED, {
+    triggerEventWithLoading(SimulatorEvent.CAR_RFID_DETECTED, setProcessingCarRfid, {
       rfidUid: rfidUid.trim(),
       Serial: serialNumber || undefined,
       Reader: readerNumber || undefined,
@@ -234,7 +311,7 @@ export function GateSimulatorPage() {
       message.error('Please enter RFID UID');
       return;
     }
-    triggerEvent(SimulatorEvent.HUMAN_RFID_DETECTED, {
+    triggerEventWithLoading(SimulatorEvent.HUMAN_RFID_DETECTED, setProcessingHumanRfid, {
       rfidUid: rfidUid.trim(),
       Serial: serialNumber || undefined,
       Reader: readerNumber || undefined,
@@ -248,7 +325,7 @@ export function GateSimulatorPage() {
       message.error('Please enter QR Token');
       return;
     }
-    triggerEvent(SimulatorEvent.QR_VERIFIED, {
+    triggerEventWithLoading(SimulatorEvent.QR_VERIFIED, setProcessingVerifyQr, {
       qrToken: tokenToUse,
       Serial: serialNumber || undefined,
       Reader: readerNumber || undefined,
@@ -257,7 +334,7 @@ export function GateSimulatorPage() {
   };
 
   // Send real command to hardware via TCP
-  const sendHardwareCommand = async (action: 'OPEN' | 'CLOSE' | 'STOP') => {
+  const sendHardwareCommand = async (action: 'OPEN' | 'CLOSE' | 'STOP', setLoading: React.Dispatch<React.SetStateAction<boolean>>) => {
     if (!selectedGateId) {
       message.error('Please select a gate first');
       return;
@@ -268,7 +345,7 @@ export function GateSimulatorPage() {
       return;
     }
 
-    setIsProcessing(true);
+    setLoading(true);
     try {
       // Map action to TCP endpoint action
       const tcpAction = action === 'OPEN' ? 'open' : action === 'CLOSE' ? 'close' : 'close';
@@ -279,38 +356,17 @@ export function GateSimulatorPage() {
       });
       if (response.data.success) {
         message.success(response.data.message);
-        addEventLog({
-          eventId: Date.now().toString(),
-          action: `HARDWARE_${action}`,
-          success: true,
-          message: response.data.message,
-          gateId: selectedGateId,
-          gateState: selectedGate?.state || GateState.CLOSED,
-        });
+        await addEventLog();
       } else {
         message.warning(response.data.message);
-        addEventLog({
-          eventId: Date.now().toString(),
-          action: `HARDWARE_${action}`,
-          success: false,
-          message: response.data.message,
-          gateId: selectedGateId,
-          gateState: selectedGate?.state || GateState.CLOSED,
-        });
+        await addEventLog();
       }
     } catch (error: any) {
       const errorMsg = error.response?.data?.message || 'Failed to send hardware command';
       message.error(errorMsg);
-      addEventLog({
-        eventId: Date.now().toString(),
-        action: `HARDWARE_${action}`,
-        success: false,
-        message: errorMsg,
-        gateId: selectedGateId,
-        gateState: selectedGate?.state || GateState.CLOSED,
-      });
+      await addEventLog();
     } finally {
-      setIsProcessing(false);
+      setLoading(false);
     }
   };
 
@@ -557,7 +613,7 @@ export function GateSimulatorPage() {
                 <Button
                   icon={<CarOutlined />}
                   onClick={handleCarRfid}
-                  loading={isProcessing}
+                  loading={processingCarRfid}
                   disabled={!selectedGateId}
                 >
                   Car RFID
@@ -565,7 +621,7 @@ export function GateSimulatorPage() {
                 <Button
                   icon={<IdcardOutlined />}
                   onClick={handleHumanRfid}
-                  loading={isProcessing}
+                  loading={processingHumanRfid}
                   disabled={!selectedGateId}
                 >
                   Human RFID
@@ -584,7 +640,7 @@ export function GateSimulatorPage() {
                 <Button
                   icon={<QrcodeOutlined />}
                   onClick={() => handleQrVerify()}
-                  loading={isProcessing}
+                  loading={processingVerifyQr}
                   disabled={!selectedGateId}
                   style={{ flex: 1 }}
                 >
@@ -653,8 +709,8 @@ export function GateSimulatorPage() {
                     <Button
                       type="primary"
                       icon={<UpOutlined />}
-                      onClick={() => sendHardwareCommand('OPEN')}
-                      loading={isProcessing}
+                      onClick={() => sendHardwareCommand('OPEN', setProcessingOpenGate)}
+                      loading={processingOpenGate}
                       disabled={!selectedGateId || !selectedDeviceId}
                       size="large"
                       style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
@@ -664,8 +720,8 @@ export function GateSimulatorPage() {
                     <Button
                       danger
                       icon={<DownOutlined />}
-                      onClick={() => sendHardwareCommand('CLOSE')}
-                      loading={isProcessing}
+                      onClick={() => sendHardwareCommand('CLOSE', setProcessingCloseGate)}
+                      loading={processingCloseGate}
                       disabled={!selectedGateId || !selectedDeviceId}
                       size="large"
                     >
@@ -680,8 +736,8 @@ export function GateSimulatorPage() {
                 <Button
                   type="primary"
                   icon={<UpOutlined />}
-                  onClick={() => triggerEvent(SimulatorEvent.MANUAL_OPEN)}
-                  loading={isProcessing}
+                  onClick={() => triggerEventWithLoading(SimulatorEvent.MANUAL_OPEN, setProcessingSimulateOpen)}
+                  loading={processingSimulateOpen}
                   disabled={!selectedGateId}
                   size="large"
                 >
@@ -690,8 +746,8 @@ export function GateSimulatorPage() {
                 <Button
                   danger
                   icon={<DownOutlined />}
-                  onClick={() => triggerEvent(SimulatorEvent.MANUAL_CLOSE)}
-                  loading={isProcessing}
+                  onClick={() => triggerEventWithLoading(SimulatorEvent.MANUAL_CLOSE, setProcessingSimulateClose)}
+                  loading={processingSimulateClose}
                   disabled={!selectedGateId}
                   size="large"
                 >
@@ -748,30 +804,38 @@ export function GateSimulatorPage() {
           <Card
             title="Event Log"
             className="h-full"
-            extra={
-              <Button size="small" onClick={() => setEventLogs([])}>
-                Clear
-              </Button>
-            }
           >
             <List
               dataSource={eventLogs}
+              loading={loadingEventLogs}
               renderItem={(item) => (
                 <List.Item className="py-1">
                   <div className="w-full">
                     <div className="flex justify-between">
-                      <Tag color={item.success ? 'success' : 'error'}>
-                        {item.action.replace(/_/g, ' ')}
+                      <Tag color={item.result === 'ALLOWED' ? 'success' : 'error'}>
+                        {item.method.replace(/_/g, ' ')}
                       </Tag>
                       <Text type="secondary" className="text-xs">
-                        {item.timestamp.toLocaleTimeString()}
+                        {new Date(item.timestamp).toLocaleTimeString()}
                       </Text>
                     </div>
-                    <Text className="text-sm">{item.message}</Text>
+                    <div className="mt-2">
+                      <Text className="text-sm">
+                        <strong>{item.subjectName || item.subjectIdentifier || 'Unknown'}</strong>
+                      </Text>
+                      <div className="text-xs text-gray-600 mt-1">
+                        {item.subjectType} • {item.result}
+                      </div>
+                      {item.denialReason && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Reason: {item.denialReason}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </List.Item>
               )}
-              locale={{ emptyText: 'No events yet' }}
+              locale={{ emptyText: 'No events found' }}
               className="max-h-96 overflow-auto"
             />
           </Card>

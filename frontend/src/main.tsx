@@ -12,6 +12,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           colorPrimary: '#1890ff',
         },
       }}
+      getPopupContainer={() => document.body}
     >
       <App />
     </ConfigProvider>

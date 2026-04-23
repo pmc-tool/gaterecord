@@ -147,6 +147,7 @@ export default function LoginActivityTab() {
             pageSize: 10,
             showSizeChanger: true,
             showTotal: (total) => `Total ${total} records`,
+            selectProps: { listHeight: 256 },
           }}
           scroll={{ x: 800 }}
         />

@@ -59,13 +59,45 @@ body {
 .ant-table-wrapper .ant-table-pagination {
   flex-wrap: wrap;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow: visible !important;
   padding: 16px 0;
 }
 
-/* Card body: clip horizontal overflow so only table scrolls */
+/* Pagination size changer dropdown - ensure proper display */
+.ant-pagination-options {
+  overflow: visible !important;
+}
+
+.ant-pagination {
+  overflow: visible !important;
+}
+
+.ant-select-dropdown {
+  z-index: 1050 !important;
+}
+
+/* Ensure table wrapper doesn't clip pagination dropdown */
+.ant-table-wrapper {
+  overflow: visible !important;
+}
+
+.ant-spin-nested-loading,
+.ant-spin-container {
+  overflow: visible !important;
+}
+
+/* Card body: allow dropdown to overflow */
 .ant-card-body {
-  overflow-x: clip;
+  overflow: visible !important;
+}
+
+.ant-card {
+  overflow: visible !important;
+}
+
+/* Layout content: allow dropdowns to overflow */
+.ant-layout-content {
+  overflow: visible !important;
 }
 
 @media (max-width: 768px) {

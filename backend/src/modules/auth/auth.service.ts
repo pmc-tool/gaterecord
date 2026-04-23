@@ -177,7 +177,7 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
 
     const refreshToken = uuidv4();
-    const expiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRATION', '7d');
+    const expiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRATION', '30d');
     const expiresAt = this.calculateExpiration(expiresIn);
 
     await this.refreshTokenRepository.save({
@@ -374,7 +374,7 @@ export class AuthService {
     // Generate tokens and auto-login
     const tokens = await this.generateTokens(savedUser, userAgent, ipAddress);
 
-    // Send welcome email (don't wait for it, don't fail signup if email fails)
+    // Send welcome email with trial info (don't wait for it, don't fail signup if email fails)
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
     this.emailService
       .sendWelcomeEmail(
@@ -382,6 +382,11 @@ export class AuthService {
         `${savedUser.firstName} ${savedUser.lastName}`,
         savedTenant.name,
         `${frontendUrl}/dashboard`,
+        {
+          type: 'trial',
+          planName: selectedPlan.name,
+          trialDays: trialDays,
+        },
       )
       .catch((error) => {
         this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);

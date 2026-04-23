@@ -225,8 +225,8 @@ DATABASE_SSL=false
 
 # JWT Authentication
 JWT_SECRET=your-super-secret-key-change-in-production
-JWT_ACCESS_EXPIRATION=15m
-JWT_REFRESH_EXPIRATION=7d
+JWT_ACCESS_EXPIRATION=7d
+JWT_REFRESH_EXPIRATION=30d
 
 # MQTT
 MQTT_BROKER_URL=mqtt://localhost:1883

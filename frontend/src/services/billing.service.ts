@@ -16,6 +16,10 @@ export interface SubscriptionDetails {
   billingCycle: 'monthly' | 'yearly';
   monthlyAmount: number;
   nextBillingDate: string;
+  // Trial info
+  isTrial?: boolean;
+  trialEndDate?: string;
+  // Pause info
   isPaused?: boolean;
   pausedAt?: string;
   pauseResumesAt?: string;
@@ -121,6 +125,7 @@ export interface AvailablePlansResponse {
     maxUsers: number;
     features: string[];
   } | null;
+  isOnTrial?: boolean;
   availablePlans: AvailablePlan[];
 }
 
@@ -132,6 +137,8 @@ export interface PlanChangePreview {
   creditAmount: number;
   effectiveDate: string;
   isUpgrade: boolean;
+  daysRemaining: number;
+  immediateChange: boolean;
 }
 
 export interface PlanChangeResult {
@@ -141,6 +148,8 @@ export interface PlanChangeResult {
   amountCharged: number;
   creditApplied: number;
   effectiveDate: string;
+  isUpgrade: boolean;
+  isScheduled: boolean;
 }
 
 export interface FinancialOverview {
