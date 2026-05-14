@@ -11,18 +11,16 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
-    // Enable raw body for Stripe webhook signature verification
     rawBody: true,
   });
 
-  // Global prefix
   app.setGlobalPrefix('api/v1');
 
-  // Validation pipe
+  // Validation pipe - allow unknown properties (required for Cloud+ controller)
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
+      whitelist: true,               // strip properties not in DTO
+      forbidNonWhitelisted: false,   // DO NOT reject if extra properties exist
       transform: true,
       transformOptions: {
         enableImplicitConversion: true,
@@ -33,10 +31,12 @@ async function bootstrap() {
   // CORS
   const defaultOrigins = [
     'http://localhost:5173',
+    'http://localhost:5175',
     'http://localhost:5174',
     'http://localhost:3000',
     'http://192.168.88.8:5173',
     'http://192.168.88.8:5174',
+    'http://192.168.88.8:5175',
     'https://gaterecord.com',
     'https://www.gaterecord.com',
     'https://dev.gaterecord.com',
@@ -52,6 +52,7 @@ async function bootstrap() {
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
+
   // Swagger
   const config = new DocumentBuilder()
     .setTitle('Gate Management API')

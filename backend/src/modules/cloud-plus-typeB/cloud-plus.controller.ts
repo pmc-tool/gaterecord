@@ -53,7 +53,10 @@ export class CloudPlusController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    this.logger.log(`GET SearchCardAcs from ${req.ip}`);
+     //on live test
+    console.log("On live test, get query:");
+
+    this.logger.log(`GET SearchCardAcs gddss from ${req.ip}`);
 
     const clientIp = this.getClientIp(req);
     const result = await this.cloudPlusService.processSearchCardAcs(query, clientIp);
@@ -73,6 +76,11 @@ export class CloudPlusController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
+
+    //on live test
+    console.log("On live test, body:", body);
+
+
     this.logger.log(`POST SearchCardAcs from ${req.ip}`);
 
     // Merge query params and body (body takes precedence)
