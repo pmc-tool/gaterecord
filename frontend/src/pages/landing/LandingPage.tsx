@@ -776,7 +776,7 @@ export default function LandingPage() {
             </Link>
             <a
               href="mailto:sales@gaterecord.com"
-              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-2 ring-white/30 px-5 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-full ring-1 ring-white/30 px-5 py-4 text-base font-semibold text-white hover:bg-white/10 transition-all no-underline"
             >
               Contact Sales
             </a>
