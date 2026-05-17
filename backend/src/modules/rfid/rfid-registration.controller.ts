@@ -28,6 +28,14 @@ class CancelRegistrationDto {
   sessionId: string;
 }
 
+class SubmitScanDto {
+  @IsString()
+  sessionId: string;
+
+  @IsString()
+  uid: string;
+}
+
 @ApiTags('RFID')
 @ApiBearerAuth()
 @Controller('rfid/registration')
@@ -73,6 +81,24 @@ export class RfidRegistrationController {
     return {
       message: 'Registration session cancelled',
     };
+  }
+
+  @Post('scan')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Submit an RFID UID scanned via phone NFC' })
+  async submitScan(@Body() dto: SubmitScanDto) {
+    this.logger.log(`Manual scan submission for session ${dto.sessionId}: ${dto.uid}`);
+    try {
+      const result = await this.rfidRegistrationService.submitManualScan(dto.sessionId, dto.uid);
+      return {
+        message: 'Card registered successfully',
+        targetType: result.targetType,
+        uid: result.uid,
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to register card';
+      throw new BadRequestException(msg);
+    }
   }
 
   @Get('status')

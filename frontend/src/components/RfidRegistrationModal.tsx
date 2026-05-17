@@ -23,6 +23,22 @@ interface RfidScanEvent {
   tenantId: string;
 }
 
+declare global {
+  interface Window {
+    NDEFReader?: new () => NDEFReaderLike;
+  }
+}
+
+interface NDEFReadingEvent extends Event {
+  serialNumber?: string;
+}
+
+interface NDEFReaderLike {
+  scan(options?: { signal?: AbortSignal }): Promise<void>;
+  addEventListener(type: 'reading', listener: (e: NDEFReadingEvent) => void): void;
+  addEventListener(type: 'readingerror', listener: (e: Event) => void): void;
+}
+
 export default function RfidRegistrationModal({
   open,
   onClose,
@@ -35,6 +51,7 @@ export default function RfidRegistrationModal({
   const [state, setState] = useState<RegistrationState>('waiting');
   const [scannedUid, setScannedUid] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [nfcStatus, setNfcStatus] = useState<'idle' | 'scanning' | 'unsupported' | 'denied'>('idle');
   const sessionIdRef = useRef<string | null>(null);
 
   // Keep ref in sync with state for cleanup
@@ -94,6 +111,72 @@ export default function RfidRegistrationModal({
       setSessionId(null);
     };
   }, [open, tenantId, targetId, targetType]);
+
+  // Start phone NFC scanning (Web NFC) once a session is open
+  useEffect(() => {
+    if (!open || !sessionId) return;
+
+    if (!window.NDEFReader) {
+      console.log('Web NFC not supported on this browser/device');
+      setNfcStatus('unsupported');
+      return;
+    }
+
+    const abortController = new AbortController();
+    let cancelled = false;
+
+    const submitUid = async (uid: string) => {
+      if (cancelled) return;
+      const normalized = uid.toUpperCase().replace(/:/g, '');
+      console.log('NFC tag read, submitting UID:', normalized);
+      try {
+        await api.post('/rfid/registration/scan', {
+          sessionId,
+          uid: normalized,
+        });
+        // Success state will be set by the WebSocket listener below
+      } catch (error: unknown) {
+        const err = error as { response?: { data?: { message?: string } } };
+        message.error(err.response?.data?.message || 'Failed to register card');
+      }
+    };
+
+    const startNfc = async () => {
+      try {
+        const reader = new window.NDEFReader!();
+        await reader.scan({ signal: abortController.signal });
+        setNfcStatus('scanning');
+        console.log('Web NFC scanning started');
+
+        reader.addEventListener('reading', (event) => {
+          const uid = event.serialNumber || '';
+          if (uid) submitUid(uid);
+        });
+
+        reader.addEventListener('readingerror', () => {
+          if (!cancelled) message.warning('Could not read NFC tag, please try again');
+        });
+      } catch (error: unknown) {
+        const err = error as { name?: string; message?: string };
+        console.error('NFC scan failed:', err);
+        if (err.name === 'NotAllowedError') {
+          setNfcStatus('denied');
+        } else if (err.name === 'NotSupportedError') {
+          setNfcStatus('unsupported');
+        } else {
+          setNfcStatus('unsupported');
+        }
+      }
+    };
+
+    startNfc();
+
+    return () => {
+      cancelled = true;
+      abortController.abort();
+      setNfcStatus('idle');
+    };
+  }, [open, sessionId]);
 
   // Listen for RFID scan events
   useEffect(() => {
@@ -188,6 +271,21 @@ export default function RfidRegistrationModal({
           {targetName && (
             <p className="text-sm text-gray-400 mt-2">
               Registering for: <strong>{targetName}</strong>
+            </p>
+          )}
+          {nfcStatus === 'scanning' && (
+            <p className="text-sm text-green-600 mt-2">
+              Phone NFC active — tap a card against the back of the phone
+            </p>
+          )}
+          {nfcStatus === 'denied' && (
+            <p className="text-sm text-orange-500 mt-2">
+              NFC permission denied. You can still scan via the gate reader.
+            </p>
+          )}
+          {nfcStatus === 'unsupported' && (
+            <p className="text-sm text-gray-400 mt-2">
+              Phone NFC not available on this device. Use the gate reader.
             </p>
           )}
         </div>
