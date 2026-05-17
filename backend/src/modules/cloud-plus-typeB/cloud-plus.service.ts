@@ -211,10 +211,14 @@ export class CloudPlusService {
       }
 
       // Step 4: Log access event
-      await this.logAccessEvent(activeGate, validationResult, this.getAccessMethod(credentialType));
+      const savedEvent = await this.logAccessEvent(
+        activeGate,
+        validationResult,
+        this.getAccessMethod(credentialType),
+      );
 
       // Step 5: Notify frontend via WebSocket
-      this.notifyFrontend(activeGate, validationResult);
+      this.notifyFrontend(activeGate, validationResult, savedEvent);
 
       // Step 6: Build and return response
       return this.buildAllowDenyResponse(validationResult, card, reader, credType, timestamp);
@@ -773,7 +777,7 @@ export class CloudPlusService {
     gate: Gate,
     result: ValidationResult,
     method: AccessMethod,
-  ): Promise<void> {
+  ): Promise<AccessEvent> {
     const subjectTypeMap: Record<string, AccessSubjectType> = {
       vehicle: AccessSubjectType.VEHICLE,
       rfid_card: AccessSubjectType.RFID_CARD,
@@ -805,24 +809,36 @@ export class CloudPlusService {
       },
     });
 
-    await this.accessEventRepository.save(accessEvent);
+    return this.accessEventRepository.save(accessEvent);
   }
 
   /**
    * Notify frontend via WebSocket
+   *
+   * Emits `access:event` (matching the simulator/frontend contract) so the
+   * live feed updates. Also emits the legacy `access:granted`/`access:denied`
+   * for any older clients still listening to those names.
    */
-  private notifyFrontend(gate: Gate, result: ValidationResult): void {
-    const eventType = result.allowed ? 'access:granted' : 'access:denied';
-
-    this.gatewayService.broadcastToTenant(gate.tenantId, eventType, {
+  private notifyFrontend(
+    gate: Gate,
+    result: ValidationResult,
+    event: AccessEvent,
+  ): void {
+    const payload = {
+      eventId: event.id,
       gateId: gate.id,
       gateName: gate.name,
-      name: result.name,
+      timestamp: event.timestamp.toISOString(),
+      method: event.method,
+      subjectType: event.subjectType,
+      subjectName: result.name,
+      result: result.allowed ? 'granted' : 'denied',
+      denialReason: result.denialReason,
       info: result.info,
-      reason: result.denialReason,
       source: 'cloud-plus',
-      timestamp: new Date().toISOString(),
-    });
+    };
+
+    this.gatewayService.broadcastToTenant(gate.tenantId, 'access:event', payload);
   }
 
   /**
