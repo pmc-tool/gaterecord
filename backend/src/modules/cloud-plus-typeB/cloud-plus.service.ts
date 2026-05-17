@@ -85,7 +85,7 @@ export class CloudPlusService {
       }
 
       // Update device last seen
-      await this.updateDeviceStatus(device, clientIp);
+      await this.updateDeviceStatus(device, clientIp, request.MAC);
 
       // Step 2: Find associated gate from device
       const deviceGate = device.gate;
@@ -234,16 +234,24 @@ export class CloudPlusService {
 
   /**
    * Process heartbeat/status request from Cloud Plus controller
+   *
+   * Cloud Plus controllers send GetStatus with `Key=<incrementing counter>`,
+   * not their serial number. So we identify the device by the request IP
+   * (saved during the last SearchCardAcs that included Serial+MAC).
    */
   async processGetStatus(
     request: GetStatusRequestDto,
     clientIp?: string,
   ): Promise<GetStatusResponseDto> {
     const key = request.Key || '';
-    this.logger.debug(`Heartbeat from: ${key}`);
+    this.logger.debug(`Heartbeat from: ${key} (ip=${clientIp ?? 'unknown'})`);
 
-    // Update device last seen if Key is the serial number
-    const device = await this.findDeviceBySerial(key);
+    let device = await this.findDeviceBySerial(key);
+
+    if (!device && clientIp) {
+      device = await this.findDeviceByIp(clientIp);
+    }
+
     if (device) {
       await this.updateDeviceStatus(device, clientIp);
     }
@@ -318,17 +326,34 @@ export class CloudPlusService {
   // ===================== Private Helper Methods =====================
 
   private async findDeviceBySerial(serial: string): Promise<DeviceConfig | null> {
+    if (!serial) return null;
     return this.deviceConfigRepository.findOne({
       where: { deviceId: serial },
       relations: ['gate', 'tenant'],
     });
   }
 
-  private async updateDeviceStatus(device: DeviceConfig, clientIp?: string): Promise<void> {
+  private async findDeviceByIp(ip: string): Promise<DeviceConfig | null> {
+    if (!ip) return null;
+    return this.deviceConfigRepository.findOne({
+      where: { ipAddress: ip },
+      relations: ['gate', 'tenant'],
+      order: { lastSeenAt: 'DESC' },
+    });
+  }
+
+  private async updateDeviceStatus(
+    device: DeviceConfig,
+    clientIp?: string,
+    macAddress?: string,
+  ): Promise<void> {
     device.status = DeviceStatus.ONLINE;
     device.lastSeenAt = new Date();
     if (clientIp) {
       device.ipAddress = clientIp;
+    }
+    if (macAddress && !device.macAddress) {
+      device.macAddress = macAddress;
     }
     await this.deviceConfigRepository.save(device);
 
