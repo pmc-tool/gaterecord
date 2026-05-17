@@ -70,9 +70,12 @@ export class AccessEventsService {
     const limit = Math.min(query.limit || 20, 100);
     const skip = (page - 1) * limit;
 
+    
     const qb = this.accessEventRepository
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.gate', 'gate');
+
+    
 
     // Apply role-based access control
     this.applyRbacFilter(qb, currentUser, query.tenantId);
@@ -95,18 +98,18 @@ export class AccessEventsService {
     }
 
     if (query.startDate) {
-      qb.andWhere('event.timestamp >= :startDate', { startDate: query.startDate });
+      qb.andWhere('event.created_at >= :startDate', { startDate: query.startDate });
     }
 
     if (query.endDate) {
-      qb.andWhere('event.timestamp <= :endDate', { endDate: query.endDate });
+      qb.andWhere('event.created_at <= :endDate', { endDate: query.endDate });
     }
 
     // Clone query builder for stats counts (before pagination)
     const statsQb = qb.clone();
 
     // Ordering and pagination
-    qb.orderBy('event.timestamp', 'DESC').skip(skip).take(limit);
+    qb.orderBy('event.createdAt', 'DESC').skip(skip).take(limit);
 
     const [events, total] = await qb.getManyAndCount();
 
@@ -120,6 +123,8 @@ export class AccessEventsService {
       .clone()
       .andWhere('event.result = :deniedResult', { deniedResult: 'denied' })
       .getCount();
+
+    console.log("Evnents:")
 
     return { events, total, allowedCount, deniedCount, page, limit };
   }
@@ -137,7 +142,7 @@ export class AccessEventsService {
     // Apply role-based access control
     this.applyRbacFilter(qb, currentUser);
 
-    qb.andWhere('event.timestamp BETWEEN :startDate AND :endDate', {
+    qb.andWhere('event.created_at BETWEEN :startDate AND :endDate', {
       startDate,
       endDate,
     });
@@ -183,7 +188,7 @@ export class AccessEventsService {
       qb.andWhere('event.gate_id = :gateId', { gateId });
     }
 
-    return qb.orderBy('event.timestamp', 'DESC').take(limit).getMany();
+    return qb.orderBy('event.createdAt', 'DESC').take(limit).getMany();
   }
 
   async exportToCsv(query: AccessEventQueryDto, currentUser: User): Promise<string> {
@@ -202,7 +207,7 @@ export class AccessEventsService {
 
     // Apply retention days limit for non-super admins
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.andWhere('event.timestamp >= :retentionCutoff', { retentionCutoff });
+      qb.andWhere('event.created_at >= :retentionCutoff', { retentionCutoff });
     }
 
     if (query.gateId) {
@@ -222,14 +227,14 @@ export class AccessEventsService {
     }
 
     if (query.startDate) {
-      qb.andWhere('event.timestamp >= :startDate', { startDate: query.startDate });
+      qb.andWhere('event.created_at >= :startDate', { startDate: query.startDate });
     }
 
     if (query.endDate) {
-      qb.andWhere('event.timestamp <= :endDate', { endDate: query.endDate });
+      qb.andWhere('event.created_at <= :endDate', { endDate: query.endDate });
     }
 
-    qb.orderBy('event.timestamp', 'DESC');
+    qb.orderBy('event.createdAt', 'DESC');
 
     const events = await qb.getMany();
 

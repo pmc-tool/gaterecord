@@ -1,4 +1,5 @@
 import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { BaseEntity } from './base.entity';
 import { Tenant } from './tenant.entity';
 import { Gate } from './gate.entity';
@@ -33,6 +34,7 @@ export class AccessEvent extends BaseEntity {
   @Column({ name: 'tenant_id' })
   tenantId: string;
 
+  @Exclude()
   @ManyToOne(() => Tenant, (tenant) => tenant.accessEvents)
   @JoinColumn({ name: 'tenant_id' })
   tenant: Tenant;
@@ -67,6 +69,7 @@ export class AccessEvent extends BaseEntity {
   @Column({ name: 'resident_id', nullable: true })
   residentId: string;
 
+  @Exclude()
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'resident_id' })
   resident: User;
