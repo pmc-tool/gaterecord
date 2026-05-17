@@ -16,6 +16,7 @@ import {
   AccessSubjectType,
 } from '@database/entities/access-event.entity';
 import { GatewayService } from '../gateway/gateway.service';
+import { RfidRegistrationService } from '../rfid/rfid-registration.service';
 
 import {
   SearchCardAcsRequestDto,
@@ -48,6 +49,7 @@ export class CloudPlusService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private gatewayService: GatewayService,
+    private rfidRegistrationService: RfidRegistrationService,
   ) {}
 
   /**
@@ -122,6 +124,40 @@ export class CloudPlusService {
       // Step 3: Process credential based on type
       const credentialType = credType & 0xff;
       let validationResult: ValidationResult;
+
+      // Intercept CARD/RFID_TAG scans when a registration session is active
+      // for this tenant — save the card to the resident/vehicle and notify the
+      // frontend instead of running normal access validation.
+      if (
+        credentialType === CloudPlusCredentialType.CARD ||
+        credentialType === CloudPlusCredentialType.RFID_TAG
+      ) {
+        if (this.rfidRegistrationService.hasActiveSession(device.tenantId)) {
+          const normalizedUid = card.toUpperCase().replace(/:/g, '');
+          const scanType = handleType === 'vehicle' ? 'vehicle' : 'human';
+          const handled = await this.rfidRegistrationService.processRegistrationScan(
+            device.tenantId,
+            normalizedUid,
+            scanType,
+          );
+          if (handled) {
+            const registrationResult: ValidationResult = {
+              allowed: true,
+              name: 'Card Registered',
+              info: 'Registration successful',
+              subjectType: scanType === 'vehicle' ? 'vehicle' : 'rfid_card',
+              subjectIdentifier: normalizedUid,
+            };
+            return this.buildAllowDenyResponse(
+              registrationResult,
+              card,
+              reader,
+              credType,
+              timestamp,
+            );
+          }
+        }
+      }
 
       switch (credentialType) {
         case CloudPlusCredentialType.CARD:
