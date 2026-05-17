@@ -10,9 +10,27 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 
+const parseOrigins = (): string[] | true => {
+  const raw = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN;
+  if (!raw) {
+    return [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:5175',
+      'http://localhost:3000',
+      'https://gaterecord.com',
+      'https://www.gaterecord.com',
+      'https://dev.gaterecord.com',
+      'https://www.dev.gaterecord.com',
+    ];
+  }
+  if (raw.trim() === '*') return true;
+  return raw.split(',').map((o) => o.trim()).filter(Boolean);
+};
+
 @WebSocketGateway({
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5174',
+    origin: parseOrigins(),
     credentials: true,
   },
   namespace: '/events',
