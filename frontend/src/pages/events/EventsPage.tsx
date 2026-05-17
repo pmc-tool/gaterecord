@@ -30,9 +30,10 @@ import Title from 'antd/es/typography/Title';
 interface AccessEvent {
   id: string;
   gateId: string;
+  createdAt: string;
   timestamp: string;
-  method: 'rfid' | 'qr_code' | 'pin' | 'manual' | 'remote';
-  subjectType: 'resident' | 'vehicle' | 'visitor' | 'unknown';
+  method: 'car_rfid' | 'human_rfid' | 'qr' | 'web_app' | 'manual';
+  subjectType: 'vehicle' | 'rfid_card' | 'visitor_pass' | 'user' | 'unknown';
   subjectId?: string;
   subjectIdentifier?: string;
   subjectName?: string;
@@ -43,11 +44,11 @@ interface AccessEvent {
 }
 
 const accessMethodColors: Record<string, string> = {
-  rfid: 'blue',
-  qr_code: 'purple',
-  pin: 'green',
-  manual: 'orange',
-  remote: 'cyan',
+  car_rfid: 'orange',
+  human_rfid: 'blue',
+  qr: 'purple',
+  web_app: 'green',
+  manual: 'cyan',
 };
 
 export default function EventsPage() {
@@ -126,12 +127,11 @@ export default function EventsPage() {
 
       const response = await api.get(`/events?${params.toString()}`);
       const { events: eventList, total, allowedCount, deniedCount } = response.data;
+
       setEvents(eventList || []);
       setPagination(prev => ({ ...prev, total }));
-
-      // Use all-time stats from API response
       setStats({
-        total: total,
+        total,
         allowed: allowedCount || 0,
         denied: deniedCount || 0,
       });
@@ -148,10 +148,23 @@ export default function EventsPage() {
     fetchRetentionDays();
   }, []);
 
-  // Fetch events when pagination changes (including initial load)
+  // Fetch events when filters change (reset to page 1)
+  useEffect(() => {
+    setPagination({ page: 1, limit: 10, total: 0 });
+  }, [
+    filters.tenantId,
+    filters.gateId,
+    filters.startDate,
+    filters.endDate,
+    filters.method,
+    filters.subjectType,
+    filters.result,
+  ]);
+
+  // Fetch events when pagination or filters change
   useEffect(() => {
     fetchEvents();
-  }, [pagination.page, pagination.limit]);
+  }, [pagination.page, pagination.limit, filters.tenantId, filters.gateId, filters.startDate, filters.endDate, filters.method, filters.subjectType, filters.result]);
 
   const handleExport = async () => {
     try {
@@ -183,10 +196,10 @@ export default function EventsPage() {
   const columns: ColumnsType<AccessEvent> = [
     {
       title: 'Time',
-      dataIndex: 'timestamp',
-      key: 'timestamp',
-      render: (timestamp: string) => dayjs(timestamp).format('YYYY-MM-DD HH:mm:ss'),
-      sorter: (a, b) => dayjs(a.timestamp).unix() - dayjs(b.timestamp).unix(),
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => dayjs(createdAt).format('YYYY-MM-DD HH:mm:ss'),
+      sorter: (a, b) => dayjs(a.createdAt).unix() - dayjs(b.createdAt).unix(),
       defaultSortOrder: 'descend',
     },
     {
@@ -338,11 +351,11 @@ export default function EventsPage() {
                 value={filters.method}
                 onChange={(value) => setFilters({ ...filters, method: value })}
               >
-                <Select.Option value="rfid">RFID</Select.Option>
-                <Select.Option value="qr_code">QR Code</Select.Option>
-                <Select.Option value="pin">PIN</Select.Option>
+                <Select.Option value="car_rfid">Car RFID</Select.Option>
+                <Select.Option value="human_rfid">Human RFID</Select.Option>
+                <Select.Option value="qr">QR Code</Select.Option>
+                <Select.Option value="web_app">Web App</Select.Option>
                 <Select.Option value="manual">Manual</Select.Option>
-                <Select.Option value="remote">Remote</Select.Option>
               </Select>
             </Col>
             <Col>
@@ -353,9 +366,10 @@ export default function EventsPage() {
                 value={filters.subjectType}
                 onChange={(value) => setFilters({ ...filters, subjectType: value })}
               >
-                <Select.Option value="resident">Resident</Select.Option>
                 <Select.Option value="vehicle">Vehicle</Select.Option>
-                <Select.Option value="visitor">Visitor</Select.Option>
+                <Select.Option value="rfid_card">RFID Card</Select.Option>
+                <Select.Option value="visitor_pass">Visitor Pass</Select.Option>
+                <Select.Option value="user">User</Select.Option>
                 <Select.Option value="unknown">Unknown</Select.Option>
               </Select>
             </Col>
