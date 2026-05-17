@@ -183,6 +183,50 @@ export class RfidRegistrationService {
   }
 
   /**
+   * Manually submit a scanned UID against an open session.
+   * Used by phone Web NFC scans that POST directly instead of going through
+   * a Cloud Plus controller.
+   */
+  async submitManualScan(
+    sessionId: string,
+    rfidUid: string,
+  ): Promise<{ targetType: 'vehicle' | 'resident'; uid: string }> {
+    const session = this.activeSessions.get(sessionId);
+    if (!session) {
+      throw new Error('Registration session not found or already completed');
+    }
+    if (session.expiresAt < new Date()) {
+      this.cancelSession(sessionId);
+      throw new Error('Registration session expired');
+    }
+
+    const normalizedUid = rfidUid.toUpperCase().replace(/:/g, '');
+    if (!normalizedUid) {
+      throw new Error('Empty RFID UID');
+    }
+
+    this.logger.log(`Manual scan for session ${sessionId}: ${normalizedUid}`);
+
+    if (session.targetType === 'vehicle') {
+      await this.assignRfidToVehicle(session.targetId, normalizedUid);
+    } else {
+      await this.createRfidCardForResident(session.targetId, session.tenantId, normalizedUid);
+    }
+
+    this.gatewayService.broadcastToTenant(session.tenantId, 'rfid:registration-scan', {
+      sessionId: session.sessionId,
+      rfidUid: normalizedUid,
+      type: session.targetType === 'vehicle' ? 'vehicle' : 'human',
+      tenantId: session.tenantId,
+      success: true,
+    });
+
+    this.cancelSession(sessionId);
+
+    return { targetType: session.targetType, uid: normalizedUid };
+  }
+
+  /**
    * Assign RFID UID to a vehicle
    */
   private async assignRfidToVehicle(vehicleId: string, rfidUid: string): Promise<void> {
