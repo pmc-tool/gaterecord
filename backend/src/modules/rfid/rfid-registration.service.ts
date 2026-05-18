@@ -200,7 +200,7 @@ export class RfidRegistrationService {
       throw new Error('Registration session expired');
     }
 
-    const normalizedUid = rfidUid.toUpperCase().replace(/:/g, '');
+    const normalizedUid = this.normalizePhoneScanUid(rfidUid);
     if (!normalizedUid) {
       throw new Error('Empty RFID UID');
     }
@@ -277,6 +277,20 @@ export class RfidRegistrationService {
     this.logger.log(`Created RFID card ${rfidUid} for user ${userId}`);
 
     return saved;
+  }
+
+  /**
+   * Convert a phone NFC chip UID into the decimal card ID the Cloud Plus
+   * reader emits — first 3 bytes of the UID, byte-reversed, as a 24-bit
+   * decimal. e.g. "0476E0AA7D7280" -> [04,76,E0] -> [E0,76,04] -> 14710276.
+   */
+  private normalizePhoneScanUid(raw: string): string {
+    const hex = raw.toUpperCase().replace(/[^0-9A-F]/g, '');
+    if (hex.length < 2) return '';
+    const bytes = hex.match(/.{2}/g) || [];
+    const reversed = bytes.slice(0, 3).reverse().join('');
+    const decimal = parseInt(reversed, 16);
+    return Number.isFinite(decimal) ? decimal.toString(10) : hex;
   }
 
   /**
