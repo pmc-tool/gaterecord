@@ -22,7 +22,7 @@ async function fixMissingQRCodes() {
   // Find all users without QR codes
   const result = await dataSource.query(`
     SELECT id, email, first_name, last_name, role
-    FROM users 
+    FROM gate_users
     WHERE qr_code IS NULL OR qr_code = ''
   `);
 
@@ -31,7 +31,7 @@ async function fixMissingQRCodes() {
   for (const user of result) {
     const qrCode = `GR-${uuidv4()}`;
     await dataSource.query(
-      `UPDATE users SET qr_code = $1 WHERE id = $2`,
+      `UPDATE gate_users SET qr_code = $1 WHERE id = $2`,
       [qrCode, user.id]
     );
     console.log(`Fixed: ${user.email} -> ${qrCode}`);

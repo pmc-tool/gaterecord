@@ -20,6 +20,8 @@ import { CloudPlusModule } from './modules/cloud-plus-typeB/cloud-plus.module';
 import { CloudPlusTcpModule } from './modules/cloud-plus-typeB-tcp/cloud-plus-tcp.module';
 import { StripeModule } from './modules/stripe/stripe.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { UserSyncModule } from './modules/user-sync/user-sync.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { HealthController } from './health.controller';
 
@@ -62,6 +64,8 @@ import { HealthController } from './health.controller';
     CloudPlusTcpModule,
     StripeModule,
     SettingsModule,
+    UserSyncModule,
+    OnboardingModule,
   ],
   controllers: [HealthController],
   providers: [

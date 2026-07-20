@@ -3,6 +3,7 @@ export * from './subscription-plan.entity';
 export * from './subscription-audit-log.entity';
 export * from './tenant.entity';
 export * from './user.entity';
+export * from './global-user.entity';
 export * from './gate.entity';
 export * from './gate-controller.entity';
 export * from './sensor-status.entity';
