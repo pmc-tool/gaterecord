@@ -12,6 +12,7 @@ import { OnboardingService } from './onboarding.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { User } from '@database/entities/user.entity';
 
 /**
@@ -25,6 +26,10 @@ import { User } from '@database/entities/user.entity';
 @ApiTags('Onboarding')
 @ApiBearerAuth()
 @Controller('onboarding')
+// Creating/fixing the building is part of recovery: a suspended tenant admin
+// must be able to POST/PATCH here to correct their setup, so the controller is
+// exempt from the SubscriptionGuard. (GET status is a read and would pass anyway.)
+@SubscriptionExempt()
 export class OnboardingController {
   constructor(private readonly onboardingService: OnboardingService) {}
 

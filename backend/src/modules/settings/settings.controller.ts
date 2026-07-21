@@ -14,6 +14,7 @@ import { SettingsService } from './settings.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateNotificationSettingsDto } from './dto/notification-settings.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { User } from '@database/entities/user.entity';
 import { RolesGuard } from '@common/guards/roles.guard';
 
@@ -21,6 +22,10 @@ import { RolesGuard } from '@common/guards/roles.guard';
 @ApiBearerAuth()
 @Controller('settings')
 @UseGuards(RolesGuard)
+// Self-service account settings (change own password, notification prefs). These
+// are personal account operations, not tenant business writes, so they stay
+// available while suspended (err toward exemption for self-service).
+@SubscriptionExempt()
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 

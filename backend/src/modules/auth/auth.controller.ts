@@ -24,6 +24,7 @@ import {
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
+import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { User } from '@database/entities/user.entity';
 import { StripeService } from '../stripe/stripe.service';
 import { SignupCheckoutDto } from '../stripe/dto';
@@ -71,6 +72,9 @@ export class AuthController {
 
   @Post('logout-all')
   @UseGuards(JwtAuthGuard)
+  // Session/security operation (not a business write): a suspended user must
+  // still be able to sign out everywhere.
+  @SubscriptionExempt()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Logout from all devices' })
@@ -81,6 +85,10 @@ export class AuthController {
 
   @Post('me')
   @UseGuards(JwtAuthGuard)
+  // Reads the caller's own profile — a read that happens to use POST. Read-only
+  // grace is intended to keep "log in and read your data" working while
+  // suspended, so this must not 402 on the HTTP method.
+  @SubscriptionExempt()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get current user info' })

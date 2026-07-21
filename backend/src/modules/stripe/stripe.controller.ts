@@ -23,6 +23,7 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Public } from '@common/decorators/public.decorator';
+import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { UserRole } from '@database/entities/user.entity';
 import { StripeService } from './stripe.service';
 import {
@@ -145,6 +146,10 @@ export class StripeController {
  */
 @Controller('billing')
 @UseGuards(JwtAuthGuard, RolesGuard)
+// The pay/recover path. A SUSPENDED / PENDING_PAYMENT / paused tenant must be
+// able to reach checkout, portal and plan-change to restore access, so the whole
+// controller is exempt from the SubscriptionGuard (JWT auth + roles still apply).
+@SubscriptionExempt()
 export class BillingController {
   constructor(private stripeService: StripeService) {}
 
@@ -387,6 +392,10 @@ export class BillingController {
 @Controller('admin/stripe')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
+// Super-admin-only billing administration. Already covered by the guard's
+// SUPER_ADMIN allow-rule; marked exempt too so the pay/admin surface is explicit
+// and stays open regardless of any tenant the super admin may be attached to.
+@SubscriptionExempt()
 export class AdminStripeController {
   constructor(private stripeService: StripeService) {}
 
