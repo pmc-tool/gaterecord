@@ -47,8 +47,10 @@ export class VisitorPassController {
   ): Promise<void> {
     if (!sendEmail || !pass.visitorEmail) return;
 
+    // The public visitor-pass page now lives inside the main web app under
+    // /gate-management/pass/:token (yaad.global), not the standalone SPA route.
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-    const passUrl = `${frontendUrl}/visitor-pass/${pass.qrToken}`;
+    const passUrl = `${frontendUrl}/gate-management/pass/${pass.qrToken}`;
 
     // Determine host name
     let hostName = 'Staff';

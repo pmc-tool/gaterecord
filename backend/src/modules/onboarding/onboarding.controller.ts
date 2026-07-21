@@ -1,7 +1,16 @@
-import { Controller, Get, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Body,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { OnboardingService } from './onboarding.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
+import { UpdateBuildingDto } from './dto/update-building.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { User } from '@database/entities/user.entity';
 
@@ -39,5 +48,14 @@ export class OnboardingController {
   @ApiResponse({ status: 409, description: 'Already onboarded, or building name taken' })
   async createBuilding(@CurrentUser() user: User, @Body() dto: CreateBuildingDto) {
     return this.onboardingService.createBuilding(user.id, dto);
+  }
+
+  @Patch('building')
+  @ApiOperation({ summary: "Update the current user's own building details" })
+  @ApiResponse({ status: 200, description: 'Building updated' })
+  @ApiResponse({ status: 403, description: 'Not a building admin' })
+  @ApiResponse({ status: 409, description: 'Not onboarded, or building name taken' })
+  async updateBuilding(@CurrentUser() user: User, @Body() dto: UpdateBuildingDto) {
+    return this.onboardingService.updateBuilding(user.id, dto);
   }
 }

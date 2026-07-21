@@ -2,12 +2,13 @@ import {
   Injectable,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User } from '@database/entities/user.entity';
+import { User, UserRole } from '@database/entities/user.entity';
 import {
   Tenant,
   TenantStatus,
@@ -15,6 +16,7 @@ import {
 } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { CreateBuildingDto } from './dto/create-building.dto';
+import { UpdateBuildingDto } from './dto/update-building.dto';
 
 /**
  * The "Get Started" flow for users provisioned from the account/Keycloak service.
@@ -97,6 +99,67 @@ export class OnboardingService {
    * semantics in one place, change the other. The only intentional divergence is
    * that this path does NOT create a user — it updates the one that already exists.
    */
+  /**
+   * Rename / re-address the caller's OWN building.
+   *
+   * Exists because PATCH /admin/tenants/:id is super-admin only, so a building
+   * admin had no way to correct their own building's details. Scoped strictly to
+   * the caller's tenantId — the id is never taken from the request, so this
+   * cannot be used to edit someone else's building.
+   *
+   * The slug is intentionally NOT regenerated: it is a stable public identifier
+   * and rewriting it on every rename would break anything already referencing it.
+   */
+  async updateBuilding(userId: string, dto: UpdateBuildingDto) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.role !== UserRole.BUILDING_ADMIN && user.role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a building admin can edit building details');
+    }
+
+    if (!user.tenantId) {
+      throw new ConflictException(
+        'This account is not linked to a building yet. Complete onboarding first.',
+      );
+    }
+
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: user.tenantId },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Building not found');
+    }
+
+    const name = dto.buildingName.trim();
+
+    // Building names are unique platform-wide (createBuilding enforces the same
+    // rule). Exclude the caller's own tenant so re-saving an unchanged name works.
+    const clash = await this.tenantRepository.findOne({ where: { name } });
+    if (clash && clash.id !== tenant.id) {
+      throw new ConflictException('Building name already registered');
+    }
+
+    tenant.name = name;
+    if (dto.buildingAddress !== undefined) {
+      tenant.address = dto.buildingAddress.trim();
+    }
+
+    const saved = await this.tenantRepository.save(tenant);
+
+    return {
+      id: saved.id,
+      name: saved.name,
+      slug: saved.slug,
+      address: saved.address,
+      status: saved.status,
+    };
+  }
+
   async createBuilding(userId: string, dto: CreateBuildingDto) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 

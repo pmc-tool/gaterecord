@@ -7,12 +7,14 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import * as QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
+import { ConfigService } from '@nestjs/config';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { CreateUserDto, UpdateUserDto, UserQueryDto } from './dto/user.dto';
+import { AccountIdentityClient } from '../account-identity/account-identity.client';
 import { EmailService } from '../notification/email.service';
 
 @Injectable()
@@ -24,6 +26,7 @@ export class UsersService {
     private userRepository: Repository<User>,
     @InjectRepository(Tenant)
     private tenantRepository: Repository<Tenant>,
+    private accountIdentityClient: AccountIdentityClient,
     private emailService: EmailService,
     private configService: ConfigService,
   ) {}
@@ -76,9 +79,45 @@ export class UsersService {
       }
     }
 
-    // Generate temporary password if not provided
-    const plainPassword = createUserDto.password || this.generateTemporaryPassword();
-    const passwordHash = await bcrypt.hash(plainPassword, 10);
+    const email = createUserDto.email.toLowerCase();
+
+    // ORDER MATTERS. The platform identity is created FIRST, before the local row.
+    //
+    // If this call fails, nothing local is written and the admin sees a clear
+    // error. If it succeeds but the local insert then fails, the identity still
+    // exists and is reconciled by email on the next attempt (the account endpoint
+    // is idempotent by email and returns the same id).
+    //
+    // The reverse order would leave a gate_users row whose person has no platform
+    // credential at all - invisible until they try to log in and cannot.
+    //
+    // The password is passed THROUGH when the admin supplied one. gaterecord no
+    // longer decides, generates, stores or emails passwords: the account service
+    // owns the credential and its delivery.
+    const identity = await this.accountIdentityClient.provisionUser({
+      email,
+      first_name: createUserDto.firstName,
+      last_name: createUserDto.lastName,
+      phone: createUserDto.phone,
+      password: createUserDto.password,
+      // gaterecord sends its own branded credentials email below - it knows the
+      // building, the role and who created the user, which the account service
+      // does not. Account just returns the password for us to deliver.
+      sendEmail: false,
+    });
+
+    if (!identity.created) {
+      this.logger.log(
+        `Platform identity already existed for this email; linking the new gate user to it.`,
+      );
+    }
+
+    // gate_users.password_hash is NOT NULL and the legacy HS256 login path still
+    // reads it. Authentication for this person happens at the account service, so
+    // we store a bcrypt hash of a random value that nobody holds or is ever shown:
+    // bcrypt.compare against it can only ever return false. The column and the
+    // local login path are deliberately left intact - this phase is additive.
+    const passwordHash = await bcrypt.hash(uuidv4(), 10);
 
     // Generate unique QR code
     const qrCode = `GR-${uuidv4()}`;
@@ -86,7 +125,8 @@ export class UsersService {
     const user = this.userRepository.create({
       ...createUserDto,
       tenantId, // Use the resolved tenantId
-      email: createUserDto.email.toLowerCase(),
+      email,
+      userId: identity.id, // Keycloak sub - the platform identity link
       passwordHash,
       qrCode,
       status: createUserDto.status || UserStatus.ACTIVE,
@@ -95,75 +135,38 @@ export class UsersService {
 
     const savedUser = await this.userRepository.save(user);
 
-    // Send welcome email with credentials
-    this.sendWelcomeEmail(savedUser, plainPassword, currentUser).catch((err) => {
-      this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, err);
-    });
+    // Branded gaterecord credentials email - building, role and creating admin
+    // included. Only on a genuine create (a replay returns no password), and
+    // never fatal: the identity and gate user already exist, so a mail failure
+    // must not fail the request. The person can always use "forgot password".
+    if (identity.created && identity.password) {
+      const buildingName = tenantId
+        ? (await this.tenantRepository.findOne({ where: { id: tenantId } }))?.name ??
+          'your building'
+        : 'your building';
+      const loginUrl = this.configService.get<string>(
+        'GATE_LOGIN_URL',
+        'https://yaad.global/login',
+      );
+
+      this.emailService
+        .sendNewUserCredentialsEmail(
+          savedUser.email,
+          `${savedUser.firstName} ${savedUser.lastName}`.trim(),
+          savedUser.role,
+          identity.password,
+          buildingName,
+          `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+          loginUrl,
+        )
+        .catch((err) =>
+          this.logger.warn(
+            `Platform identity created for ${savedUser.email} but the credentials email failed to send. The user can use "forgot password". ${err?.message ?? ''}`,
+          ),
+        );
+    }
 
     return savedUser;
-  }
-
-  private async sendWelcomeEmail(
-    newUser: User,
-    temporaryPassword: string,
-    createdBy: User,
-  ): Promise<void> {
-    // Get building name
-    let buildingName = 'GateRecord';
-    if (newUser.tenantId) {
-      const tenant = await this.tenantRepository.findOne({
-        where: { id: newUser.tenantId },
-      });
-      if (tenant) {
-        buildingName = tenant.name;
-      }
-    }
-
-    const createdByName = `${createdBy.firstName} ${createdBy.lastName}`;
-    const userName = `${newUser.firstName} ${newUser.lastName}`;
-    const loginUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173') + '/login';
-
-    await this.emailService.sendNewUserCredentialsEmail(
-      newUser.email,
-      userName,
-      newUser.role,
-      temporaryPassword,
-      buildingName,
-      createdByName,
-      loginUrl,
-    );
-
-    this.logger.log(`Welcome email sent to ${newUser.email}`);
-  }
-
-  /**
-   * Generate a secure temporary password
-   */
-  private generateTemporaryPassword(): string {
-    const length = 12;
-    const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-    const lowercase = 'abcdefghjkmnpqrstuvwxyz';
-    const numbers = '23456789';
-    const special = '!@#$%&*';
-    const allChars = uppercase + lowercase + numbers + special;
-
-    // Ensure at least one of each type
-    let password = '';
-    password += uppercase[Math.floor(Math.random() * uppercase.length)];
-    password += lowercase[Math.floor(Math.random() * lowercase.length)];
-    password += numbers[Math.floor(Math.random() * numbers.length)];
-    password += special[Math.floor(Math.random() * special.length)];
-
-    // Fill remaining characters
-    for (let i = password.length; i < length; i++) {
-      password += allChars[Math.floor(Math.random() * allChars.length)];
-    }
-
-    // Shuffle the password
-    return password
-      .split('')
-      .sort(() => Math.random() - 0.5)
-      .join('');
   }
 
   async findAll(query: UserQueryDto, currentUser: User): Promise<User[]> {
@@ -286,6 +289,31 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
     return user;
+  }
+
+  /**
+   * Render the user's personal access QR code as a PNG data URL.
+   *
+   * Mirrors VisitorPassService.getQrCode: only the token itself is encoded, not
+   * a URL, because gate scanners read the raw token. Users provisioned before
+   * qr_code existed, or via a path that skipped it, are backfilled on demand so
+   * this never returns an unusable empty code.
+   */
+  async getProfileQrCode(userId: string): Promise<{ qrCode: string; value: string }> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.qrCode) {
+      user.qrCode = `GR-${uuidv4()}`;
+      await this.userRepository.update(user.id, { qrCode: user.qrCode });
+    }
+
+    return {
+      qrCode: await QRCode.toDataURL(user.qrCode),
+      value: user.qrCode,
+    };
   }
 
   /**

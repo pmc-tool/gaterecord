@@ -1,23 +1,33 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { CreateResidentDto, UpdateResidentDto } from './dto/resident.dto';
+import { AccountIdentityClient } from '../account-identity/account-identity.client';
+import { EmailService } from '../notification/email.service';
 import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class ResidentsService {
+  private readonly logger = new Logger(ResidentsService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Tenant)
     private readonly tenantRepository: Repository<Tenant>,
+    private readonly accountIdentityClient: AccountIdentityClient,
+    private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
   async findAll(currentUser: User, query: { search?: string; tenantId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: User[]; total: number; page: number; limit: number }> {
@@ -127,23 +137,74 @@ export class ResidentsService {
     }
 
     const existingUser = await this.userRepository.findOne({
-      where: { email: createDto.email },
+      where: { email: createDto.email.toLowerCase() },
     });
 
     if (existingUser) {
       throw new ConflictException('Email already in use');
     }
 
-    const passwordHash = await bcrypt.hash(createDto.password || 'Resident123!', 10);
+    // Platform identity FIRST, local row second - same ordering and reasoning as
+    // UsersService.create. A resident added here must be able to sign in across
+    // the platform, so the account service owns the credential and emails it.
+    // createDto.password is passed through when supplied; when it is not, the
+    // account service generates a strong one. The previous shared literal default
+    // gave every resident the same guessable password.
+    const identity = await this.accountIdentityClient.provisionUser({
+      email: createDto.email.toLowerCase(),
+      first_name: createDto.firstName,
+      last_name: createDto.lastName,
+      phone: createDto.phone,
+      password: createDto.password,
+      // gaterecord sends its own branded credentials email below.
+      sendEmail: false,
+    });
+
+    if (!identity.created) {
+      this.logger.log(
+        'Platform identity already existed for this email; linking the new resident to it.',
+      );
+    }
+
+    // NOT NULL column kept satisfied with an unguessable value nobody holds - see
+    // UsersService.create. Authentication happens at the account service.
+    const passwordHash = await bcrypt.hash(uuidv4(), 10);
 
     const resident = this.userRepository.create({
       ...createDto,
+      email: createDto.email.toLowerCase(),
+      userId: identity.id, // Keycloak sub - the platform identity link
       passwordHash,
       role: UserRole.RESIDENT,
       status: createDto.isActive === false ? UserStatus.INACTIVE : UserStatus.ACTIVE,
     });
 
-    return this.userRepository.save(resident);
+    const savedResident = await this.userRepository.save(resident);
+
+    // Branded gaterecord credentials email - never fatal (see UsersService.create).
+    if (identity.created && identity.password) {
+      const loginUrl = this.configService.get<string>(
+        'GATE_LOGIN_URL',
+        'https://yaad.global/login',
+      );
+      this.emailService
+        .sendNewUserCredentialsEmail(
+          savedResident.email,
+          `${savedResident.firstName} ${savedResident.lastName}`.trim(),
+          savedResident.role,
+          identity.password,
+          tenant.name,
+          `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+          loginUrl,
+        )
+        .catch((err: any) =>
+          this.logger.warn(
+            `Resident identity created for ${savedResident.email} but the credentials email failed to send. ${err?.message ?? ''}`,
+          ),
+        );
+    }
+
+    return savedResident;
   }
 
   async update(id: string, updateDto: UpdateResidentDto, currentUser: User): Promise<User> {

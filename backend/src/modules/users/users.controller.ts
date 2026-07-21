@@ -42,6 +42,13 @@ export class UsersController {
     return this.usersService.getProfile(currentUser.id);
   }
 
+  @Get('profile/qr')
+  @ApiOperation({ summary: "Get the current user's personal access QR code" })
+  @ApiResponse({ status: 200, description: 'QR code as a PNG data URL' })
+  getProfileQrCode(@CurrentUser() currentUser: User) {
+    return this.usersService.getProfileQrCode(currentUser.id);
+  }
+
   @Patch('profile')
   @ApiOperation({ summary: 'Update current user profile' })
   @ApiResponse({ status: 200, description: 'Profile updated' })

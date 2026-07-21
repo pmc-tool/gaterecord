@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf, IsNumber } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf, IsNumber, MinLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
@@ -15,8 +15,13 @@ export class CreateResidentDto {
   @IsEmail()
   email: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Optional. Forwarded to the account service, which enforces a minimum of 8 characters; ' +
+      'omit it and a strong password is generated and emailed to the resident.',
+  })
   @IsString()
+  @MinLength(8)
   @IsOptional()
   password?: string;
 
