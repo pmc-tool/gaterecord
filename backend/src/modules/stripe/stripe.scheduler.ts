@@ -486,7 +486,7 @@ export class StripeScheduler {
             <p>If you have any questions, please contact our support team.</p>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>
@@ -553,7 +553,7 @@ export class StripeScheduler {
             <p>Have questions? Reply to this email and we'll help you choose the right plan.</p>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>
@@ -606,7 +606,7 @@ export class StripeScheduler {
             <p>If you need assistance, please contact our support team.</p>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>
@@ -672,7 +672,7 @@ export class StripeScheduler {
             </p>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>
@@ -779,7 +779,7 @@ export class StripeScheduler {
           </div>
           <div class="footer">
             <p>Questions? Reply to this email or contact support.</p>
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>
@@ -834,7 +834,7 @@ export class StripeScheduler {
             </p>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord - Smart Gate Management</p>
+            <p>Yaad - Smart Gate Management</p>
           </div>
         </div>
       </body>

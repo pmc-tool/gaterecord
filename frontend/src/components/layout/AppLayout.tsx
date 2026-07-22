@@ -247,7 +247,7 @@ export function AppLayout() {
           <div className="h-16 flex items-center justify-center border-b px-2">
             <img
               src="/logo.svg"
-              alt="GateRecord"
+              alt="Yaad"
               className={collapsed ? "h-8 w-8 object-contain" : "h-12 object-contain"}
             />
           </div>
@@ -265,8 +265,8 @@ export function AppLayout() {
       <Drawer
         title={
           <div className="flex items-center gap-2">
-            <img src="/logo.svg" alt="GateRecord" className="h-8 object-contain" />
-            <span className="font-semibold">GateRecord</span>
+            <img src="/logo.svg" alt="Yaad" className="h-8 object-contain" />
+            <span className="font-semibold">Yaad</span>
           </div>
         }
         placement="left"

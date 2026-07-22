@@ -375,7 +375,7 @@ export class NotificationService {
       type: NotificationType.TRIAL_EXPIRING,
       priority: daysLeft <= 3 ? NotificationPriority.HIGH : NotificationPriority.NORMAL,
       title: 'Trial Expiring Soon',
-      message: `Your trial expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Subscribe to continue using GateRecord.`,
+      message: `Your trial expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Subscribe to continue using Yaad.`,
       metadata,
       sendEmail: true,
     });

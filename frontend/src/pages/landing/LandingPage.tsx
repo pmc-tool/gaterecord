@@ -79,7 +79,7 @@ const steps = [
 
 const testimonials = [
   {
-    content: "GateRecord transformed our community's security. The RFID system is incredibly reliable, and residents love the convenience. Best investment we've made.",
+    content: "Yaad transformed our community's security. The RFID system is incredibly reliable, and residents love the convenience. Best investment we've made.",
     author: 'Sarah Johnson',
     role: 'Property Manager',
     company: 'Skyline Residences',
@@ -87,7 +87,7 @@ const testimonials = [
     rating: 5,
   },
   {
-    content: "We manage 15 buildings and GateRecord handles them all seamlessly. The multi-tenant feature is a game-changer. Support team is exceptional.",
+    content: "We manage 15 buildings and Yaad handles them all seamlessly. The multi-tenant feature is a game-changer. Support team is exceptional.",
     author: 'Michael Chen',
     role: 'Operations Director',
     company: 'Urban Living Properties',
@@ -258,7 +258,7 @@ export default function LandingPage() {
         <nav className="flex items-center justify-between p-4 lg:px-8 max-w-7xl mx-auto">
           <div className="flex lg:flex-1">
             <a href="/" className="-m-1.5 p-1.5">
-              <img src="/logo.svg" alt="YAAD GateRecord" className="h-12 object-contain" />
+              <img src="/logo.svg" alt="Yaad" className="h-12 object-contain" />
             </a>
           </div>
           <div className="flex lg:hidden">
@@ -310,7 +310,7 @@ export default function LandingPage() {
           <div className="absolute top-0 right-0 h-full w-full max-w-xs bg-white shadow-2xl flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <img src="/logo.svg" alt="GateRecord" className="h-10 object-contain" />
+              <img src="/logo.svg" alt="Yaad" className="h-10 object-contain" />
               <button
                 type="button"
                 className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -721,7 +721,7 @@ export default function LandingPage() {
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
-            aria-label="GateRecord demo video"
+            aria-label="Yaad demo video"
           >
             <button
               type="button"
@@ -734,9 +734,9 @@ export default function LandingPage() {
 
             <div className="border-b border-white/10 px-6 py-5 pr-16">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">Live Demo</p>
-              <h2 className="mt-2 text-2xl font-bold text-white">See GateRecord in action</h2>
+              <h2 className="mt-2 text-2xl font-bold text-white">See Yaad in action</h2>
               <p className="mt-2 text-sm text-slate-300">
-                Watch a quick walkthrough of the GateRecord experience for residents, staff, and property teams.
+                Watch a quick walkthrough of the Yaad experience for residents, staff, and property teams.
               </p>
             </div>
 
@@ -744,7 +744,7 @@ export default function LandingPage() {
               <iframe
                 className="h-full w-full"
                 src="https://www.youtube.com/embed/3gHCv0HdaSc?autoplay=1&rel=0"
-                title="GateRecord demo video"
+                title="Yaad demo video"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 referrerPolicy="strict-origin-when-cross-origin"
                 allowFullScreen
@@ -764,7 +764,7 @@ export default function LandingPage() {
             Ready to secure your property?
           </h2>
           <p className="mt-6 text-lg leading-8 text-blue-100 max-w-2xl mx-auto">
-            Join hundreds of communities using GateRecord to manage access.
+            Join hundreds of communities using Yaad to manage access.
             Start your free trial today — no credit card required.
           </p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -790,7 +790,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 lg:gap-16">
             <div className="col-span-2 md:col-span-1">
               <div className="mb-4">
-                <img src="/logo.svg" alt="GateRecord" className="h-12 object-contain" />
+                <img src="/logo.svg" alt="Yaad" className="h-12 object-contain" />
               </div>
               <p className="text-gray-400 text-sm leading-relaxed">
                 Smart gate access control for modern communities. Secure, reliable, and easy to manage.
@@ -829,7 +829,7 @@ export default function LandingPage() {
 
           <div className="mt-16 pt-8 border-t border-gray-800 flex flex-col md:flex-row justify-between items-center gap-4">
             <p className="text-gray-500 text-sm">
-              © {new Date().getFullYear()} GateRecord. All rights reserved.
+              © {new Date().getFullYear()} Yaad. All rights reserved.
             </p>
             <div className="flex gap-6">
               <a href="#" className="text-gray-500 hover:text-white transition-colors no-underline">

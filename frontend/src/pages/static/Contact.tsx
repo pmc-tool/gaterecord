@@ -30,7 +30,7 @@ export default function Contact() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -45,7 +45,7 @@ export default function Contact() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-emerald-400">Contact</p>
             <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">Get in Touch</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
-              Whether you are exploring GateRecord for a new property or need help with an active setup,
+              Whether you are exploring Yaad for a new property or need help with an active setup,
               our team is available through the channels below.
             </p>
           </div>

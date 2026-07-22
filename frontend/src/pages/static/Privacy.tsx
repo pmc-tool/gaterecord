@@ -7,7 +7,7 @@ const sections = [
   },
   {
     title: 'How We Use Information',
-    body: 'GateRecord uses collected information to authenticate users, manage residents and gates, generate alerts, maintain audit history, improve reliability, and respond to customer support requests.',
+    body: 'Yaad uses collected information to authenticate users, manage residents and gates, generate alerts, maintain audit history, improve reliability, and respond to customer support requests.',
   },
   {
     title: 'How We Protect Data',
@@ -26,7 +26,7 @@ export default function Privacy() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -41,7 +41,7 @@ export default function Privacy() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-400">Legal</p>
             <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">Privacy Policy</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
-              This policy explains what information GateRecord collects, why we collect it, how we use it,
+              This policy explains what information Yaad collects, why we collect it, how we use it,
               and the controls available to customers using our access control platform.
             </p>
             <p className="mt-4 text-sm text-slate-400">Last updated: April 16, 2026</p>

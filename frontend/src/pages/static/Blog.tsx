@@ -25,7 +25,7 @@ export default function Blog() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -38,7 +38,7 @@ export default function Blog() {
         <div className="overflow-hidden rounded-[2rem] border border-slate-800 bg-slate-900/80 shadow-2xl shadow-indigo-950/20 backdrop-blur">
           <div className="border-b border-slate-800 px-8 py-10 lg:px-12">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">Insights</p>
-            <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">GateRecord Blog</h1>
+            <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">Yaad Blog</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
               Updates, ideas, and practical guidance for property teams managing gate operations,
               visitor access, and community security.

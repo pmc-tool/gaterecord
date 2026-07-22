@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 const sections = [
   {
     title: 'Infrastructure Controls',
-    body: 'GateRecord uses segmented environments, encrypted traffic, monitored services, and tightly controlled administrative access to protect platform infrastructure and customer data.',
+    body: 'Yaad uses segmented environments, encrypted traffic, monitored services, and tightly controlled administrative access to protect platform infrastructure and customer data.',
   },
   {
     title: 'Application Security',
@@ -26,7 +26,7 @@ export default function Security() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -41,7 +41,7 @@ export default function Security() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-emerald-400">Trust Center</p>
             <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">Security</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
-              Security is built into the way GateRecord manages access events, user roles, device connectivity,
+              Security is built into the way Yaad manages access events, user roles, device connectivity,
               and operational alerts. This page outlines our core security approach.
             </p>
             <p className="mt-4 text-sm text-slate-400">Last updated: April 16, 2026</p>

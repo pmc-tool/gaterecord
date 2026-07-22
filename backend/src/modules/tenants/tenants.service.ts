@@ -36,6 +36,43 @@ export class TenantsService {
     private configService: ConfigService,
   ) {}
 
+  /**
+   * Effective (charged) price after any active plan discount — mirrors
+   * StripeService.calculateEffectivePrice so revenue metrics (MRR, ARR, plan
+   * revenue, subscription amounts) match what tenants are actually billed:
+   *   effective = base × (1 − discountPercent / 100)
+   * The discount is ignored when the percent is ≤ 0 or discountValidUntil passed.
+   */
+  private effectivePrice(
+    basePrice: number,
+    discountPercent?: number | string | null,
+    discountValidUntil?: Date | string | null,
+  ): number {
+    const base = Number(basePrice) || 0;
+    const pct = Number(discountPercent) || 0;
+    if (pct <= 0) return base;
+    if (discountValidUntil && new Date(discountValidUntil) < new Date()) return base;
+    return Math.round(base * (1 - pct / 100) * 100) / 100;
+  }
+
+  /** Effective monthly price for a plan (base minus active discount). */
+  private effMonthly(plan: SubscriptionPlan): number {
+    return this.effectivePrice(
+      Number(plan.monthlyPrice),
+      plan.discountPercent,
+      plan.discountValidUntil,
+    );
+  }
+
+  /** Effective yearly price for a plan (base minus active discount). */
+  private effYearly(plan: SubscriptionPlan): number {
+    return this.effectivePrice(
+      Number(plan.yearlyPrice),
+      plan.discountPercent,
+      plan.discountValidUntil,
+    );
+  }
+
   async createPlan(dto: CreateSubscriptionPlanDto): Promise<SubscriptionPlan> {
     const existing = await this.planRepository.findOne({ where: { name: dto.name } });
     if (existing) {
@@ -232,7 +269,7 @@ export class TenantsService {
       UserRole.BUILDING_ADMIN,
       adminPassword,
       dto.name,
-      'GateRecord Admin',
+      'Yaad Admin',
       loginUrl,
     ).catch((error) => {
       console.error('Failed to send credentials email:', error);
@@ -443,8 +480,8 @@ export class TenantsService {
         (t) => t.billingCycle === BillingCycle.YEARLY && t.status === TenantStatus.ACTIVE,
       );
 
-      const monthlyRev = monthlySubscribers.length * Number(plan.monthlyPrice);
-      const yearlyRev = yearlySubscribers.length * Number(plan.yearlyPrice);
+      const monthlyRev = monthlySubscribers.length * this.effMonthly(plan);
+      const yearlyRev = yearlySubscribers.length * this.effYearly(plan);
 
       monthlyRevenue += monthlyRev;
       yearlyRevenue += yearlyRev;
@@ -490,10 +527,11 @@ export class TenantsService {
       tenantName: t.name,
       planName: t.subscriptionPlan?.name || 'Unknown',
       billingCycle: t.billingCycle,
-      amount:
-        t.billingCycle === BillingCycle.YEARLY
-          ? Number(t.subscriptionPlan?.yearlyPrice || 0)
-          : Number(t.subscriptionPlan?.monthlyPrice || 0),
+      amount: !t.subscriptionPlan
+        ? 0
+        : t.billingCycle === BillingCycle.YEARLY
+          ? this.effYearly(t.subscriptionPlan)
+          : this.effMonthly(t.subscriptionPlan),
       subscribedAt: t.createdAt,
       status: t.status,
     }));
@@ -591,11 +629,11 @@ export class TenantsService {
       let planRevenue = 0;
       activePlanTenants.forEach((t) => {
         if (t.billingCycle === BillingCycle.YEARLY) {
-          const yearlyPrice = Number(plan.yearlyPrice);
+          const yearlyPrice = this.effYearly(plan);
           planRevenue += yearlyPrice / 12; // Convert to monthly for MRR
           yearlySubscriptionsRevenue += yearlyPrice;
         } else {
-          const monthlyPrice = Number(plan.monthlyPrice);
+          const monthlyPrice = this.effMonthly(plan);
           planRevenue += monthlyPrice;
           monthlySubscriptionsRevenue += monthlyPrice;
         }
@@ -713,9 +751,9 @@ export class TenantsService {
     for (const t of lastMonthTenants) {
       if (!t.subscriptionPlan) continue;
       if (t.billingCycle === BillingCycle.YEARLY) {
-        lastMonthMrr += Number(t.subscriptionPlan.yearlyPrice) / 12;
+        lastMonthMrr += this.effYearly(t.subscriptionPlan) / 12;
       } else {
-        lastMonthMrr += Number(t.subscriptionPlan.monthlyPrice);
+        lastMonthMrr += this.effMonthly(t.subscriptionPlan);
       }
     }
 
@@ -819,10 +857,10 @@ export class TenantsService {
       activeSubscriptions++;
       if (t.billingCycle === BillingCycle.MONTHLY) {
         monthlySubscribers++;
-        mrr += Number(t.subscriptionPlan?.monthlyPrice || 0);
+        mrr += t.subscriptionPlan ? this.effMonthly(t.subscriptionPlan) : 0;
       } else if (t.billingCycle === BillingCycle.YEARLY) {
         yearlySubscribers++;
-        mrr += Number(t.subscriptionPlan?.yearlyPrice || 0) / 12;
+        mrr += t.subscriptionPlan ? this.effYearly(t.subscriptionPlan) / 12 : 0;
       }
     });
 
@@ -852,9 +890,9 @@ export class TenantsService {
     lastMonthActiveTenants.forEach((t) => {
       if (!t.subscriptionPlan) return;
       if (t.billingCycle === BillingCycle.YEARLY) {
-        lastMonthMrr += Number(t.subscriptionPlan.yearlyPrice) / 12;
+        lastMonthMrr += this.effYearly(t.subscriptionPlan) / 12;
       } else {
-        lastMonthMrr += Number(t.subscriptionPlan.monthlyPrice);
+        lastMonthMrr += this.effMonthly(t.subscriptionPlan);
       }
     });
 
@@ -969,9 +1007,9 @@ export class TenantsService {
       let planMrr = 0;
       planSubscribers.forEach((t) => {
         if (t.billingCycle === BillingCycle.YEARLY) {
-          planMrr += Number(plan.yearlyPrice) / 12;
+          planMrr += this.effYearly(plan) / 12;
         } else {
-          planMrr += Number(plan.monthlyPrice);
+          planMrr += this.effMonthly(plan);
         }
       });
 
@@ -1107,10 +1145,11 @@ export class TenantsService {
       tenantName: t.name,
       planName: t.subscriptionPlan?.name || 'Unknown',
       billingCycle: t.billingCycle,
-      amount:
-        t.billingCycle === BillingCycle.YEARLY
-          ? Number(t.subscriptionPlan?.yearlyPrice || 0)
-          : Number(t.subscriptionPlan?.monthlyPrice || 0),
+      amount: !t.subscriptionPlan
+        ? 0
+        : t.billingCycle === BillingCycle.YEARLY
+          ? this.effYearly(t.subscriptionPlan)
+          : this.effMonthly(t.subscriptionPlan),
       subscribedAt: t.createdAt,
       status: t.status,
     }));

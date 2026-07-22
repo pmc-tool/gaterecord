@@ -98,7 +98,7 @@ export default function SignupSuccessPage() {
             <CheckCircleOutlined className="text-5xl text-green-500" />
           </div>
           
-          <Title level={2} className="mb-2">Welcome to GateRecord!</Title>
+          <Title level={2} className="mb-2">Welcome to Yaad</Title>
           <Text type="secondary" className="text-lg block mb-6">
             Your account has been created successfully.
           </Text>
