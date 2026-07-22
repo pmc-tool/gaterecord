@@ -37,6 +37,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 
 import { StripeService } from './stripe.service';
 import { StripeScheduler } from './stripe.scheduler';
+import { DefaultPlanExpiryCron } from './default-plan-expiry.cron';
 import { StripeController, BillingController, AdminStripeController } from './stripe.controller';
 
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
@@ -54,7 +55,7 @@ import { NotificationModule } from '../notification/notification.module';
     NotificationModule,
   ],
   controllers: [StripeController, BillingController, AdminStripeController],
-  providers: [StripeService, StripeScheduler],
+  providers: [StripeService, StripeScheduler, DefaultPlanExpiryCron],
   exports: [StripeService],
 })
 export class StripeModule {}

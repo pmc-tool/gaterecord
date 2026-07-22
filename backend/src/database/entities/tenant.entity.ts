@@ -97,6 +97,18 @@ export class Tenant extends BaseEntity {
   @Column({ name: 'cancel_at_period_end', default: false })
   cancelAtPeriodEnd: boolean;
 
+  /**
+   * Latches TRUE the first time this tenant successfully pays for a plan and
+   * NEVER resets. The free/default plan is a one-time starter grant: once a
+   * building has been on a paid plan, the free plan is permanently "used" and can
+   * no longer be selected. Set on every paid activation (handleInvoicePaid /
+   * handleCheckoutCompleted); surfaced to the pricing page so the free tier shows
+   * as "Free plan used". Durable on purpose — derived from a column, not from
+   * payment history, which the retention policy may purge.
+   */
+  @Column({ name: 'has_used_paid_plan', default: false })
+  hasUsedPaidPlan: boolean;
+
   // Subscription Pause
   @Column({ name: 'is_paused', default: false })
   isPaused: boolean;

@@ -198,8 +198,13 @@ export class OnboardingService {
 
     let selectedPlan: SubscriptionPlan;
     if (!plan) {
-      // Default to the first available plan if not found
-      const defaultPlan = plans[0];
+      // No premium plan chosen -> auto-subscribe to the system DEFAULT plan
+      // (resolved by is_default, never by name/id — the numbers live in the DB).
+      // It gets a 60-day (default_validity_days) window; after that the
+      // default-plan expiry cron suspends the tenant and the SubscriptionGuard
+      // makes it read-only.
+      const defaultPlan =
+        plans.find((p) => p.isDefault) ?? plans[0];
       if (!defaultPlan) {
         throw new BadRequestException('No subscription plans available');
       }
@@ -217,18 +222,28 @@ export class OnboardingService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
 
-    // Calculate trial expiration based on plan's trial days
-    const trialDays = selectedPlan.trialDays || 14;
-    const trialExpiresAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
+    // Expiry window. The default plan grants default_validity_days (the 60-day
+    // free ride); a premium plan uses its trial days. Both feed the same
+    // subscriptionExpiresAt the expiry cron watches.
+    const validityDays = selectedPlan.isDefault
+      ? selectedPlan.defaultValidityDays || 60
+      : selectedPlan.trialDays || 14;
+    const trialExpiresAt = new Date(
+      Date.now() + validityDays * 24 * 60 * 60 * 1000,
+    );
 
-    // Determine initial tenant status:
-    // - requiresPayment=true → PENDING_PAYMENT (waiting for Stripe checkout)
-    // - startTrial=true → TRIAL (free trial, no payment yet)
-    // - Free plan (monthlyPrice = 0) → TRIAL (no payment needed)
-    let tenantStatus = TenantStatus.TRIAL;
-    if (dto.requiresPayment) {
+    // Determine initial tenant status. There is NO free-trial concept: a new
+    // building goes straight onto the Free (default) plan as ACTIVE — it simply
+    // has small limits and a 60-day window (after which the expiry cron
+    // suspends it). Only an explicitly chosen PAID plan that requires payment
+    // waits in PENDING_PAYMENT for Stripe checkout.
+    let tenantStatus = TenantStatus.ACTIVE;
+    if (!selectedPlan.isDefault && dto.requiresPayment) {
       tenantStatus = TenantStatus.PENDING_PAYMENT;
     }
+    const subscriptionStatus = selectedPlan.isDefault
+      ? SubscriptionStatus.ACTIVE
+      : SubscriptionStatus.TRIALING;
 
     const now = new Date();
 
@@ -247,12 +262,12 @@ export class OnboardingService {
       subscriptionStartedAt: now,
       subscriptionExpiresAt: trialExpiresAt,
       currentPeriodEnd: trialExpiresAt,
-      subscriptionStatus: SubscriptionStatus.TRIALING,
+      subscriptionStatus,
       settings: {
         paymentInfo: dto.paymentInfo,
         signupDate: now.toISOString(),
         startedAsTrial: dto.startTrial || false,
-        trialDays: trialDays,
+        trialDays: validityDays,
         requiresPayment: dto.requiresPayment || false,
       },
     });

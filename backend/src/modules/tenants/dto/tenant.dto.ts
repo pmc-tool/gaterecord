@@ -183,6 +183,24 @@ export class CreateSubscriptionPlanDto {
   @IsBoolean()
   @IsOptional()
   isPublic?: boolean;
+
+  // Default (free) plan controls. `isSystem` is intentionally NOT exposed here —
+  // system status is set only by the migration/seed and locks delete.
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Mark this as the single auto-assigned default plan (unsets any other default)',
+  })
+  @IsBoolean()
+  @IsOptional()
+  isDefault?: boolean;
+
+  @ApiPropertyOptional({
+    example: 60,
+    description: 'How many days the default/free plan stays valid before lockout',
+  })
+  @IsNumber()
+  @IsOptional()
+  defaultValidityDays?: number;
 }
 
 export class UpdateSubscriptionPlanDto extends PartialType(CreateSubscriptionPlanDto) {}

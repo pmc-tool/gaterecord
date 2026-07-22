@@ -47,6 +47,11 @@ export class TenantsService {
       await this.planRepository.update({}, { isFeatured: false });
     }
 
+    // Only one plan can be the default at a time (backstops the partial unique index)
+    if (dto.isDefault) {
+      await this.planRepository.update({}, { isDefault: false });
+    }
+
     const plan = this.planRepository.create(dto);
     return this.planRepository.save(plan);
   }
@@ -110,12 +115,22 @@ export class TenantsService {
       await this.planRepository.update({ id: Not(id) }, { isFeatured: false });
     }
 
+    // Only one plan can be the default at a time (backstops the partial unique index)
+    if (dto.isDefault === true) {
+      await this.planRepository.update({ id: Not(id) }, { isDefault: false });
+    }
+
     Object.assign(plan, dto);
     return this.planRepository.save(plan);
   }
 
   async removePlan(id: string): Promise<void> {
     const plan = await this.findOnePlan(id);
+
+    // System plans (e.g. the default/free plan) can be edited by super admin but never deleted
+    if (plan.isSystem) {
+      throw new ConflictException('Cannot delete a system plan. This plan is required by the platform.');
+    }
 
     // Check if any tenants are using this plan
     if (plan.tenants && plan.tenants.length > 0) {
