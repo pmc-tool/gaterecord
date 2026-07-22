@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsUUID, IsIn, IsOptional } from 'class-validator';
+import { IsString, IsUUID, IsIn, IsOptional, IsBoolean } from 'class-validator';
 import { RfidRegistrationService } from './rfid-registration.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -45,6 +45,11 @@ class SubmitScanDto {
 
   @IsString()
   uid: string;
+
+  // true = a UID typed by an admin — store verbatim (no phone byte-reversal).
+  @IsOptional()
+  @IsBoolean()
+  raw?: boolean;
 }
 
 /**
@@ -115,7 +120,11 @@ export class RfidRegistrationController {
   async submitScan(@Body() dto: SubmitScanDto) {
     this.logger.log(`Manual scan submission for session ${dto.sessionId}: ${dto.uid}`);
     try {
-      const result = await this.rfidRegistrationService.submitManualScan(dto.sessionId, dto.uid);
+      const result = await this.rfidRegistrationService.submitManualScan(
+        dto.sessionId,
+        dto.uid,
+        dto.raw ?? false,
+      );
       return {
         message: 'Card registered successfully',
         targetType: result.targetType,

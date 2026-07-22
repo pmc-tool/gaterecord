@@ -200,6 +200,7 @@ export class RfidRegistrationService {
   async submitManualScan(
     sessionId: string,
     rfidUid: string,
+    raw = false,
   ): Promise<{ targetType: RegistrationTargetType; uid: string }> {
     const session = this.activeSessions.get(sessionId);
     if (!session) {
@@ -210,7 +211,13 @@ export class RfidRegistrationService {
       throw new Error('Registration session expired');
     }
 
-    const normalizedUid = this.normalizePhoneScanUid(rfidUid);
+    // `raw` = a UID typed by an admin (or read verbatim): store it exactly as a
+    // gate reader would emit it (uppercase, no separators) so it MATCHES a later
+    // gate scan. Only phone Web-NFC reads need the byte-reversal in
+    // normalizePhoneScanUid — a typed UID must NOT be transformed.
+    const normalizedUid = raw
+      ? rfidUid.toUpperCase().replace(/[^0-9A-Z]/g, '')
+      : this.normalizePhoneScanUid(rfidUid);
     if (!normalizedUid) {
       throw new Error('Empty RFID UID');
     }
