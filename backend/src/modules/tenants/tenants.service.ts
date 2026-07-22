@@ -42,14 +42,15 @@ export class TenantsService {
       throw new ConflictException('Plan with this name already exists');
     }
 
-    // Only one plan can be featured at a time
+    // Only one plan can be featured at a time. Unset any currently-featured plan.
+    // (TypeORM rejects update() with an empty criteria, so scope it to featured rows.)
     if (dto.isFeatured) {
-      await this.planRepository.update({}, { isFeatured: false });
+      await this.planRepository.update({ isFeatured: true }, { isFeatured: false });
     }
 
-    // Only one plan can be the default at a time (backstops the partial unique index)
+    // Only one plan can be the default at a time (backstops the partial unique index).
     if (dto.isDefault) {
-      await this.planRepository.update({}, { isDefault: false });
+      await this.planRepository.update({ isDefault: true }, { isDefault: false });
     }
 
     const plan = this.planRepository.create(dto);
