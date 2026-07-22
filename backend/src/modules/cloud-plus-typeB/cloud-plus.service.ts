@@ -69,10 +69,65 @@ export class CloudPlusService {
     const timestamp = this.formatTimestamp(new Date());
 
     try {
-      // Step 1: Find device by serial number
+      // Step 1: Find device by serial number.
       const device = await this.findDeviceBySerial(serial);
 
-      if (!device) {
+      // Resolve the gate and tenant to evaluate against.
+      //
+      // Real hardware (HTTP or TCP Cloud B4 controller) is ALWAYS a registered
+      // device, so `device` is found and the existing device→gate resolution runs
+      // unchanged. The ONLY new case is the Gate Simulator driving a gate that has
+      // NO attached device: it passes the target `gate` explicitly with an
+      // unknown/blank serial, so we evaluate the credential against that gate
+      // directly instead of rejecting with "Unregistered device". A real
+      // controller never reaches this branch (its serial is registered).
+      let activeGate: Gate;
+      let tenantId: string;
+
+      if (device) {
+        // Update device last seen
+        await this.updateDeviceStatus(device, clientIp, request.MAC);
+
+        // Step 2: Find associated gate from device
+        const deviceGate = device.gate;
+        if (!deviceGate) {
+          this.logger.warn(`Device ${serial} not assigned to any gate`);
+          return this.buildDenyResponse(
+            card,
+            reader,
+            credType,
+            'No Gate',
+            'Device not assigned to gate',
+            timestamp,
+          );
+        }
+
+        // Validate gate ID matches if gate is provided
+        if (gate && gate.id !== deviceGate.id) {
+          this.logger.warn(
+            `Gate mismatch: provided gate ${gate.id} does not match device gate ${deviceGate.id}`,
+          );
+          return this.buildDenyResponse(
+            card,
+            reader,
+            credType,
+            'Gate Mismatch',
+            'Device not assigned to this gate',
+            timestamp,
+          );
+        }
+
+        activeGate = gate || deviceGate;
+        tenantId = device.tenantId;
+      } else if (gate) {
+        // Simulator driving a device-less gate — evaluate against the gate itself.
+        activeGate = gate;
+        tenantId = gate.tenantId;
+        this.logger.log(
+          `No device for serial "${serial}"; simulating against gate ${gate.name} (${gate.id})`,
+        );
+      } else {
+        // Real hardware with an unregistered serial and no gate context — reject.
         this.logger.warn(`Unknown device: ${serial}`);
         return this.buildDenyResponse(
           card,
@@ -83,41 +138,6 @@ export class CloudPlusService {
           timestamp,
         );
       }
-
-      // Update device last seen
-      await this.updateDeviceStatus(device, clientIp, request.MAC);
-
-      // Step 2: Find associated gate from device
-      const deviceGate = device.gate;
-      if (!deviceGate) {
-        this.logger.warn(`Device ${serial} not assigned to any gate`);
-        return this.buildDenyResponse(
-          card,
-          reader,
-          credType,
-          'No Gate',
-          'Device not assigned to gate',
-          timestamp,
-        );
-      }
-
-      // Validate gate ID matches if gate is provided
-      if (gate && gate.id !== deviceGate.id) {
-        this.logger.warn(
-          `Gate mismatch: provided gate ${gate.id} does not match device gate ${deviceGate.id}`,
-        );
-        return this.buildDenyResponse(
-          card,
-          reader,
-          credType,
-          'Gate Mismatch',
-          'Device not assigned to this gate',
-          timestamp,
-        );
-      }
-
-      // Use deviceGate for further processing
-      const activeGate = gate || deviceGate;
 
       console.log(`Processing credential for gate: ${activeGate.name} (ID: ${activeGate.id})`);
 
@@ -132,11 +152,11 @@ export class CloudPlusService {
         credentialType === CloudPlusCredentialType.CARD ||
         credentialType === CloudPlusCredentialType.RFID_TAG
       ) {
-        if (this.rfidRegistrationService.hasActiveSession(device.tenantId)) {
+        if (this.rfidRegistrationService.hasActiveSession(tenantId)) {
           const normalizedUid = card.toUpperCase().replace(/:/g, '');
           const scanType = handleType === 'vehicle' ? 'vehicle' : 'human';
           const handled = await this.rfidRegistrationService.processRegistrationScan(
-            device.tenantId,
+            tenantId,
             normalizedUid,
             scanType,
           );
@@ -163,7 +183,7 @@ export class CloudPlusService {
         case CloudPlusCredentialType.CARD:
         case CloudPlusCredentialType.RFID_TAG:
           validationResult = await this.validateRfidCredential(
-            device.tenantId,
+            tenantId,
             card,
             activeGate,
             handleType,
@@ -173,7 +193,7 @@ export class CloudPlusService {
         case CloudPlusCredentialType.QR_BASE64:
         case CloudPlusCredentialType.RS232:
           const decodedQr = this.decodeBase64Qr(card);
-          validationResult = await this.validateQrCode(device.tenantId, decodedQr, activeGate);
+          validationResult = await this.validateQrCode(tenantId, decodedQr, activeGate);
           break;
 
         case CloudPlusCredentialType.BUTTON:
@@ -189,13 +209,13 @@ export class CloudPlusService {
           break;
 
         case CloudPlusCredentialType.PASSWORD:
-          validationResult = await this.validatePassword(device.tenantId, card, activeGate);
+          validationResult = await this.validatePassword(tenantId, card, activeGate);
           break;
 
         case CloudPlusCredentialType.FACE:
         case CloudPlusCredentialType.FACE_ALT:
           // Face recognition - Card field contains face ID
-          validationResult = await this.validateFaceId(device.tenantId, card, activeGate);
+          validationResult = await this.validateFaceId(tenantId, card, activeGate);
           break;
 
         default:
