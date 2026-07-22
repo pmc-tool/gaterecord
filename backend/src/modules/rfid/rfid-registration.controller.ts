@@ -19,8 +19,10 @@ import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { User, UserRole } from '@database/entities/user.entity';
 
 class StartRegistrationDto {
-  @IsIn(['vehicle', 'resident'])
-  targetType: 'vehicle' | 'resident';
+  // 'vehicle' sets the vehicle's primary tag; 'vehicle-card' adds an extra
+  // scannable card to a vehicle; 'resident' adds a card to a person.
+  @IsIn(['vehicle', 'vehicle-card', 'resident'])
+  targetType: 'vehicle' | 'vehicle-card' | 'resident';
 
   @IsUUID()
   targetId: string;

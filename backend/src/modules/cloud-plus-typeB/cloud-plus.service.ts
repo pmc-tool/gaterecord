@@ -380,9 +380,18 @@ export class CloudPlusService {
   ): Promise<ValidationResult> {
     const normalizedUid = rfidUid.toUpperCase().replace(/:/g, '');
 
-    // First, try to match as vehicle RFID
-    if (handleType === 'vehicle') {
-      // If it's a card read event, we can prioritize vehicle check
+    // A UID can identify a vehicle (via the intrinsic vehicles.rfid_uid tag OR an
+    // rfid_cards row linked to a vehicle) or a person (an rfid_cards row linked to
+    // a user). `handleType` is the button hint from the simulator; a real reader
+    // passes neither, so we then search everything. Card UIDs are unique per
+    // tenant and registration forbids a card UID colliding with a vehicle tag, so
+    // the resolution below is unambiguous.
+    const wantVehicle = handleType === 'vehicle';
+    const wantHuman = handleType === 'human';
+    const searchAll = !wantVehicle && !wantHuman;
+
+    // 1. Intrinsic vehicle tag (the manual "Car Verify" / rfid_uid path).
+    if (wantVehicle || searchAll) {
       const vehicle = await this.vehicleRepository.findOne({
         where: {
           tenantId,
@@ -395,23 +404,27 @@ export class CloudPlusService {
       if (vehicle) {
         return this.validateVehicleAccess(vehicle, normalizedUid);
       }
-    } else {
-      // For other events, we can check RFID cards first
+    }
 
-      // Try to match as human RFID card
-      const rfidCard = await this.rfidCardRepository.findOne({
-        where: {
-          tenantId,
-          uid: normalizedUid,
-          status: RfidCardStatus.ACTIVE,
-        },
-        relations: ['user'],
-      });
+    // 2. A scannable RFID card — belongs to a vehicle OR a person.
+    const rfidCard = await this.rfidCardRepository.findOne({
+      where: {
+        tenantId,
+        uid: normalizedUid,
+        status: RfidCardStatus.ACTIVE,
+      },
+      relations: ['user', 'vehicle', 'vehicle.owner'],
+    });
 
-      if (rfidCard) {
+    if (rfidCard) {
+      if (rfidCard.vehicleId && rfidCard.vehicle && (wantVehicle || searchAll)) {
+        return this.validateVehicleCardAccess(rfidCard, normalizedUid);
+      }
+      if (rfidCard.userId && rfidCard.user && (wantHuman || searchAll)) {
         return this.validateRfidCardAccess(rfidCard, normalizedUid);
       }
     }
+
     // No matching credential found
     return {
       allowed: false,
@@ -464,6 +477,40 @@ export class CloudPlusService {
       subjectIdentifier: rfidUid,
       residentId: vehicle.ownerId,
     };
+  }
+
+  /**
+   * A card linked to a vehicle grants VEHICLE access. The credential is the card,
+   * so its own validity window is checked; the subject reported is the vehicle
+   * (and its owner), identical to an intrinsic-tag scan so downstream logging and
+   * UI treat both the same way.
+   */
+  private validateVehicleCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {
+    const now = new Date();
+    const vehicle = rfidCard.vehicle;
+    const ownerName = vehicle.owner
+      ? `${vehicle.owner.firstName} ${vehicle.owner.lastName}`
+      : 'Vehicle';
+
+    const base = {
+      name: ownerName,
+      info: vehicle.licensePlate,
+      subjectType: 'vehicle' as const,
+      subjectId: vehicle.id,
+      subjectIdentifier: rfidUid,
+      residentId: vehicle.ownerId,
+    };
+
+    if (vehicle.status !== VehicleStatus.ACTIVE) {
+      return { ...base, allowed: false, denialReason: 'Vehicle inactive' };
+    }
+    if (rfidCard.validFrom && rfidCard.validFrom > now) {
+      return { ...base, allowed: false, denialReason: 'Not yet valid' };
+    }
+    if (rfidCard.validUntil && rfidCard.validUntil < now) {
+      return { ...base, allowed: false, denialReason: 'Card expired' };
+    }
+    return { ...base, allowed: true };
   }
 
   private validateRfidCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {

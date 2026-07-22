@@ -443,9 +443,6 @@ export class StripeService implements OnModuleInit {
     const customerId = await this.ensureStripeCustomer(tenant);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
 
-    // Check if user is already on trial - don't give them another trial period
-    const isAlreadyOnTrial = tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
-    
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
@@ -457,8 +454,9 @@ export class StripeService implements OnModuleInit {
         },
       ],
       subscription_data: {
-        // Only add trial days for NEW users, not for users converting from trial to paid
-        trial_period_days: (!isAlreadyOnTrial && plan.trialDays > 0) ? plan.trialDays : undefined,
+        // No-trial system: paid plans are charged immediately. New users get the
+        // free plan, not a trial — this matches the in-app checkout and the
+        // pricing/summary UI, so no path silently grants a trial period.
         metadata: {
           tenantId: tenant.id,
           planId: plan.id,
@@ -561,8 +559,11 @@ export class StripeService implements OnModuleInit {
 
     const customerId = await this.ensureStripeCustomer(tenant);
 
-    // Card-only SetupIntent. usage:'off_session' so the saved card can be charged
-    // for recurring invoices. Everything the webhook needs to build the exact
+    // Card-only SetupIntent. This MUST match how the frontend Elements is mounted
+    // (paymentMethodTypes: ['card']) or stripe.confirmSetup() rejects with a
+    // payment_method_types mismatch. Card-only keeps checkout to a single method
+    // and collects no extra data. usage:'off_session' so the saved card can back
+    // recurring invoices. Everything the webhook needs to build the exact
     // subscription the user was quoted — including the resolved priceId — travels
     // in metadata, so the webhook never re-resolves and cannot drift.
     const setupIntent = await this.stripe.setupIntents.create({
@@ -2332,16 +2333,59 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
+   * Extract the subscription id from an invoice ACROSS Stripe API versions.
+   * Older versions exposed `invoice.subscription`; 2025+/2026 ("dahlia") removed
+   * it and moved it to `invoice.parent.subscription_details.subscription` (and,
+   * per line item, `line.parent.subscription_item_details.subscription`). Without
+   * this, invoice webhooks on a newer account silently drop the payment — the
+   * handler reads `undefined` and returns before recording anything.
+   */
+  private getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | undefined {
+    const inv = invoice as any;
+    const legacy =
+      typeof inv.subscription === 'string'
+        ? inv.subscription
+        : inv.subscription?.id;
+    return (
+      legacy ||
+      inv.parent?.subscription_details?.subscription ||
+      inv.lines?.data?.[0]?.parent?.subscription_item_details?.subscription ||
+      undefined
+    );
+  }
+
+  /**
    * Handle invoice.paid
    */
   async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
-    const subscriptionId = invoice.subscription as string;
+    const subscriptionId = this.getInvoiceSubscriptionId(invoice);
     if (!subscriptionId) return;
 
-    const tenant = await this.tenantRepository.findOne({
+    let tenant = await this.tenantRepository.findOne({
       where: { stripeSubscriptionId: subscriptionId },
       relations: ['subscriptionPlan'],
     });
+
+    // Race fallback: the in-app checkout creates the subscription INSIDE the
+    // setup_intent.succeeded webhook, so invoice.paid can land before
+    // tenant.stripeSubscriptionId has been persisted. Without this, the very
+    // first payment would be silently dropped (tenant still gets activated by a
+    // later subscription.updated, but no payment row is written). A Stripe
+    // customer is 1:1 with a tenant, so resolve by customer and backfill the
+    // subscription id so subsequent events match directly.
+    if (!tenant && invoice.customer) {
+      const customerId =
+        typeof invoice.customer === 'string'
+          ? invoice.customer
+          : invoice.customer.id;
+      tenant = await this.tenantRepository.findOne({
+        where: { stripeCustomerId: customerId },
+        relations: ['subscriptionPlan'],
+      });
+      if (tenant && !tenant.stripeSubscriptionId) {
+        tenant.stripeSubscriptionId = subscriptionId;
+      }
+    }
 
     if (!tenant) return;
 
@@ -2392,19 +2436,20 @@ export class StripeService implements OnModuleInit {
     }
 
     // Record the payment in payments table
-    const charge = invoice.charge as string;
+    const charge = (invoice as any).charge as string | undefined;
     let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
     let netAmount: number | undefined;
     let feeAmount: number | undefined;
     let taxAmount: number | undefined;
 
     // Get payment method details and balance transaction from the charge
+    // (legacy Stripe API: `invoice.charge` present).
     if (charge && this.stripe) {
       try {
         const chargeObj = await this.stripe.charges.retrieve(charge, {
           expand: ['balance_transaction'],
         });
-        
+
         if (chargeObj.payment_method_details?.card) {
           paymentMethodInfo = {
             type: 'card',
@@ -2412,7 +2457,7 @@ export class StripeService implements OnModuleInit {
             brand: chargeObj.payment_method_details.card.brand || undefined,
           };
         }
-        
+
         // Get net amount and fees from balance transaction
         const balanceTransaction = chargeObj.balance_transaction as Stripe.BalanceTransaction | null;
         if (balanceTransaction && typeof balanceTransaction === 'object') {
@@ -2422,11 +2467,39 @@ export class StripeService implements OnModuleInit {
       } catch (e) {
         this.logger.warn(`Error fetching charge details for ${charge}: ${e}`);
       }
+    } else if (this.stripe) {
+      // Newer Stripe API ("dahlia"): the invoice no longer carries `charge`.
+      // Read the card off the subscription's default payment method (which the
+      // in-app checkout set to the saved card) so the payment still shows a brand
+      // and last-4. Net/fee are omitted — they are not needed to display the row.
+      try {
+        const sub = await this.stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ['default_payment_method'],
+        });
+        const pm = sub.default_payment_method;
+        if (pm && typeof pm !== 'string' && pm.card) {
+          paymentMethodInfo = {
+            type: 'card',
+            last4: pm.card.last4 || undefined,
+            brand: pm.card.brand || undefined,
+          };
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Could not read default PM for subscription ${subscriptionId}: ${e}`,
+        );
+      }
     }
 
-    // Get tax from invoice if available
-    if (invoice.tax) {
-      taxAmount = invoice.tax; // In cents
+    // Get tax from invoice if available (legacy `tax`; newer `total_taxes[]`).
+    const inv = invoice as any;
+    if (typeof inv.tax === 'number') {
+      taxAmount = inv.tax; // In cents
+    } else if (Array.isArray(inv.total_taxes)) {
+      taxAmount = inv.total_taxes.reduce(
+        (sum: number, t: any) => sum + (t.amount || 0),
+        0,
+      );
     }
 
     await this.recordPayment({
@@ -2473,7 +2546,7 @@ export class StripeService implements OnModuleInit {
    * Handle invoice.payment_failed
    */
   async handleInvoicePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
-    const subscriptionId = invoice.subscription as string;
+    const subscriptionId = this.getInvoiceSubscriptionId(invoice);
     if (!subscriptionId) return;
 
     const tenant = await this.tenantRepository.findOne({

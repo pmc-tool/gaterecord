@@ -188,33 +188,20 @@ export class OnboardingService {
       }
     }
 
-    // Find subscription plan (case-insensitive)
+    // A paid plan is NEVER granted at onboarding — a building cannot sit on a plan
+    // it has not paid for, and there are no free trials. EVERY new building is
+    // created on the system DEFAULT (Free) plan, ACTIVE, with a 60-day window.
+    // If the user picked a paid plan, the client redirects them to Stripe checkout
+    // afterwards to pay for and activate it. `dto.planName` is therefore only a
+    // client-side hint for that redirect; it never selects the plan here.
     const plans = await this.subscriptionPlanRepository.find({
       where: { isActive: true },
     });
-    const plan = plans.find(
-      (p) => p.name.toLowerCase() === dto.planName.toLowerCase(),
-    );
-
-    let selectedPlan: SubscriptionPlan;
-    if (!plan) {
-      // No premium plan chosen -> auto-subscribe to the system DEFAULT plan
-      // (resolved by is_default, never by name/id — the numbers live in the DB).
-      // It gets a 60-day (default_validity_days) window; after that the
-      // default-plan expiry cron suspends the tenant and the SubscriptionGuard
-      // makes it read-only.
-      const defaultPlan =
-        plans.find((p) => p.isDefault) ?? plans[0];
-      if (!defaultPlan) {
-        throw new BadRequestException('No subscription plans available');
-      }
-      this.logger.warn(
-        `Plan "${dto.planName}" not found, using default: ${defaultPlan.name}`,
-      );
-      selectedPlan = defaultPlan;
-    } else {
-      selectedPlan = plan;
+    const defaultPlan = plans.find((p) => p.isDefault) ?? plans[0];
+    if (!defaultPlan) {
+      throw new BadRequestException('No subscription plans available');
     }
+    const selectedPlan: SubscriptionPlan = defaultPlan;
 
     // Generate slug from building name
     const slug = dto.buildingName
@@ -222,28 +209,18 @@ export class OnboardingService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
 
-    // Expiry window. The default plan grants default_validity_days (the 60-day
-    // free ride); a premium plan uses its trial days. Both feed the same
-    // subscriptionExpiresAt the expiry cron watches.
-    const validityDays = selectedPlan.isDefault
-      ? selectedPlan.defaultValidityDays || 60
-      : selectedPlan.trialDays || 14;
+    // The Free (default) plan grants default_validity_days (the 60-day free ride);
+    // after that the expiry cron suspends the tenant and the SubscriptionGuard
+    // makes it read-only until they subscribe.
+    const validityDays = selectedPlan.defaultValidityDays || 60;
     const trialExpiresAt = new Date(
       Date.now() + validityDays * 24 * 60 * 60 * 1000,
     );
 
-    // Determine initial tenant status. There is NO free-trial concept: a new
-    // building goes straight onto the Free (default) plan as ACTIVE — it simply
-    // has small limits and a 60-day window (after which the expiry cron
-    // suspends it). Only an explicitly chosen PAID plan that requires payment
-    // waits in PENDING_PAYMENT for Stripe checkout.
-    let tenantStatus = TenantStatus.ACTIVE;
-    if (!selectedPlan.isDefault && dto.requiresPayment) {
-      tenantStatus = TenantStatus.PENDING_PAYMENT;
-    }
-    const subscriptionStatus = selectedPlan.isDefault
-      ? SubscriptionStatus.ACTIVE
-      : SubscriptionStatus.TRIALING;
+    // Free plan → ACTIVE immediately. No PENDING_PAYMENT / TRIALING here: payment
+    // for a paid plan happens later, through checkout.
+    const tenantStatus = TenantStatus.ACTIVE;
+    const subscriptionStatus = SubscriptionStatus.ACTIVE;
 
     const now = new Date();
 

@@ -48,10 +48,12 @@ export class RfidCardsController {
   async findAll(
     @CurrentUser() user: User,
     @Query('userId') userId?: string,
+    @Query('vehicleId') vehicleId?: string,
     @Query('tenantId') tenantId?: string,
   ) {
     const where: Record<string, string> = {};
     if (userId) where.userId = userId;
+    if (vehicleId) where.vehicleId = vehicleId;
 
     if (user.role === UserRole.SUPER_ADMIN) {
       // Super admin may scope to a tenant, or see all when none is given.
@@ -64,7 +66,7 @@ export class RfidCardsController {
 
     return this.rfidCardRepository.find({
       where,
-      relations: ['user'],
+      relations: ['user', 'vehicle'],
       order: { createdAt: 'DESC' },
     });
   }
