@@ -626,7 +626,7 @@ export class EmailService {
     priority: string,
     link?: string,
   ): Promise<boolean> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const actionUrl = link || `${frontendUrl}/notifications`;
 
     // Priority-based colors

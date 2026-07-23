@@ -375,7 +375,7 @@ export class AuthService {
     const tokens = await this.generateTokens(savedUser, userAgent, ipAddress);
 
     // Send welcome email with trial info (don't wait for it, don't fail signup if email fails)
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     this.emailService
       .sendWelcomeEmail(
         savedUser.email,
