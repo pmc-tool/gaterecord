@@ -205,6 +205,26 @@ export class BillingController {
   }
 
   /**
+   * Activate a subscription synchronously after the frontend confirms the card.
+   * POST /api/v1/billing/subscription/activate
+   *
+   * The in-app Elements form calls stripe.confirmCardSetup() client-side, then
+   * immediately calls this endpoint with the SetupIntent ID. The backend verifies
+   * the SetupIntent succeeded in Stripe, creates the subscription and persists it
+   * to the DB — all before the frontend navigates to ?success=true, so the
+   * subscription is visible as soon as the settings page loads.
+   */
+  @Post('subscription/activate')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  async activateSubscription(
+    @Req() req: any,
+    @Body() body: { setupIntentId: string },
+  ) {
+    const tenantId = req.user.tenantId;
+    return this.stripeService.activateSubscriptionFromSetupIntent(tenantId, body.setupIntentId);
+  }
+
+  /**
    * Create billing portal session
    * POST /api/v1/billing/portal
    */

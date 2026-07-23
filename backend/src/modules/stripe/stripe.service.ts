@@ -8,6 +8,7 @@ import {
   Logger,
   OnModuleInit,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
@@ -2226,6 +2227,44 @@ export class StripeService implements OnModuleInit {
     this.logger.log(
       `In-app subscription ${subscription.id} created for tenant ${tenant.name} from SetupIntent ${setupIntent.id}`,
     );
+  }
+
+  /**
+   * Synchronously activate a subscription from a confirmed SetupIntent.
+   *
+   * Called by POST /billing/subscription/activate immediately after the frontend
+   * calls stripe.confirmCardSetup() — this ensures the DB is updated before the
+   * page navigates to ?success=true, removing the dependency on webhook timing.
+   * The setup_intent.succeeded webhook is still handled (idempotent: if the
+   * subscription already exists it skips creation).
+   */
+  async activateSubscriptionFromSetupIntent(
+    tenantId: string,
+    setupIntentId: string,
+  ): Promise<{ subscriptionId: string; status: string }> {
+    this.ensureStripe();
+
+    const setupIntent = await this.stripe.setupIntents.retrieve(setupIntentId);
+
+    if (setupIntent.metadata?.source !== INAPP_SUBSCRIPTION_SOURCE) {
+      throw new BadRequestException('Invalid setup intent.');
+    }
+    if (setupIntent.metadata?.tenantId !== tenantId) {
+      throw new ForbiddenException('Setup intent does not belong to this tenant.');
+    }
+    if (setupIntent.status !== 'succeeded') {
+      throw new BadRequestException(`Setup intent is not yet confirmed (status: ${setupIntent.status}).`);
+    }
+
+    // Delegate to the same logic used by the webhook — fully idempotent.
+    await this.handleSetupIntentSucceeded(setupIntent);
+
+    // Return the now-persisted subscription id/status so the frontend can confirm.
+    const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
+    return {
+      subscriptionId: tenant?.stripeSubscriptionId || '',
+      status: tenant?.subscriptionStatus || 'unknown',
+    };
   }
 
   /**
