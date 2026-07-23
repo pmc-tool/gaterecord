@@ -32,7 +32,7 @@ import PasswordRequirements, { validatePassword as checkPassword } from '../../c
 
 const { Title, Text, Paragraph } = Typography;
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
+const API_URL = import.meta.env.VITE_API_URL || 'https://dev-api.gaterecord.com/api/v1';
 
 interface Plan {
   id: string;

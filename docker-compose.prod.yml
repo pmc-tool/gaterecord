@@ -9,10 +9,45 @@ services:
       NODE_ENV: production
       PORT: 3001
       DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      FRONTEND_URL: ${FRONTEND_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TYPEORM_LOGGING: ${TYPEORM_LOGGING:-false}
+      # --- Keycloak SSO (REQUIRED — app crashes at boot without DOMAIN/REALM) ---
+      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      # --- Account-identity provisioning (SERVICE_KEY must match the account service) ---
+      ACCOUNT_API_URL: ${ACCOUNT_API_URL}
+      ACCOUNT_SERVICE_KEY: ${ACCOUNT_SERVICE_KEY}
+      # --- Stripe billing / webhooks ---
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      # --- Email (SMTP) ---
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
+      # --- File storage (S3) ---
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      AWS_BUCKET: ${AWS_BUCKET}
+      AWS_HOST_URL: ${AWS_HOST_URL}
+      # --- Device/hardware comms (MQTT) — uncomment once set in Jenkins ---
+      # MQTT_BROKER_URL: ${MQTT_BROKER_URL}
+      # MQTT_USERNAME: ${MQTT_USERNAME}
+      # MQTT_PASSWORD: ${MQTT_PASSWORD}
     ports:
       - '3001:3001'
     depends_on:
@@ -21,7 +56,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3001/api/v1/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      test: ['CMD', 'node', '-e', "require('http').get('https://dev-api.gaterecord.com/api/v1/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
       timeout: 10s
       retries: 3

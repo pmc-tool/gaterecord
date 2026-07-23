@@ -196,8 +196,8 @@ npm run seed
 ### 6. Access Application
 
 - **Frontend**: http://localhost:3000
-- **API**: http://localhost:3001/api/v1
-- **Swagger Docs**: http://localhost:3001/api/docs
+- **API**: https://dev-api.gaterecord.com/api/v1
+- **Swagger Docs**: https://dev-api.gaterecord.com/api/docs
 
 ### Default Credentials
 
@@ -247,8 +247,8 @@ SMTP_PORT=1025
 ### Frontend Environment Variables
 
 ```env
-VITE_API_URL=http://localhost:3001/api/v1
-VITE_WS_URL=http://localhost:3001
+VITE_API_URL=https://dev-api.gaterecord.com/api/v1
+VITE_WS_URL=https://dev-api.gaterecord.com
 ```
 
 ### Firmware Configuration

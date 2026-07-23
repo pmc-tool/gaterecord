@@ -23,7 +23,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-API_URL="http://localhost:3001/api/v1"
+API_URL="https://dev-api.gaterecord.com/api/v1"
 DELAY=3  # Seconds between tests
 
 # Helper functions
