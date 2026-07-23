@@ -441,7 +441,7 @@ export class StripeService implements OnModuleInit {
     }
 
     const customerId = await this.ensureStripeCustomer(tenant);
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
 
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
@@ -636,7 +636,7 @@ export class StripeService implements OnModuleInit {
       throw new BadRequestException('Plan not synced to Stripe. Please contact support.');
     }
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
 
     // Hash password before storing in metadata (we'll use this after payment succeeds)
     const passwordHash = await bcrypt.hash(dto.password, 10);
@@ -708,7 +708,7 @@ export class StripeService implements OnModuleInit {
       throw new BadRequestException('No Stripe customer associated with this tenant');
     }
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
@@ -1980,7 +1980,7 @@ export class StripeService implements OnModuleInit {
     );
 
     // Send welcome email with subscription info (don't fail signup if email fails)
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     this.emailService
       .sendWelcomeEmail(
         savedUser.email,
@@ -2882,7 +2882,7 @@ export class StripeService implements OnModuleInit {
           );
 
           // Send welcome email with subscription info
-          const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://gaterecord.com');
+          const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
           this.emailService
             .sendWelcomeEmail(
               savedUser.email,

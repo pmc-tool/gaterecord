@@ -46,10 +46,25 @@ async function bootstrap() {
     'https://www.gaterecord.com',
     'https://dev.gaterecord.com',
     'https://www.dev.gaterecord.com',
+    'https://yaad.global',
+    'https://admin.yaad.global',
+
   ];
 
+  // Extra allowed origins from env — comma-separated and whitespace-tolerant.
+  // Supports CORS_ORIGIN and CORS_ORIGINS, e.g.
+  //   CORS_ORIGIN=https://dev.gaterecord.com, https://yaad.global, https://admin.yaad.global
+  const envOrigins = [process.env.CORS_ORIGIN, process.env.CORS_ORIGINS]
+    .filter((v): v is string => Boolean(v))
+    .flatMap((v) => v.split(','))
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+
+  // Merge (dedup) so the built-in dev/prod origins keep working and the env ones are added.
+  const allowedOrigins = Array.from(new Set([...defaultOrigins, ...envOrigins]));
+
   app.enableCors({
-    origin: defaultOrigins,
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],

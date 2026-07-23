@@ -706,7 +706,7 @@ export class SimulatorService {
     pass: VisitorPass,
     resident: User,
   ): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const reportToken = this.securityAlertService.generateReportToken(accessEvent.id);
     const reportUrl = `${frontendUrl}/report-unauthorized?eventId=${accessEvent.id}&token=${reportToken}`;
 

@@ -260,7 +260,7 @@ export class TenantsService {
     await this.userRepository.save(adminUser);
 
     // Send credentials email to building admin
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const loginUrl = `${frontendUrl}/login`;
 
     this.emailService.sendNewUserCredentialsEmail(

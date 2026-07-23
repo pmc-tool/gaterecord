@@ -449,7 +449,7 @@ export class StripeScheduler {
   // ==================== Email Templates ====================
 
   private async sendDunningEmail(tenant: Tenant, email: string, reason: string): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const billingUrl = `${frontendUrl}/billing/settings`;
 
     const html = `
@@ -505,7 +505,7 @@ export class StripeScheduler {
     email: string,
     daysLeft: number,
   ): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const billingUrl = `${frontendUrl}/billing/settings`;
 
     const urgency = daysLeft <= 3 ? 'urgent' : 'reminder';
@@ -568,7 +568,7 @@ export class StripeScheduler {
   }
 
   private async sendSuspensionEmail(tenant: Tenant, email: string): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const billingUrl = `${frontendUrl}/billing/settings`;
 
     const html = `
@@ -625,7 +625,7 @@ export class StripeScheduler {
     email: string,
     daysUntilResume: number,
   ): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const billingUrl = `${frontendUrl}/billing/settings`;
 
     const html = `
@@ -723,7 +723,7 @@ export class StripeScheduler {
     reason: string,
   ): Promise<void> {
     const frontendUrl =
-      this.configService.get<string>('FRONTEND_URL') || 'https://app.gaterecord.com';
+      this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
     const billingUrl = `${frontendUrl}/billing`;
     const amountFormatted = `$${(amount / 100).toFixed(2)}`;
 
@@ -798,7 +798,7 @@ export class StripeScheduler {
    */
   async sendRefundFailedEmail(tenant: Tenant, email: string, failureReason: string): Promise<void> {
     const frontendUrl =
-      this.configService.get<string>('FRONTEND_URL') || 'https://app.gaterecord.com';
+      this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
 
     const html = `
       <!DOCTYPE html>
