@@ -14,7 +14,7 @@ import { config } from 'dotenv';
 
 config();
 
-const API_URL = process.env.API_URL || 'http://localhost:3001/api/v1';
+const API_URL = process.env.API_URL || 'https://dev-api.gaterecord.com/api/v1';
 const TEST_DELAY = 2000; // 2 seconds between tests
 
 // Test credentials (you'll need to get these from login)

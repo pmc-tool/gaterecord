@@ -8,7 +8,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:3001",
+      "value": "https://dev-api.gaterecord.com",
       "type": "string"
     },
     {

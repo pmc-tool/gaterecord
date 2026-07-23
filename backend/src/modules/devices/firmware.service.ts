@@ -159,7 +159,7 @@ export class FirmwareService {
     this.logger.log(`Firmware file saved to ${firmwarePath}`);
 
     // Generate download URL
-    const baseUrl = this.configService.get<string>('API_BASE_URL', 'http://localhost:3001');
+    const baseUrl = this.configService.get<string>('API_BASE_URL', 'https://dev-api.gaterecord.com');
     const firmwareUrl = `${baseUrl}/api/v1/firmware/download/${dto.version}`;
 
     const firmware = await this.firmwareRepo.save({
