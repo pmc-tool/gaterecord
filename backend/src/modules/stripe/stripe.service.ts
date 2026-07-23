@@ -29,6 +29,8 @@ import {
   SubscriptionStatus,
 } from '@database/entities/tenant.entity';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
+import { Gate } from '@database/entities/gate.entity';
+import { Vehicle } from '@database/entities/vehicle.entity';
 import {
   SubscriptionAuditLog,
   AuditEventType,
@@ -51,6 +53,14 @@ import {
   RefundHistory,
   RefundReason,
 } from './dto';
+
+/**
+ * Tags SetupIntents minted for the in-app Stripe Elements checkout
+ * (createSubscriptionIntent). The setup_intent.succeeded webhook acts ONLY on
+ * SetupIntents carrying this source, so card saves from any other flow (e.g. the
+ * hosted billing portal) are left untouched.
+ */
+const INAPP_SUBSCRIPTION_SOURCE = 'inapp_subscription_intent';
 
 // Financial Overview interfaces
 export interface FinancialOverview {
@@ -82,6 +92,65 @@ export interface RevenueByPeriod {
   refunds: number;
   net: number;
   transactions: number;
+}
+
+// Phase 6 — payment visibility response shapes (shared with the frontend agents).
+
+/** One row of a tenant's Stripe invoice history (building-admin billing page). */
+export interface TenantInvoice {
+  id: string;
+  number: string | null; // Stripe human invoice number, e.g. "A1B2C3-0001"
+  status: string | null; // draft | open | paid | uncollectible | void
+  amountDue: number; // major units (USD dollars), converted from Stripe cents
+  amountPaid: number;
+  amountRemaining: number;
+  currency: string;
+  created: Date;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  dueDate: Date | null;
+  hostedInvoiceUrl: string | null; // Stripe-hosted invoice page
+  invoicePdf: string | null; // direct PDF download
+  description: string | null;
+}
+
+/** A recent payment row in the super-admin revenue snapshot. */
+export interface RecentPaymentSummary {
+  id: string;
+  tenantId: string;
+  tenantName: string | null;
+  planName: string | null;
+  amount: number; // major units (USD dollars) as stored in the payments table
+  currency: string;
+  status: PaymentStatus;
+  transactionType: TransactionType;
+  paymentType: PaymentType;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  createdAt: Date;
+}
+
+/** Platform-wide billing snapshot for the super-admin revenue endpoint. */
+export interface RevenueSnapshot {
+  mrr: number;
+  arr: number;
+  totalRevenue: number;
+  totalRefunds: number;
+  netRevenue: number;
+  revenueGrowth: number; // % vs last month
+  churnRate: number; // %
+  averageRevenuePerUser: number;
+  activeSubscriptions: number;
+  currency: string;
+  counts: {
+    total: number;
+    active: number;
+    trial: number;
+    suspended: number;
+    pendingPayment: number;
+    pastDue: number;
+  };
+  recentPayments: RecentPaymentSummary[];
 }
 
 @Injectable()
@@ -326,6 +395,31 @@ export class StripeService implements OnModuleInit {
       throw new NotFoundException('Tenant not found');
     }
 
+    // Guard: a tenant that already holds a LIVE Stripe subscription must not open a
+    // second Checkout Session — that would create a duplicate subscription in Stripe
+    // (double-billing) and orphan the first one. Switching plans is a plan CHANGE
+    // (POST /billing/plans/change) which prorates and runs the downgrade fit-check.
+    // Trial-without-subscription, cancelled and never-subscribed tenants have no live
+    // stripeSubscriptionId and fall through to normal checkout so they can (re)subscribe.
+    const liveSubscriptionStatuses = [
+      SubscriptionStatus.ACTIVE,
+      SubscriptionStatus.TRIALING,
+      SubscriptionStatus.PAST_DUE,
+      SubscriptionStatus.PAUSED,
+    ];
+    if (
+      tenant.stripeSubscriptionId &&
+      liveSubscriptionStatuses.includes(tenant.subscriptionStatus)
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'SUBSCRIPTION_ALREADY_ACTIVE',
+        message:
+          'You already have an active subscription. Use Change Plan to switch — your price is prorated automatically.',
+      });
+    }
+
     let plan = await this.planRepository.findOne({ where: { id: dto.planId } });
     if (!plan) {
       throw new NotFoundException('Plan not found');
@@ -349,9 +443,6 @@ export class StripeService implements OnModuleInit {
     const customerId = await this.ensureStripeCustomer(tenant);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
 
-    // Check if user is already on trial - don't give them another trial period
-    const isAlreadyOnTrial = tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
-    
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
@@ -363,16 +454,17 @@ export class StripeService implements OnModuleInit {
         },
       ],
       subscription_data: {
-        // Only add trial days for NEW users, not for users converting from trial to paid
-        trial_period_days: (!isAlreadyOnTrial && plan.trialDays > 0) ? plan.trialDays : undefined,
+        // No-trial system: paid plans are charged immediately. New users get the
+        // free plan, not a trial — this matches the in-app checkout and the
+        // pricing/summary UI, so no path silently grants a trial period.
         metadata: {
           tenantId: tenant.id,
           planId: plan.id,
           billingCycle: dto.billingCycle,
         },
       },
-      success_url: dto.successUrl || `${frontendUrl}/billing/settings?success=true`,
-      cancel_url: dto.cancelUrl || `${frontendUrl}/billing/settings?canceled=true`,
+      success_url: dto.successUrl || `${frontendUrl}/gate-management/billing/settings?success=true`,
+      cancel_url: dto.cancelUrl || `${frontendUrl}/gate-management/billing/settings?canceled=true`,
       metadata: {
         tenantId: tenant.id,
         planId: plan.id,
@@ -384,6 +476,120 @@ export class StripeService implements OnModuleInit {
       sessionId: session.id,
       url: session.url!,
     };
+  }
+
+  /**
+   * In-app Stripe Elements checkout: mint a SetupIntent so a tenant can enter
+   * card details WITHOUT leaving the app, then confirm it with
+   * stripe.confirmSetup() on the page.
+   *
+   * DELIBERATELY creates nothing else — no subscription, no tenant mutation. The
+   * subscription is built later, ONLY once the card is actually confirmed, by the
+   * setup_intent.succeeded webhook (handleSetupIntentSucceeded). This is the
+   * whole safety property: abandoning the card step has zero side effects (an
+   * unused SetupIntent simply expires), and — critically — a Free-plan tenant who
+   * starts then abandons an upgrade can never be left pointing at an `incomplete`
+   * subscription that a later `incomplete_expired` webhook would suspend. Money
+   * and tenant state change only on a real, Stripe-verified event, exactly like
+   * hosted checkout.
+   *
+   * The same guards as createCheckoutSession apply: a tenant with a live Stripe
+   * subscription must switch via Change Plan (proration), never mint a second one.
+   */
+  async createSubscriptionIntent(
+    tenantId: string,
+    dto: CreateCheckoutSessionDto,
+  ): Promise<{ clientSecret: string }> {
+    this.ensureStripe();
+
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: tenantId },
+      relations: ['subscriptionPlan'],
+    });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    // Same live-subscription guard as createCheckoutSession — switching an active
+    // subscription is a plan CHANGE (prorated), not a fresh charge.
+    const liveSubscriptionStatuses = [
+      SubscriptionStatus.ACTIVE,
+      SubscriptionStatus.TRIALING,
+      SubscriptionStatus.PAST_DUE,
+      SubscriptionStatus.PAUSED,
+    ];
+    if (
+      tenant.stripeSubscriptionId &&
+      liveSubscriptionStatuses.includes(tenant.subscriptionStatus)
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'SUBSCRIPTION_ALREADY_ACTIVE',
+        message:
+          'You already have an active subscription. Use Change Plan to switch — your price is prorated automatically.',
+      });
+    }
+
+    let plan = await this.planRepository.findOne({ where: { id: dto.planId } });
+    if (!plan) {
+      throw new NotFoundException('Plan not found');
+    }
+
+    // The Free/default plan is auto-assigned and has no price — nothing to charge.
+    if (plan.isDefault) {
+      throw new BadRequestException('The default plan does not require payment.');
+    }
+
+    // Auto-sync plan to Stripe if not already synced (mirrors createCheckoutSession)
+    if (!plan.stripePriceIdMonthly || !plan.stripePriceIdYearly) {
+      this.logger.log(`Auto-syncing plan ${plan.name} to Stripe...`);
+      plan = await this.syncPlanToStripe(plan.id);
+    }
+
+    const priceId =
+      dto.billingCycle === BillingCycle.MONTHLY
+        ? plan.stripePriceIdMonthly
+        : plan.stripePriceIdYearly;
+    if (!priceId) {
+      throw new BadRequestException(
+        'Plan not synced to Stripe. Please contact support.',
+      );
+    }
+
+    const customerId = await this.ensureStripeCustomer(tenant);
+
+    // Card-only SetupIntent. This MUST match how the frontend Elements is mounted
+    // (paymentMethodTypes: ['card']) or stripe.confirmSetup() rejects with a
+    // payment_method_types mismatch. Card-only keeps checkout to a single method
+    // and collects no extra data. usage:'off_session' so the saved card can back
+    // recurring invoices. Everything the webhook needs to build the exact
+    // subscription the user was quoted — including the resolved priceId — travels
+    // in metadata, so the webhook never re-resolves and cannot drift.
+    const setupIntent = await this.stripe.setupIntents.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      usage: 'off_session',
+      metadata: {
+        source: INAPP_SUBSCRIPTION_SOURCE,
+        tenantId: tenant.id,
+        planId: plan.id,
+        priceId,
+        billingCycle: dto.billingCycle,
+      },
+    });
+
+    if (!setupIntent.client_secret) {
+      throw new BadRequestException(
+        'Could not initialize payment. Please try again.',
+      );
+    }
+
+    this.logger.log(
+      `Created in-app SetupIntent ${setupIntent.id} for tenant ${tenant.name} (plan ${plan.name}, ${dto.billingCycle})`,
+    );
+
+    return { clientSecret: setupIntent.client_secret };
   }
 
   /**
@@ -462,8 +668,9 @@ export class StripeService implements OnModuleInit {
         },
       },
       success_url:
-        dto.successUrl || `${frontendUrl}/signup/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: dto.cancelUrl || `${frontendUrl}/signup?step=3`,
+        dto.successUrl ||
+        `${frontendUrl}/gate-management/billing/settings?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: dto.cancelUrl || `${frontendUrl}/gate-management/billing?canceled=true`,
       metadata: {
         type: 'signup', // Important: identifies this as a signup checkout
         firstName: dto.firstName,
@@ -505,7 +712,7 @@ export class StripeService implements OnModuleInit {
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
-      return_url: returnUrl || `${frontendUrl}/billing/settings`,
+      return_url: returnUrl || `${frontendUrl}/gate-management/billing/settings`,
     });
 
     return { url: session.url };
@@ -584,6 +791,11 @@ export class StripeService implements OnModuleInit {
     if (immediately) {
       await this.stripe.subscriptions.cancel(tenant.stripeSubscriptionId);
       tenant.subscriptionStatus = SubscriptionStatus.CANCELED;
+      // Mirror handleSubscriptionDeleted so "Cancel immediately — lose access now"
+      // holds even before the customer.subscription.deleted webhook lands (local
+      // dev has no webhook). Idempotent: the webhook sets the same state. Access is
+      // restored to ACTIVE on re-subscribe (handleCheckoutCompleted).
+      tenant.status = TenantStatus.SUSPENDED;
       tenant.stripeSubscriptionId = null as any;
     } else {
       await this.stripe.subscriptions.update(tenant.stripeSubscriptionId, {
@@ -858,6 +1070,8 @@ export class StripeService implements OnModuleInit {
       features: string[];
     } | null;
     isOnTrial: boolean;
+    /** True once the tenant has ever paid — the free tier is then permanently used. */
+    hasUsedPaidPlan: boolean;
     availablePlans: {
       id: string;
       name: string;
@@ -892,7 +1106,14 @@ export class StripeService implements OnModuleInit {
       order: { monthlyPrice: 'ASC' },
     });
 
-    const currentPlan = tenant.subscriptionPlan;
+    // A tenant with no LIVE Stripe subscription that is not on the free-ride trial
+    // (e.g. CANCELED / lapsed) has no "current" plan any more. Report it as null so
+    // every plan is offered for a clean RE-SUBSCRIBE — otherwise the pricing page
+    // shows their old, cancelled plan as "Your plan" and blocks re-selecting it.
+    const hasNoLiveSubscription =
+      !tenant.stripeSubscriptionId &&
+      tenant.subscriptionStatus !== SubscriptionStatus.TRIALING;
+    const currentPlan = hasNoLiveSubscription ? null : tenant.subscriptionPlan;
     const currentMonthly = isOnTrial ? 0 : Number(currentPlan?.monthlyPrice) || 0;
 
     // Convert features object to array for current plan
@@ -918,6 +1139,7 @@ export class StripeService implements OnModuleInit {
           }
         : null,
       isOnTrial,
+      hasUsedPaidPlan: tenant.hasUsedPaidPlan,
       availablePlans: allPlans
         // For trial users, include ALL plans (so they can subscribe to any plan including their current trial plan)
         // For non-trial users, exclude the current plan
@@ -1093,6 +1315,96 @@ export class StripeService implements OnModuleInit {
    * - UPGRADES: Immediate change with proration (pay prorated difference now)
    * - DOWNGRADES: Scheduled for period end (keep current plan, new price on renewal)
    */
+  /**
+   * Phase 4 — Downgrade fit check.
+   *
+   * Rejects a plan change whose target limits cannot hold the tenant's current
+   * usage. Counts live gates / users / vehicles the same way the create-time
+   * limit checks do (all rows for the tenant, soft-deleted excluded) and, if any
+   * resource exceeds the target plan, throws a 400 whose body carries a
+   * human-readable message plus structured per-resource deltas for the UI.
+   *
+   * Gate and Vehicle repositories are not injected into StripeModule; they are
+   * reached through the shared EntityManager (both entities are registered by
+   * their own modules), so no module wiring changes are required.
+   */
+  private async assertUsageFitsPlan(tenantId: string, targetPlan: SubscriptionPlan): Promise<void> {
+    const manager = this.tenantRepository.manager;
+    const [gateCount, userCount, vehicleCount] = await Promise.all([
+      manager.count(Gate, { where: { tenantId } }),
+      this.userRepository.count({ where: { tenantId } }),
+      manager.count(Vehicle, { where: { tenantId } }),
+    ]);
+
+    const violations: Array<{
+      resource: 'gates' | 'users' | 'vehicles';
+      label: string;
+      limit: number;
+      used: number;
+      removeCount: number;
+    }> = [];
+
+    if (gateCount > targetPlan.maxGates) {
+      violations.push({
+        resource: 'gates',
+        label: 'gate',
+        limit: targetPlan.maxGates,
+        used: gateCount,
+        removeCount: gateCount - targetPlan.maxGates,
+      });
+    }
+    if (userCount > targetPlan.maxUsers) {
+      violations.push({
+        resource: 'users',
+        label: 'user',
+        limit: targetPlan.maxUsers,
+        used: userCount,
+        removeCount: userCount - targetPlan.maxUsers,
+      });
+    }
+    if (vehicleCount > targetPlan.maxVehicles) {
+      violations.push({
+        resource: 'vehicles',
+        label: 'vehicle',
+        limit: targetPlan.maxVehicles,
+        used: vehicleCount,
+        removeCount: vehicleCount - targetPlan.maxVehicles,
+      });
+    }
+
+    if (violations.length === 0) {
+      return; // usage fits — upgrade / same-size / harmless downgrade
+    }
+
+    const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+    const joinParts = (parts: string[]) =>
+      parts.length <= 1
+        ? parts.join('')
+        : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+
+    const allowsPart = joinParts(violations.map((v) => plural(v.limit, v.label)));
+    const havePart = joinParts(violations.map((v) => plural(v.used, v.label)));
+    const removePart = joinParts(violations.map((v) => plural(v.removeCount, v.label)));
+
+    const message =
+      `${targetPlan.name} allows ${allowsPart}; you have ${havePart}. ` +
+      `Remove ${removePart} to downgrade.`;
+
+    throw new BadRequestException({
+      statusCode: 400,
+      error: 'Bad Request',
+      code: 'DOWNGRADE_BLOCKED_USAGE_EXCEEDS_LIMITS',
+      message,
+      targetPlan: { id: targetPlan.id, name: targetPlan.name },
+      violations: violations.map((v) => ({
+        resource: v.resource,
+        limit: v.limit,
+        used: v.used,
+        removeCount: v.removeCount,
+      })),
+    });
+  }
+
   async changePlan(
     tenantId: string,
     newPlanId: string,
@@ -1128,9 +1440,29 @@ export class StripeService implements OnModuleInit {
       throw new NotFoundException('Plan not found');
     }
 
+    // The free/default plan is a one-time starter grant. Once a tenant has a paid
+    // subscription it can never switch back to free — cancelling suspends the
+    // tenant (read-only) instead. Blocks the path even if a client somehow offers it.
+    if (newPlan.isDefault) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'FREE_PLAN_ALREADY_USED',
+        message:
+          'The free plan has already been used and cannot be selected again. To stop paying, cancel your subscription instead.',
+      });
+    }
+
     if (newPlanId === tenant.subscriptionPlanId) {
       throw new BadRequestException('Already subscribed to this plan');
     }
+
+    // Phase 4 — Voluntary downgrade fit check. Block the switch when the TARGET
+    // plan's limits are smaller than the tenant's CURRENT usage, listing the exact
+    // per-resource deltas the admin must trim first. Upgrades and same-size changes
+    // pass untouched (their limits are >= current usage). Runs before any Stripe
+    // mutation, and NEVER auto-disables resources — trimming is the admin's choice.
+    await this.assertUsageFitsPlan(tenantId, newPlan);
 
     // Ensure plan is synced to Stripe
     let syncedPlan = newPlan;
@@ -1318,7 +1650,9 @@ export class StripeService implements OnModuleInit {
       success: true,
       message: isUpgrade
         ? `Successfully upgraded to ${newPlan.name}`
-        : `Your plan will change to ${newPlan.name} on ${currentPeriodEnd.toLocaleDateString()}`,
+        : isScheduled
+          ? `Your plan will change to ${newPlan.name} on ${currentPeriodEnd.toLocaleDateString()}`
+          : `You've switched to the ${newPlan.name} plan. A credit for the unused time on your previous plan will be applied to your next invoice.`,
       newPlan: {
         id: newPlan.id,
         name: newPlan.name,
@@ -1344,6 +1678,52 @@ export class StripeService implements OnModuleInit {
     }
 
     return this.stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+  }
+
+  // ==================== Webhook Idempotency (Phase 6) ====================
+
+  /**
+   * Has this Stripe webhook event id already been handled?
+   *
+   * Backed by the `processed_stripe_events` ledger (created by migration
+   * 1775737100000-AddProcessedStripeEvents). Reached via parameterised raw SQL
+   * through the EntityManager so no StripeModule wiring is needed.
+   *
+   * If the table is not present yet (migration not run), we degrade to
+   * "not processed" so webhook handling continues exactly as it did before
+   * idempotency was added — this can never make behaviour worse than today.
+   */
+  async isStripeEventProcessed(eventId: string): Promise<boolean> {
+    if (!eventId) return false;
+    try {
+      const rows = await this.paymentRepository.manager.query(
+        `SELECT 1 FROM processed_stripe_events WHERE event_id = $1 LIMIT 1`,
+        [eventId],
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    } catch (err: any) {
+      this.logger.warn(`Idempotency lookup skipped for event ${eventId}: ${err?.message ?? err}`);
+      return false;
+    }
+  }
+
+  /**
+   * Record that a Stripe webhook event id has been handled. `ON CONFLICT DO
+   * NOTHING` makes concurrent/duplicate deliveries safe. Failures are swallowed
+   * (worst case: a later retry re-processes, i.e. today's behaviour).
+   */
+  async markStripeEventProcessed(eventId: string, type: string): Promise<void> {
+    if (!eventId) return;
+    try {
+      await this.paymentRepository.manager.query(
+        `INSERT INTO processed_stripe_events (id, event_id, type, processed_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (event_id) DO NOTHING`,
+        [uuidv4(), eventId, type ?? null],
+      );
+    } catch (err: any) {
+      this.logger.warn(`Failed to record processed event ${eventId}: ${err?.message ?? err}`);
+    }
   }
 
   /**
@@ -1387,6 +1767,8 @@ export class StripeService implements OnModuleInit {
     tenant.status = TenantStatus.ACTIVE;
     tenant.subscriptionStartedAt = new Date();
     tenant.cancelAtPeriodEnd = false;
+    // Paid checkout completed — the free tier is now permanently used (one-way).
+    tenant.hasUsedPaidPlan = true;
 
     // Fetch subscription to get period end dates
     const subscriptionId = this.extractSubscriptionId(session.subscription);
@@ -1705,6 +2087,126 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
+   * Handle setup_intent.succeeded — the in-app Elements card was saved.
+   *
+   * Acts ONLY on SetupIntents this service minted (metadata.source), so card
+   * saves from any other flow are ignored. Creates the subscription against the
+   * just-saved card; from there the ordinary customer.subscription.created /
+   * invoice.paid webhooks activate the tenant, so an in-app subscription travels
+   * the EXACT same activation path as a hosted one — a single source of truth for
+   * going ACTIVE, never an optimistic flip here.
+   *
+   * Idempotent twice over: the processed_stripe_events ledger drops duplicate
+   * event deliveries, and subscriptions.create carries an idempotency key derived
+   * from the SetupIntent id, so even a replay of THIS event cannot create a
+   * second subscription.
+   */
+  async handleSetupIntentSucceeded(
+    setupIntent: Stripe.SetupIntent,
+  ): Promise<void> {
+    if (setupIntent.metadata?.source !== INAPP_SUBSCRIPTION_SOURCE) {
+      return; // not one of ours — leave portal/other card saves untouched
+    }
+
+    const tenantId = setupIntent.metadata?.tenantId;
+    const planId = setupIntent.metadata?.planId;
+    const priceId = setupIntent.metadata?.priceId;
+    const billingCycle =
+      (setupIntent.metadata?.billingCycle as BillingCycle) ||
+      BillingCycle.MONTHLY;
+
+    if (!tenantId || !planId || !priceId) {
+      this.logger.warn(
+        `SetupIntent ${setupIntent.id} missing metadata (tenant/plan/price); skipping`,
+      );
+      return;
+    }
+
+    const tenant = await this.tenantRepository.findOne({
+      where: { id: tenantId },
+    });
+    if (!tenant) {
+      this.logger.warn(
+        `SetupIntent ${setupIntent.id}: tenant ${tenantId} not found; skipping`,
+      );
+      return;
+    }
+
+    // Never double-subscribe: if a live subscription already exists (another path
+    // completed first, or a duplicate event), do nothing.
+    const liveSubscriptionStatuses = [
+      SubscriptionStatus.ACTIVE,
+      SubscriptionStatus.TRIALING,
+      SubscriptionStatus.PAST_DUE,
+      SubscriptionStatus.PAUSED,
+    ];
+    if (
+      tenant.stripeSubscriptionId &&
+      liveSubscriptionStatuses.includes(tenant.subscriptionStatus)
+    ) {
+      this.logger.log(
+        `SetupIntent ${setupIntent.id}: tenant ${tenant.name} already has a live subscription; skipping`,
+      );
+      return;
+    }
+
+    const paymentMethodId =
+      typeof setupIntent.payment_method === 'string'
+        ? setupIntent.payment_method
+        : setupIntent.payment_method?.id;
+    const customerId =
+      typeof setupIntent.customer === 'string'
+        ? setupIntent.customer
+        : setupIntent.customer?.id;
+
+    if (!paymentMethodId || !customerId) {
+      this.logger.warn(
+        `SetupIntent ${setupIntent.id}: missing payment method or customer; skipping`,
+      );
+      return;
+    }
+
+    // Make the saved card the customer's default so Stripe bills the first (and
+    // recurring) invoices against it.
+    await this.stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+
+    // Create the subscription. default_payment_method points at the saved card so
+    // Stripe charges the first invoice immediately — same outcome as hosted
+    // checkout. The idempotency key keyed on the SetupIntent guarantees
+    // at-most-one subscription per confirmed card, even on webhook replay.
+    const subscription = await this.stripe.subscriptions.create(
+      {
+        customer: customerId,
+        items: [{ price: priceId }],
+        default_payment_method: paymentMethodId,
+        metadata: {
+          tenantId,
+          planId,
+          billingCycle,
+        },
+      },
+      { idempotencyKey: `sub_from_si_${setupIntent.id}` },
+    );
+
+    // Record the subscription id + cycle now so getSubscriptionDetails reflects
+    // it immediately and the invoice/subscription-updated webhooks (which look
+    // the tenant up BY stripeSubscriptionId) can find it. tenant.status is
+    // deliberately NOT flipped here — activation stays owned by the existing
+    // customer.subscription.created / invoice.paid handlers.
+    tenant.stripeSubscriptionId = subscription.id;
+    tenant.subscriptionPlanId = planId;
+    tenant.billingCycle = billingCycle;
+    tenant.subscriptionStatus = this.mapStripeStatus(subscription.status);
+    await this.tenantRepository.save(tenant);
+
+    this.logger.log(
+      `In-app subscription ${subscription.id} created for tenant ${tenant.name} from SetupIntent ${setupIntent.id}`,
+    );
+  }
+
+  /**
    * Handle customer.subscription.created
    */
   async handleSubscriptionCreated(subscription: Stripe.Subscription): Promise<void> {
@@ -1831,21 +2333,67 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
+   * Extract the subscription id from an invoice ACROSS Stripe API versions.
+   * Older versions exposed `invoice.subscription`; 2025+/2026 ("dahlia") removed
+   * it and moved it to `invoice.parent.subscription_details.subscription` (and,
+   * per line item, `line.parent.subscription_item_details.subscription`). Without
+   * this, invoice webhooks on a newer account silently drop the payment — the
+   * handler reads `undefined` and returns before recording anything.
+   */
+  private getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | undefined {
+    const inv = invoice as any;
+    const legacy =
+      typeof inv.subscription === 'string'
+        ? inv.subscription
+        : inv.subscription?.id;
+    return (
+      legacy ||
+      inv.parent?.subscription_details?.subscription ||
+      inv.lines?.data?.[0]?.parent?.subscription_item_details?.subscription ||
+      undefined
+    );
+  }
+
+  /**
    * Handle invoice.paid
    */
   async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
-    const subscriptionId = invoice.subscription as string;
+    const subscriptionId = this.getInvoiceSubscriptionId(invoice);
     if (!subscriptionId) return;
 
-    const tenant = await this.tenantRepository.findOne({
+    let tenant = await this.tenantRepository.findOne({
       where: { stripeSubscriptionId: subscriptionId },
       relations: ['subscriptionPlan'],
     });
+
+    // Race fallback: the in-app checkout creates the subscription INSIDE the
+    // setup_intent.succeeded webhook, so invoice.paid can land before
+    // tenant.stripeSubscriptionId has been persisted. Without this, the very
+    // first payment would be silently dropped (tenant still gets activated by a
+    // later subscription.updated, but no payment row is written). A Stripe
+    // customer is 1:1 with a tenant, so resolve by customer and backfill the
+    // subscription id so subsequent events match directly.
+    if (!tenant && invoice.customer) {
+      const customerId =
+        typeof invoice.customer === 'string'
+          ? invoice.customer
+          : invoice.customer.id;
+      tenant = await this.tenantRepository.findOne({
+        where: { stripeCustomerId: customerId },
+        relations: ['subscriptionPlan'],
+      });
+      if (tenant && !tenant.stripeSubscriptionId) {
+        tenant.stripeSubscriptionId = subscriptionId;
+      }
+    }
 
     if (!tenant) return;
 
     tenant.subscriptionStatus = SubscriptionStatus.ACTIVE;
     tenant.status = TenantStatus.ACTIVE;
+    // A paid invoice means this tenant has now paid for a real plan — the free
+    // tier is permanently consumed. One-way latch; never reset.
+    tenant.hasUsedPaidPlan = true;
 
     // Billing period info
     let billingPeriodStart: Date | undefined;
@@ -1888,19 +2436,20 @@ export class StripeService implements OnModuleInit {
     }
 
     // Record the payment in payments table
-    const charge = invoice.charge as string;
+    const charge = (invoice as any).charge as string | undefined;
     let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
     let netAmount: number | undefined;
     let feeAmount: number | undefined;
     let taxAmount: number | undefined;
 
     // Get payment method details and balance transaction from the charge
+    // (legacy Stripe API: `invoice.charge` present).
     if (charge && this.stripe) {
       try {
         const chargeObj = await this.stripe.charges.retrieve(charge, {
           expand: ['balance_transaction'],
         });
-        
+
         if (chargeObj.payment_method_details?.card) {
           paymentMethodInfo = {
             type: 'card',
@@ -1908,7 +2457,7 @@ export class StripeService implements OnModuleInit {
             brand: chargeObj.payment_method_details.card.brand || undefined,
           };
         }
-        
+
         // Get net amount and fees from balance transaction
         const balanceTransaction = chargeObj.balance_transaction as Stripe.BalanceTransaction | null;
         if (balanceTransaction && typeof balanceTransaction === 'object') {
@@ -1918,11 +2467,39 @@ export class StripeService implements OnModuleInit {
       } catch (e) {
         this.logger.warn(`Error fetching charge details for ${charge}: ${e}`);
       }
+    } else if (this.stripe) {
+      // Newer Stripe API ("dahlia"): the invoice no longer carries `charge`.
+      // Read the card off the subscription's default payment method (which the
+      // in-app checkout set to the saved card) so the payment still shows a brand
+      // and last-4. Net/fee are omitted — they are not needed to display the row.
+      try {
+        const sub = await this.stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ['default_payment_method'],
+        });
+        const pm = sub.default_payment_method;
+        if (pm && typeof pm !== 'string' && pm.card) {
+          paymentMethodInfo = {
+            type: 'card',
+            last4: pm.card.last4 || undefined,
+            brand: pm.card.brand || undefined,
+          };
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Could not read default PM for subscription ${subscriptionId}: ${e}`,
+        );
+      }
     }
 
-    // Get tax from invoice if available
-    if (invoice.tax) {
-      taxAmount = invoice.tax; // In cents
+    // Get tax from invoice if available (legacy `tax`; newer `total_taxes[]`).
+    const inv = invoice as any;
+    if (typeof inv.tax === 'number') {
+      taxAmount = inv.tax; // In cents
+    } else if (Array.isArray(inv.total_taxes)) {
+      taxAmount = inv.total_taxes.reduce(
+        (sum: number, t: any) => sum + (t.amount || 0),
+        0,
+      );
     }
 
     await this.recordPayment({
@@ -1969,7 +2546,7 @@ export class StripeService implements OnModuleInit {
    * Handle invoice.payment_failed
    */
   async handleInvoicePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
-    const subscriptionId = invoice.subscription as string;
+    const subscriptionId = this.getInvoiceSubscriptionId(invoice);
     if (!subscriptionId) return;
 
     const tenant = await this.tenantRepository.findOne({
@@ -1980,10 +2557,35 @@ export class StripeService implements OnModuleInit {
     if (!tenant) return;
 
     const previousStatus = tenant.subscriptionStatus;
+    const previousTenantStatus = tenant.status;
     tenant.subscriptionStatus = SubscriptionStatus.PAST_DUE;
+
+    // Phase 4 — Involuntary downgrade -> SUSPENDED (read-only via the Phase-1 guard).
+    // Stripe retries a failed subscription invoice (dunning). While more attempts are
+    // scheduled, `next_payment_attempt` holds the next retry timestamp and the tenant
+    // keeps its current access (grace). When Stripe has exhausted its retries,
+    // `next_payment_attempt` is null -> this is the FINAL failure, so we suspend the
+    // tenant. We deliberately do NOT drop them to the default plan: all data is
+    // preserved and full access returns automatically once payment succeeds
+    // (handleInvoicePaid flips status back to ACTIVE).
+    const dunningExhausted = !invoice.next_payment_attempt;
+    if (dunningExhausted) {
+      tenant.status = TenantStatus.SUSPENDED;
+    }
+
     await this.tenantRepository.save(tenant);
 
-    this.logger.warn(`Invoice payment failed for tenant ${tenant.name}`);
+    if (dunningExhausted) {
+      this.logger.warn(
+        `Invoice payment failed (final attempt) for tenant ${tenant.name} - ` +
+          `suspended (read-only). Access restores on payment.`,
+      );
+    } else {
+      this.logger.warn(
+        `Invoice payment failed for tenant ${tenant.name} - past due, ` +
+          `awaiting Stripe retry (grace period).`,
+      );
+    }
 
     // Record the failed payment
     await this.recordFailedPayment({
@@ -2006,10 +2608,19 @@ export class StripeService implements OnModuleInit {
       metadata: {
         invoiceId: invoice.id,
         attemptCount: invoice.attempt_count,
+        nextPaymentAttempt: invoice.next_payment_attempt,
+        finalFailure: dunningExhausted,
+        tenantSuspended: dunningExhausted,
+        previousTenantStatus,
+        newTenantStatus: tenant.status,
       },
     });
 
-    this.eventEmitter.emit('invoice.payment_failed', { tenant, invoice });
+    this.eventEmitter.emit('invoice.payment_failed', {
+      tenant,
+      invoice,
+      suspended: dunningExhausted,
+    });
   }
 
   /**
@@ -3288,6 +3899,118 @@ export class StripeService implements OnModuleInit {
     });
 
     return { payments, total };
+  }
+
+  // ==================== Payment Visibility (Phase 6) ====================
+
+  /**
+   * Building-admin invoice history — a tenant's Stripe invoices (date, amount,
+   * status, hosted page + PDF). Sourced from Stripe by `stripeCustomerId` so it
+   * always reflects the authoritative billing record and carries the PDF links
+   * the local payments table does not store. Returns an empty list for tenants
+   * that never reached Stripe checkout (no customer id).
+   */
+  async getTenantInvoices(
+    tenantId: string,
+    options: { limit?: number } = {},
+  ): Promise<{ invoices: TenantInvoice[]; hasMore: boolean }> {
+    this.ensureStripe();
+
+    const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+    if (!tenant.stripeCustomerId) {
+      return { invoices: [], hasMore: false };
+    }
+
+    const limit = Math.min(Math.max(options.limit ?? 24, 1), 100);
+    const list = await this.stripe.invoices.list({
+      customer: tenant.stripeCustomerId,
+      limit,
+    });
+
+    const invoices: TenantInvoice[] = list.data.map((inv) => ({
+      id: inv.id,
+      number: inv.number ?? null,
+      status: inv.status ?? null,
+      amountDue: (inv.amount_due ?? 0) / 100,
+      amountPaid: (inv.amount_paid ?? 0) / 100,
+      amountRemaining: (inv.amount_remaining ?? 0) / 100,
+      currency: inv.currency,
+      created: new Date(inv.created * 1000),
+      periodStart: inv.period_start ? new Date(inv.period_start * 1000) : null,
+      periodEnd: inv.period_end ? new Date(inv.period_end * 1000) : null,
+      dueDate: inv.due_date ? new Date(inv.due_date * 1000) : null,
+      hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+      invoicePdf: inv.invoice_pdf ?? null,
+      description: inv.description ?? inv.lines?.data?.[0]?.description ?? null,
+    }));
+
+    return { invoices, hasMore: list.has_more };
+  }
+
+  /**
+   * Super-admin platform revenue snapshot — MRR/ARR and revenue rollups (reused
+   * from getFinancialOverview) plus tenant counts by lifecycle status and the
+   * most recent payments. Powers the admin revenue widget.
+   */
+  async getRevenueSnapshot(options: { recentLimit?: number } = {}): Promise<RevenueSnapshot> {
+    const overview = await this.getFinancialOverview();
+
+    const [active, trial, suspended, pendingPayment, pastDue] = await Promise.all([
+      this.tenantRepository.count({ where: { status: TenantStatus.ACTIVE } }),
+      this.tenantRepository.count({ where: { status: TenantStatus.TRIAL } }),
+      this.tenantRepository.count({ where: { status: TenantStatus.SUSPENDED } }),
+      this.tenantRepository.count({ where: { status: TenantStatus.PENDING_PAYMENT } }),
+      this.tenantRepository.count({
+        where: { subscriptionStatus: SubscriptionStatus.PAST_DUE },
+      }),
+    ]);
+
+    const recentLimit = Math.min(Math.max(options.recentLimit ?? 10, 1), 50);
+    const recent = await this.paymentRepository.find({
+      relations: ['tenant', 'subscriptionPlan'],
+      order: { createdAt: 'DESC' },
+      take: recentLimit,
+    });
+
+    const recentPayments: RecentPaymentSummary[] = recent.map((p) => ({
+      id: p.id,
+      tenantId: p.tenantId,
+      tenantName: p.tenant?.name ?? null,
+      planName: p.subscriptionPlan?.name ?? null,
+      amount: Number(p.amount),
+      currency: p.currency,
+      status: p.status,
+      transactionType: p.transactionType,
+      paymentType: p.paymentType,
+      cardBrand: p.paymentMethodBrand ?? null,
+      cardLast4: p.paymentMethodLast4 ?? null,
+      createdAt: p.createdAt,
+    }));
+
+    return {
+      mrr: overview.mrr,
+      arr: overview.arr,
+      totalRevenue: overview.totalRevenue,
+      totalRefunds: overview.totalRefunds,
+      netRevenue: overview.netRevenue,
+      revenueGrowth: overview.revenueGrowth,
+      churnRate: overview.churnRate,
+      averageRevenuePerUser: overview.averageRevenuePerUser,
+      activeSubscriptions: overview.activeSubscriptions,
+      currency: overview.currency,
+      counts: {
+        total: active + trial + suspended + pendingPayment,
+        active,
+        trial,
+        suspended,
+        pendingPayment,
+        pastDue,
+      },
+      recentPayments,
+    };
   }
 
   // ==================== Advanced Payment Analytics ====================

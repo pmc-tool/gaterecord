@@ -112,7 +112,7 @@ export function LoginPage() {
               <Title level={2} className="mb-2">
                 Welcome Back
               </Title>
-              <Text type="secondary">Sign in to YAAD GateRecord</Text>
+              <Text type="secondary">Sign in to Yaad</Text>
             </div>
 
             {error && (

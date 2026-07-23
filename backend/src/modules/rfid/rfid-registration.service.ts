@@ -6,9 +6,16 @@ import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { Vehicle } from '@database/entities/vehicle.entity';
 import { GatewayService } from '../gateway/gateway.service';
 
+/**
+ * - 'vehicle'      -> set the vehicle's intrinsic primary tag (vehicles.rfid_uid)
+ * - 'vehicle-card' -> add an ADDITIONAL scannable card to a vehicle (rfid_cards row)
+ * - 'resident'     -> add a scannable card to a person (rfid_cards row)
+ */
+export type RegistrationTargetType = 'vehicle' | 'vehicle-card' | 'resident';
+
 interface RegistrationSession {
   sessionId: string;
-  targetType: 'vehicle' | 'resident';
+  targetType: RegistrationTargetType;
   targetId: string;
   tenantId: string;
   createdAt: Date;
@@ -37,7 +44,7 @@ export class RfidRegistrationService {
    * Start a new RFID registration session
    */
   startSession(
-    targetType: 'vehicle' | 'resident',
+    targetType: RegistrationTargetType,
     targetId: string,
     tenantId: string,
   ): { sessionId: string; expiresAt: Date } {
@@ -147,15 +154,18 @@ export class RfidRegistrationService {
       // Save the RFID UID to the appropriate target
       if (session.targetType === 'vehicle') {
         await this.assignRfidToVehicle(session.targetId, rfidUid);
+      } else if (session.targetType === 'vehicle-card') {
+        await this.createRfidCardForVehicle(session.targetId, session.tenantId, rfidUid);
       } else {
         await this.createRfidCardForResident(session.targetId, session.tenantId, rfidUid);
       }
 
-      // Notify frontend via WebSocket
+      // Notify frontend via WebSocket. A vehicle card is still a "vehicle" scan
+      // to the client (its RfidScanEvent.type is only 'vehicle' | 'human').
       const eventData = {
         sessionId: session.sessionId,
         rfidUid,
-        type: scanType,
+        type: session.targetType === 'resident' ? 'human' : 'vehicle',
         tenantId,
         success: true,
       };
@@ -190,7 +200,8 @@ export class RfidRegistrationService {
   async submitManualScan(
     sessionId: string,
     rfidUid: string,
-  ): Promise<{ targetType: 'vehicle' | 'resident'; uid: string }> {
+    raw = false,
+  ): Promise<{ targetType: RegistrationTargetType; uid: string }> {
     const session = this.activeSessions.get(sessionId);
     if (!session) {
       throw new Error('Registration session not found or already completed');
@@ -200,7 +211,13 @@ export class RfidRegistrationService {
       throw new Error('Registration session expired');
     }
 
-    const normalizedUid = this.normalizePhoneScanUid(rfidUid);
+    // `raw` = a UID typed by an admin (or read verbatim): store it exactly as a
+    // gate reader would emit it (uppercase, no separators) so it MATCHES a later
+    // gate scan. Only phone Web-NFC reads need the byte-reversal in
+    // normalizePhoneScanUid — a typed UID must NOT be transformed.
+    const normalizedUid = raw
+      ? rfidUid.toUpperCase().replace(/[^0-9A-Z]/g, '')
+      : this.normalizePhoneScanUid(rfidUid);
     if (!normalizedUid) {
       throw new Error('Empty RFID UID');
     }
@@ -209,6 +226,8 @@ export class RfidRegistrationService {
 
     if (session.targetType === 'vehicle') {
       await this.assignRfidToVehicle(session.targetId, normalizedUid);
+    } else if (session.targetType === 'vehicle-card') {
+      await this.createRfidCardForVehicle(session.targetId, session.tenantId, normalizedUid);
     } else {
       await this.createRfidCardForResident(session.targetId, session.tenantId, normalizedUid);
     }
@@ -216,7 +235,7 @@ export class RfidRegistrationService {
     this.gatewayService.broadcastToTenant(session.tenantId, 'rfid:registration-scan', {
       sessionId: session.sessionId,
       rfidUid: normalizedUid,
-      type: session.targetType === 'vehicle' ? 'vehicle' : 'human',
+      type: session.targetType === 'resident' ? 'human' : 'vehicle',
       tenantId: session.tenantId,
       success: true,
     });
@@ -243,6 +262,9 @@ export class RfidRegistrationService {
       throw new Error('RFID UID is already assigned to another vehicle');
     }
 
+    // A vehicle's primary tag must not collide with an existing card UID.
+    await this.assertUidNotUsedByCard(vehicle.tenantId, rfidUid);
+
     vehicle.rfidUid = rfidUid;
     await this.vehicleRepository.save(vehicle);
 
@@ -257,13 +279,7 @@ export class RfidRegistrationService {
     tenantId: string,
     rfidUid: string,
   ): Promise<RfidCard> {
-    // Check if RFID is already in use
-    const existingCard = await this.rfidCardRepository.findOne({
-      where: { tenantId, uid: rfidUid },
-    });
-    if (existingCard) {
-      throw new Error('RFID card is already registered');
-    }
+    await this.assertUidFree(tenantId, rfidUid);
 
     const card = this.rfidCardRepository.create({
       uid: rfidUid,
@@ -277,6 +293,62 @@ export class RfidRegistrationService {
     this.logger.log(`Created RFID card ${rfidUid} for user ${userId}`);
 
     return saved;
+  }
+
+  /**
+   * Create a new RFID card for a vehicle — an ADDITIONAL scannable credential
+   * that lives alongside the vehicle's intrinsic primary tag (vehicles.rfid_uid).
+   */
+  private async createRfidCardForVehicle(
+    vehicleId: string,
+    tenantId: string,
+    rfidUid: string,
+  ): Promise<RfidCard> {
+    const vehicle = await this.vehicleRepository.findOne({
+      where: { id: vehicleId, tenantId },
+    });
+    if (!vehicle) {
+      throw new Error('Vehicle not found');
+    }
+
+    await this.assertUidFree(tenantId, rfidUid);
+
+    const card = this.rfidCardRepository.create({
+      uid: rfidUid,
+      vehicleId,
+      tenantId,
+      status: RfidCardStatus.ACTIVE,
+      label: 'Vehicle Card',
+    });
+
+    const saved = await this.rfidCardRepository.save(card);
+    this.logger.log(`Created RFID card ${rfidUid} for vehicle ${vehicleId}`);
+
+    return saved;
+  }
+
+  /**
+   * A UID must be unique across BOTH stores in a tenant — the rfid_cards table
+   * AND the intrinsic vehicles.rfid_uid tags — so a single scanned UID always
+   * resolves to exactly one credential.
+   */
+  private async assertUidFree(tenantId: string, uid: string): Promise<void> {
+    await this.assertUidNotUsedByCard(tenantId, uid);
+    const existingVehicle = await this.vehicleRepository.findOne({
+      where: { tenantId, rfidUid: uid },
+    });
+    if (existingVehicle) {
+      throw new Error("RFID UID is already assigned as a vehicle's primary tag");
+    }
+  }
+
+  private async assertUidNotUsedByCard(tenantId: string, uid: string): Promise<void> {
+    const existingCard = await this.rfidCardRepository.findOne({
+      where: { tenantId, uid },
+    });
+    if (existingCard) {
+      throw new Error('RFID card is already registered');
+    }
   }
 
   /**

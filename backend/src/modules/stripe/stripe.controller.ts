@@ -23,6 +23,7 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Public } from '@common/decorators/public.decorator';
+import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { UserRole } from '@database/entities/user.entity';
 import { StripeService } from './stripe.service';
 import {
@@ -80,10 +81,25 @@ export class StripeController {
 
     this.logger.log(`Received webhook: ${event.type}`);
 
+    // Idempotency (Phase 6): Stripe retries any delivery that did not get a 2xx
+    // and can re-send events. If we have already handled this event.id, ack it
+    // immediately without re-processing so retries are safe.
+    if (await this.stripeService.isStripeEventProcessed(event.id)) {
+      this.logger.log(`Duplicate webhook ${event.id} (${event.type}) already processed - skipping`);
+      return res.json({ received: true, duplicate: true });
+    }
+
     try {
       switch (event.type) {
         case 'checkout.session.completed':
           await this.stripeService.handleCheckoutCompleted(event.data.object as any);
+          break;
+
+        // In-app Elements checkout: the card was saved. handleSetupIntentSucceeded
+        // creates the subscription (only for SetupIntents this app minted), after
+        // which the subscription/invoice webhooks below activate the tenant.
+        case 'setup_intent.succeeded':
+          await this.stripeService.handleSetupIntentSucceeded(event.data.object as any);
           break;
 
         case 'customer.subscription.created':
@@ -130,6 +146,11 @@ export class StripeController {
         default:
           this.logger.debug(`Unhandled event type: ${event.type}`);
       }
+
+      // Record only after the handler succeeded, so a failed event is NOT marked
+      // processed and can be retried/reconciled. (We still return 200 below to
+      // preserve the existing no-retry-on-handled-error behaviour.)
+      await this.stripeService.markStripeEventProcessed(event.id, event.type);
     } catch (err: any) {
       this.logger.error(`Error handling webhook ${event.type}: ${err.message}`);
       // Still return 200 to prevent Stripe retries for handled errors
@@ -145,6 +166,10 @@ export class StripeController {
  */
 @Controller('billing')
 @UseGuards(JwtAuthGuard, RolesGuard)
+// The pay/recover path. A SUSPENDED / PENDING_PAYMENT / paused tenant must be
+// able to reach checkout, portal and plan-change to restore access, so the whole
+// controller is exempt from the SubscriptionGuard (JWT auth + roles still apply).
+@SubscriptionExempt()
 export class BillingController {
   constructor(private stripeService: StripeService) {}
 
@@ -157,6 +182,26 @@ export class BillingController {
   async createCheckoutSession(@Req() req: any, @Body() dto: CreateCheckoutSessionDto) {
     const tenantId = req.user.tenantId;
     return this.stripeService.createCheckoutSession(tenantId, dto);
+  }
+
+  /**
+   * Mint a SetupIntent for the in-app Stripe Elements checkout.
+   * POST /api/v1/billing/subscription/intent
+   *
+   * The page confirms the returned client secret with stripe.confirmSetup(); the
+   * subscription itself is created server-side by the setup_intent.succeeded
+   * webhook, so nothing is charged or mutated until the card is confirmed. The
+   * whole controller is @SubscriptionExempt, so a suspended / pending tenant can
+   * still reach this to pay and recover.
+   */
+  @Post('subscription/intent')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  async createSubscriptionIntent(
+    @Req() req: any,
+    @Body() dto: CreateCheckoutSessionDto,
+  ) {
+    const tenantId = req.user.tenantId;
+    return this.stripeService.createSubscriptionIntent(tenantId, dto);
   }
 
   /**
@@ -336,6 +381,21 @@ export class BillingController {
     return this.stripeService.getTenantPaymentHistory(tenantId, { page, limit });
   }
 
+  /**
+   * Get invoice history (Stripe invoices with hosted page + PDF)
+   * GET /api/v1/billing/invoices?limit=24
+   *
+   * The whole BillingController is @SubscriptionExempt, so a SUSPENDED tenant can
+   * still view their invoices (and pay). Returns { invoices, hasMore }.
+   */
+  @Get('invoices')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  async getInvoices(@Req() req: any) {
+    const tenantId = req.user.tenantId;
+    const limit = parseInt(req.query.limit) || 24;
+    return this.stripeService.getTenantInvoices(tenantId, { limit });
+  }
+
   // ==================== Plan Change Endpoints ====================
 
   /**
@@ -387,6 +447,10 @@ export class BillingController {
 @Controller('admin/stripe')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
+// Super-admin-only billing administration. Already covered by the guard's
+// SUPER_ADMIN allow-rule; marked exempt too so the pay/admin surface is explicit
+// and stays open regardless of any tenant the super admin may be attached to.
+@SubscriptionExempt()
 export class AdminStripeController {
   constructor(private stripeService: StripeService) {}
 
@@ -487,6 +551,24 @@ export class AdminStripeController {
     return {
       success: true,
       data: overview,
+    };
+  }
+
+  /**
+   * Get platform revenue snapshot (Phase 6)
+   * GET /api/v1/admin/stripe/revenue?recentLimit=10
+   *
+   * MRR/ARR + revenue rollups, tenant counts by status
+   * (active/trial/suspended/pendingPayment/pastDue), and recent payments.
+   * Super-admin only (controller is @Roles(SUPER_ADMIN) + @SubscriptionExempt).
+   */
+  @Get('revenue')
+  async getRevenue(@Req() req: any) {
+    const recentLimit = parseInt(req.query.recentLimit) || 10;
+    const data = await this.stripeService.getRevenueSnapshot({ recentLimit });
+    return {
+      success: true,
+      data,
     };
   }
 

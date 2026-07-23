@@ -247,7 +247,7 @@ export default function VisitorPassPage() {
         {/* Footer */}
         <div className="mt-6 text-center">
           <Text type="secondary" className="text-xs">
-            Powered by GateRecord
+            Powered by Yaad
           </Text>
         </div>
       </Card>

@@ -68,6 +68,11 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
+  // Run onModuleDestroy hooks on SIGINT/SIGTERM. Without this, a `nest start
+  // --watch` restart kills the process without cleanup, so the Cloud Plus TCP
+  // server never closes its socket and the next start hits EADDRINUSE on 8002.
+  app.enableShutdownHooks();
+
   const port = process.env.PORT || 3000;
   await app.listen(port);
   console.log(`Application is running on: http://localhost:${port}`);

@@ -81,6 +81,17 @@ export class SubscriptionPlan extends BaseEntity {
   @Column({ name: 'is_public', default: true })
   isPublic: boolean; // Show on pricing page
 
+  // System / default plan (auto-assigned free tier). Values live in the DB row,
+  // never hardcoded, so super admin can retune limits + validity without a deploy.
+  @Column({ name: 'is_default', default: false })
+  isDefault: boolean; // Exactly one plan; enforced by a partial unique index
+
+  @Column({ name: 'is_system', default: false })
+  isSystem: boolean; // System-managed plan; delete is refused in the service
+
+  @Column({ name: 'default_validity_days', type: 'int', nullable: true })
+  defaultValidityDays: number; // Length of the free ride (e.g. 60 days)
+
   // Stripe Integration
   @Column({ name: 'stripe_product_id', nullable: true })
   stripeProductId: string;

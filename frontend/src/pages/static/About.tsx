@@ -3,10 +3,10 @@ import { Link } from 'react-router-dom';
 const sections = [
   {
     title: 'What We Build',
-    body: 'GateRecord delivers modern gate access control software for residential communities, commercial properties, and managed facilities that need reliable access records, resident management, and operational visibility.',
+    body: 'Yaad delivers modern gate access control software for residential communities, commercial properties, and managed facilities that need reliable access records, resident management, and operational visibility.',
   },
   {
-    title: 'Why Teams Choose GateRecord',
+    title: 'Why Teams Choose Yaad',
     body: 'We focus on simple operations, dependable event tracking, and a clean experience for residents, administrators, and security staff. The platform is designed to reduce manual coordination and improve response time at the gate.',
   },
   {
@@ -15,7 +15,7 @@ const sections = [
   },
   {
     title: 'Who We Support',
-    body: 'GateRecord is built for property managers, developers, gated communities, apartment operators, and facility teams that need a dependable system for access control and visitor flow.',
+    body: 'Yaad is built for property managers, developers, gated communities, apartment operators, and facility teams that need a dependable system for access control and visitor flow.',
   },
 ];
 
@@ -26,7 +26,7 @@ export default function About() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -39,9 +39,9 @@ export default function About() {
         <div className="overflow-hidden rounded-[2rem] border border-slate-800 bg-slate-900/80 shadow-2xl shadow-blue-950/20 backdrop-blur">
           <div className="border-b border-slate-800 px-8 py-10 lg:px-12">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-400">Company</p>
-            <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">About GateRecord</h1>
+            <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">About Yaad</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
-              GateRecord helps properties modernize access control with a platform built for visibility,
+              Yaad helps properties modernize access control with a platform built for visibility,
               consistency, and secure day-to-day operations.
             </p>
           </div>

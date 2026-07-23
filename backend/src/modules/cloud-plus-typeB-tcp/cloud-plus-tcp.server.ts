@@ -68,7 +68,17 @@ export class CloudPlusTcpServer implements OnModuleInit, OnModuleDestroy {
         this.handleConnection(socket);
       });
 
-      this.server.on('error', (err) => {
+      this.server.on('error', (err: NodeJS.ErrnoException) => {
+        // A port clash on this OPTIONAL hardware server must not take down the
+        // whole HTTP API. Log and continue; the REST app keeps serving. Other
+        // (unexpected) socket errors are still surfaced.
+        if (err.code === 'EADDRINUSE') {
+          this.logger.warn(
+            `TCP port ${this.port} already in use — Cloud Plus TCP server not started. The HTTP API is unaffected.`,
+          );
+          resolve();
+          return;
+        }
         this.logger.error(`TCP Server error: ${err.message}`);
         reject(err);
       });

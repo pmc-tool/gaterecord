@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 const sections = [
   {
     title: 'Acceptable Use',
-    body: 'Customers must use GateRecord lawfully, keep credentials secure, and avoid actions that could disrupt service integrity, security, or availability for other users or tenants.',
+    body: 'Customers must use Yaad lawfully, keep credentials secure, and avoid actions that could disrupt service integrity, security, or availability for other users or tenants.',
   },
   {
     title: 'Accounts and Responsibilities',
@@ -15,7 +15,7 @@ const sections = [
   },
   {
     title: 'Intellectual Property and Limits',
-    body: 'The platform, branding, software, and documentation remain the property of GateRecord and its licensors. You may not reverse engineer, redistribute, or commercially reuse protected materials without permission.',
+    body: 'The platform, branding, software, and documentation remain the property of Yaad and its licensors. You may not reverse engineer, redistribute, or commercially reuse protected materials without permission.',
   },
 ];
 
@@ -26,7 +26,7 @@ export default function Terms() {
       <div className="relative mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Link to="/" className="no-underline">
-            <img src="/logo.svg" alt="GateRecord" className="h-14 object-contain" />
+            <img src="/logo.svg" alt="Yaad" className="h-14 object-contain" />
           </Link>
           <Link
             to="/"
@@ -41,7 +41,7 @@ export default function Terms() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">Legal</p>
             <h1 className="mt-3 text-4xl font-bold tracking-tight text-white lg:text-5xl">Terms of Service</h1>
             <p className="mt-4 max-w-3xl text-base leading-8 text-slate-300 lg:text-lg">
-              These terms govern access to and use of the GateRecord platform, including account management,
+              These terms govern access to and use of the Yaad platform, including account management,
               gate operations, resident access records, device connectivity, and related support services.
             </p>
             <p className="mt-4 text-sm text-slate-400">Last updated: April 16, 2026</p>

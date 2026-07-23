@@ -53,7 +53,7 @@ export class EmailService {
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    const from = this.configService.get<string>('SMTP_FROM', 'YAAD GateRecord <noreply@gaterecord.com>');
+    const from = this.configService.get<string>('SMTP_FROM', 'Yaad <noreply@gaterecord.com>');
     const domain = this.configService.get<string>('APP_DOMAIN', 'gaterecord.com');
 
     try {
@@ -65,7 +65,7 @@ export class EmailService {
         text: options.text || this.stripHtml(options.html),
         headers: {
           'X-Priority': '1',
-          'X-Mailer': 'YAAD GateRecord Notification Service',
+          'X-Mailer': 'Yaad Notification Service',
           'List-Unsubscribe': `<mailto:unsubscribe@${domain}>`,
           'Precedence': 'bulk',
         },
@@ -149,7 +149,7 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from YAAD GateRecord.</p>
+            <p>This is an automated message from Yaad.</p>
             <p>If you didn't expect this email, please ignore it.</p>
           </div>
         </div>
@@ -239,7 +239,7 @@ export class EmailService {
             <p style="color: #888; font-size: 12px;">If this visitor is expected, no action is needed. This email is for your awareness only.</p>
           </div>
           <div class="footer">
-            <p>This is an automated security notification from YAAD GateRecord.</p>
+            <p>This is an automated security notification from Yaad.</p>
             <p>Event ID: ${accessEventId}</p>
           </div>
         </div>
@@ -311,7 +311,7 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>YAAD GateRecord Security System</p>
+            <p>Yaad Security System</p>
             <p>Event ID: ${accessEventId}</p>
           </div>
         </div>
@@ -404,13 +404,13 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1>Welcome to YAAD GateRecord!</h1>
+            <h1>Welcome to YAAD</h1>
             <p>Your account has been successfully created</p>
             <div style="margin-top: 15px;">${subscriptionBadge}</div>
           </div>
           <div class="content">
             <p>Hello <strong>${userName}</strong>,</p>
-            <p>Welcome to YAAD GateRecord! Your building <strong>${buildingName}</strong> is now set up and ready to use.</p>
+            <p>Welcome to YAAD, Your building <strong>${buildingName}</strong> is now set up and ready to use.</p>
 
             ${subscriptionDetails}
 
@@ -434,8 +434,8 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from YAAD GateRecord.</p>
-            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
+            <p>This is an automated message from Yaad.</p>
+            <p>© ${new Date().getFullYear()} Yaad. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -444,7 +444,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `Welcome to YAAD GateRecord - ${buildingName} (${subInfo.type === 'trial' ? 'Free Trial' : 'Subscription Active'})`,
+      subject: `Welcome to Yaad - ${buildingName} (${subInfo.type === 'trial' ? 'Free Trial' : 'Subscription Active'})`,
       html,
     });
   }
@@ -490,7 +490,7 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1>Welcome to YAAD GateRecord!</h1>
+            <h1>Welcome to YAAD</h1>
             <p>Your account has been created</p>
           </div>
           <div class="content">
@@ -520,7 +520,7 @@ export class EmailService {
             </div>
 
             <div style="text-align: center;">
-              <a href="${loginUrl}" class="button">Login to YAAD GateRecord</a>
+              <a href="${loginUrl}" class="button">Login to Yaad</a>
             </div>
 
             <p style="color: #888; font-size: 13px;">
@@ -528,9 +528,9 @@ export class EmailService {
             </p>
           </div>
           <div class="footer">
-            <p>This is an automated message from YAAD GateRecord.</p>
+            <p>This is an automated message from Yaad.</p>
             <p>If you did not expect this email, please contact your administrator.</p>
-            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} Yaad. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -539,7 +539,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `Your YAAD GateRecord Account - ${buildingName}`,
+      subject: `Your Yaad Account - ${buildingName}`,
       html,
     });
   }
@@ -557,7 +557,7 @@ export class EmailService {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <title>Password Reset - YAAD GateRecord</title>
+        <title>Password Reset - Yaad</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5; }
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -578,13 +578,13 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <div class="logo">YAAD GateRecord</div>
+            <div class="logo">Yaad</div>
             <h1>Password Reset</h1>
             <p>Your verification code</p>
           </div>
           <div class="content">
             <p>Hello <strong>${userName}</strong>,</p>
-            <p>We received a request to reset your password for your YAAD GateRecord account. Use the verification code below to proceed:</p>
+            <p>We received a request to reset your password for your Yaad account. Use the verification code below to proceed:</p>
 
             <div class="otp-box">
               <p style="margin: 0 0 10px; color: #666; font-size: 14px;">Your verification code</p>
@@ -601,9 +601,9 @@ export class EmailService {
             </div>
           </div>
           <div class="footer">
-            <p>This is an automated message from YAAD GateRecord.</p>
+            <p>This is an automated message from Yaad.</p>
             <p>Please do not reply to this email.</p>
-            <p>© ${new Date().getFullYear()} YAAD GateRecord. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} Yaad. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -612,7 +612,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: 'Password Reset Code - YAAD GateRecord',
+      subject: 'Password Reset Code - Yaad',
       html,
     });
   }
@@ -685,7 +685,7 @@ export class EmailService {
             </center>
           </div>
           <div class="footer">
-            <p>YAAD YAAD GateRecord - Smart Gate Management</p>
+            <p>YAAD Yaad - Smart Gate Management</p>
             <p style="font-size: 11px; color: #9ca3af;">You received this email because you have notifications enabled. <a href="${frontendUrl}/settings">Manage your preferences</a></p>
           </div>
         </div>
@@ -695,7 +695,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: userEmail,
-      subject: `${emoji} ${title} - YAAD GateRecord`,
+      subject: `${emoji} ${title} - Yaad`,
       html,
     });
   }

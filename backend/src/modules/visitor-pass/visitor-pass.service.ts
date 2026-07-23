@@ -60,6 +60,20 @@ export class VisitorPassService {
       ? createDto.registrationType || RegistrationType.ON_PREMISE
       : RegistrationType.SELF_SERVICE;
 
+    // For a staff on-premise registration a note is mandatory, so the record is
+    // never a rubber stamp: either evidence of how the resident confirmed, or an
+    // explicit reason for allowing entry without confirmation. Enforced here on
+    // the server so it cannot be bypassed by calling the API directly.
+    if (registrationType === RegistrationType.ON_PREMISE) {
+      if (!createDto.confirmationNotes || !createDto.confirmationNotes.trim()) {
+        throw new BadRequestException(
+          createDto.residentConfirmed
+            ? 'Please record how the resident confirmed this visitor.'
+            : 'Please give a reason for allowing this visitor without resident confirmation.',
+        );
+      }
+    }
+
     // Determine tenant ID
     let tenantId: string;
     if (currentUser.role === UserRole.SUPER_ADMIN) {
@@ -353,13 +367,23 @@ export class VisitorPassService {
   async remove(id: string, currentUser: User): Promise<void> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator or host resident can delete (or admin)
-    if (
-      pass.createdById !== currentUser.id &&
-      pass.residentId !== currentUser.id &&
-      currentUser.role === 'resident'
-    ) {
-      throw new ForbiddenException('You can only delete your own visitor passes');
+    // Hard-delete removes the record (and its audit value), so only building
+    // owners may delete any pass. Everyone else — including SECURITY — can only
+    // delete a pass they created or are the host of. Security can still CANCEL
+    // any pass (an operational revoke that keeps the record); deletion is the
+    // stricter action. Previously security could hard-delete any pass in the
+    // building, erasing other people's records.
+    const isBuildingOwner =
+      currentUser.role === UserRole.SUPER_ADMIN ||
+      currentUser.role === UserRole.BUILDING_ADMIN;
+    const isOwnerOrHost =
+      pass.createdById === currentUser.id ||
+      pass.residentId === currentUser.id;
+
+    if (!isBuildingOwner && !isOwnerOrHost) {
+      throw new ForbiddenException(
+        'You can only delete visitor passes you created',
+      );
     }
 
     await this.visitorPassRepository.remove(pass);

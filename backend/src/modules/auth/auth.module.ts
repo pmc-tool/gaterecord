@@ -6,7 +6,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { KeycloakStrategy } from './strategies/keycloak.strategy';
+import { IdentityProvisioningService } from './identity-provisioning.service';
 import { User } from '@database/entities/user.entity';
+import { GlobalUser } from '@database/entities/global-user.entity';
 import { RefreshToken } from '@database/entities/refresh-token.entity';
 import { PasswordResetToken } from '@database/entities/password-reset-token.entity';
 import { Tenant } from '@database/entities/tenant.entity';
@@ -16,7 +19,9 @@ import { StripeModule } from '../stripe/stripe.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken, Tenant, SubscriptionPlan, LoginHistory]),
+    // GlobalUser is the platform-wide `users` mirror written by
+    // IdentityProvisioningService on every Keycloak-authenticated request.
+    TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken, Tenant, SubscriptionPlan, LoginHistory, GlobalUser]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     StripeModule,
     JwtModule.registerAsync({
@@ -31,7 +36,13 @@ import { StripeModule } from '../stripe/stripe.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtModule],
+  // DUAL-ACCEPT PHASE. JwtStrategy ('jwt', HS256/JWT_SECRET) is untouched and
+  // remains the defaultStrategy; KeycloakStrategy ('keycloak', RS256/JWKS) is
+  // registered ALONGSIDE it so JwtAuthGuard can accept either. Registration is
+  // unconditional on purpose: an unregistered strategy named in the guard makes
+  // passport raise 'Unknown authentication strategy', which the guard only
+  // downgrades to a logged 401 as a safety net.
+  providers: [AuthService, JwtStrategy, KeycloakStrategy, IdentityProvisioningService],
+  exports: [AuthService, JwtModule, IdentityProvisioningService],
 })
 export class AuthModule {}

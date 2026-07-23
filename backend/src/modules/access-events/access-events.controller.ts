@@ -14,7 +14,14 @@ import { User } from '@database/entities/user.entity';
 @ApiTags('Access Events')
 @ApiBearerAuth()
 @Controller('events')
-// @UseGuards(RolesGuard)
+// No @Roles here ON PURPOSE: residents legitimately see their OWN access events
+// (e.g. the dashboard's recent-activity list). A role guard restricting this to
+// staff would break that. Authorization is instead enforced per role in the
+// service via AccessEventsService.applyRbacFilter — super admin sees all,
+// building_admin/security see their tenant, and a RESIDENT is scoped to
+// event.resident_id = their own id. The global JwtAuthGuard still requires a
+// valid token. Do not "restore" a RolesGuard here without moving the resident
+// scoping elsewhere first.
 export class AccessEventsController {
   constructor(private readonly accessEventsService: AccessEventsService) {}
 

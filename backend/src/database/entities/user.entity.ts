@@ -25,7 +25,7 @@ export interface NotificationSettings {
   inAppNotifications: boolean;    // Receive in-app (bell) notifications
 }
 
-@Entity('users')
+@Entity('gate_users')
 @Index(['email'], { unique: true })
 @Index(['tenantId', 'role'])
 export class User extends BaseEntity {
@@ -74,6 +74,17 @@ export class User extends BaseEntity {
 
   @Column({ name: 'notification_settings', type: 'jsonb', nullable: true })
   notificationSettings: NotificationSettings;
+
+  /**
+   * Link to the platform-wide identity in the global `users` mirror table.
+   *
+   * Nullable and unpopulated during Phase 1; backfilled in Phase 3. Intentionally
+   * a plain column: no @ManyToOne relation and no database-level foreign key yet,
+   * because the target table is created by a later migration and a hard constraint
+   * would break the unpopulated state.
+   */
+  @Column({ name: 'user_id', type: 'uuid', nullable: true, unique: true })
+  userId: string | null;
 
   @OneToMany(() => Vehicle, (vehicle) => vehicle.owner)
   vehicles: Vehicle[];

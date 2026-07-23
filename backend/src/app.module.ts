@@ -20,7 +20,11 @@ import { CloudPlusModule } from './modules/cloud-plus-typeB/cloud-plus.module';
 import { CloudPlusTcpModule } from './modules/cloud-plus-typeB-tcp/cloud-plus-tcp.module';
 import { StripeModule } from './modules/stripe/stripe.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { UserSyncModule } from './modules/user-sync/user-sync.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { PlanUsageModule } from './modules/plan-usage/plan-usage.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { SubscriptionGuard } from './common/guards/subscription.guard';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -62,12 +66,23 @@ import { HealthController } from './health.controller';
     CloudPlusTcpModule,
     StripeModule,
     SettingsModule,
+    UserSyncModule,
+    OnboardingModule,
+    PlanUsageModule,
   ],
   controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    // Runs AFTER JwtAuthGuard (registration order = execution order for
+    // APP_GUARDs). JwtAuthGuard authenticates and populates req.user with its
+    // tenant relation first; SubscriptionGuard then reads req.user.tenant.status
+    // to enforce read-only grace on inactive tenants. Fail-open by design.
+    {
+      provide: APP_GUARD,
+      useClass: SubscriptionGuard,
     },
   ],
 })
