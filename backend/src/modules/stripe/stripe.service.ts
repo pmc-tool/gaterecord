@@ -411,13 +411,35 @@ export class StripeService implements OnModuleInit {
       tenant.stripeSubscriptionId &&
       liveSubscriptionStatuses.includes(tenant.subscriptionStatus)
     ) {
-      throw new BadRequestException({
-        statusCode: 400,
-        error: 'Bad Request',
-        code: 'SUBSCRIPTION_ALREADY_ACTIVE',
-        message:
-          'You already have an active subscription. Use Change Plan to switch — your price is prorated automatically.',
-      });
+      // Verify the subscription actually still exists in Stripe before blocking.
+      // If it was deleted directly in Stripe (without a webhook updating our DB),
+      // the tenant is stuck in limbo — clear the stale data and let them re-subscribe.
+      let stripeSubGone = false;
+      try {
+        const stripeSub = await this.stripe.subscriptions.retrieve(tenant.stripeSubscriptionId);
+        if (stripeSub.status === 'canceled') {
+          stripeSubGone = true;
+        }
+      } catch {
+        stripeSubGone = true;
+      }
+
+      if (stripeSubGone) {
+        this.logger.warn(
+          `Tenant ${tenant.id} has stale stripeSubscriptionId ${tenant.stripeSubscriptionId} that no longer exists in Stripe. Clearing stale data.`,
+        );
+        tenant.stripeSubscriptionId = null as any;
+        tenant.subscriptionStatus = SubscriptionStatus.CANCELED;
+        await this.tenantRepository.save(tenant);
+      } else {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'Bad Request',
+          code: 'SUBSCRIPTION_ALREADY_ACTIVE',
+          message:
+            'You already have an active subscription. Use Change Plan to switch — your price is prorated automatically.',
+        });
+      }
     }
 
     let plan = await this.planRepository.findOne({ where: { id: dto.planId } });
