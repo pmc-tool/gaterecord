@@ -367,12 +367,20 @@ export class SecurityAlertService {
       .leftJoinAndSelect('alert.resolvedBy', 'resolvedBy')
       .orderBy('alert.createdAt', 'DESC');
 
-    // Filter by tenant unless super admin
-    if (user.role !== UserRole.SUPER_ADMIN) {
+    // Scope by role:
+    //  - SUPER_ADMIN: all tenants (optionally filtered to one via tenantId)
+    //  - BUILDING_ADMIN / SECURITY: every alert in their own tenant
+    //  - RESIDENT: ONLY the alerts they created (their own reports), within tenant
+    if (user.role === UserRole.SUPER_ADMIN) {
+      if (tenantId) {
+        query.where('alert.tenantId = :tenantId', { tenantId });
+      }
+    } else if (user.role === UserRole.RESIDENT) {
+      query
+        .where('alert.tenantId = :tenantId', { tenantId: user.tenantId })
+        .andWhere('alert.residentId = :residentId', { residentId: user.id });
+    } else {
       query.where('alert.tenantId = :tenantId', { tenantId: user.tenantId });
-    } else if (tenantId) {
-      // Super admin can filter by tenant
-      query.where('alert.tenantId = :tenantId', { tenantId });
     }
 
     if (status) {
@@ -461,8 +469,13 @@ export class SecurityAlertService {
       throw new NotFoundException('Security alert not found');
     }
 
-    // Check access
-    if (user.role !== UserRole.SUPER_ADMIN && alert.tenantId !== user.tenantId) {
+    // Check access. Residents may only act on the alert they themselves created;
+    // staff may act on any alert in their tenant; super admin on any.
+    if (user.role === UserRole.RESIDENT) {
+      if (alert.residentId !== user.id) {
+        throw new ForbiddenException('Access denied');
+      }
+    } else if (user.role !== UserRole.SUPER_ADMIN && alert.tenantId !== user.tenantId) {
       throw new ForbiddenException('Access denied');
     }
 
@@ -500,7 +513,13 @@ export class SecurityAlertService {
   }> {
     const query = this.alertRepository.createQueryBuilder('alert');
 
-    if (user.role !== UserRole.SUPER_ADMIN) {
+    // Same scoping as findAll: residents count only their own alerts, staff count
+    // the whole tenant, super admins count everything.
+    if (user.role === UserRole.RESIDENT) {
+      query
+        .where('alert.tenantId = :tenantId', { tenantId: user.tenantId })
+        .andWhere('alert.residentId = :residentId', { residentId: user.id });
+    } else if (user.role !== UserRole.SUPER_ADMIN) {
       query.where('alert.tenantId = :tenantId', { tenantId: user.tenantId });
     }
 
