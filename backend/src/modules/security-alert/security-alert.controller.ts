@@ -113,7 +113,8 @@ export class SecurityAlertController {
   @Get()
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
+  // Residents are allowed to READ — the service scopes them to their own alerts.
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY, UserRole.RESIDENT)
   @ApiOperation({ summary: 'Get all security alerts' })
   async findAll(@Query() query: SecurityAlertQueryDto, @Req() req: RequestWithUser) {
     return this.securityAlertService.findAll(req.user, query.status, query.tenantId);
@@ -122,7 +123,7 @@ export class SecurityAlertController {
   @Get('active')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY, UserRole.RESIDENT)
   @ApiOperation({ summary: 'Get active security alerts' })
   async findActive(@Req() req: RequestWithUser) {
     return this.securityAlertService.findActive(req.user);
@@ -131,7 +132,7 @@ export class SecurityAlertController {
   @Get('stats')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY, UserRole.RESIDENT)
   @ApiOperation({ summary: 'Get security alert statistics' })
   async getStats(@Req() req: RequestWithUser) {
     return this.securityAlertService.getStats(req.user);
@@ -162,7 +163,9 @@ export class SecurityAlertController {
   @Patch(':id/false-alarm')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
+  // Residents may cancel their OWN report as a false alarm (ownership enforced in
+  // the service). Acknowledge/resolve remain staff-only.
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY, UserRole.RESIDENT)
   @ApiOperation({ summary: 'Mark alert as false alarm' })
   async markFalseAlarm(
     @Param('id') id: string,
