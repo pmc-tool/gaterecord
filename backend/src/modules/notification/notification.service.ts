@@ -309,6 +309,7 @@ export class NotificationService {
     visitorName: string,
     gateName: string,
     metadata: Record<string, unknown>,
+    sendEmail = true,
   ): Promise<void> {
     const user = await this.userRepository.findOne({ where: { id: residentId } });
     if (!user) return;
@@ -321,7 +322,7 @@ export class NotificationService {
       title: 'Visitor Arrived',
       message: `${visitorName} has entered through ${gateName}`,
       metadata,
-      sendEmail: true,
+      sendEmail,
     });
   }
 

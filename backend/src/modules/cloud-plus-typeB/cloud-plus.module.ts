@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CloudPlusController } from './cloud-plus.controller';
 import { CloudPlusService } from './cloud-plus.service';
+import { PendingAlarmService } from './pending-alarm.service';
 import { CloudPlusDeviceGuard } from './guards/cloud-plus-device.guard';
 import { GatewayModule } from '../gateway/gateway.module';
 
@@ -48,7 +49,7 @@ import { User } from '@database/entities/user.entity';
     GatewayModule,
   ],
   controllers: [CloudPlusController],
-  providers: [CloudPlusService, CloudPlusDeviceGuard],
-  exports: [CloudPlusService],
+  providers: [CloudPlusService, PendingAlarmService, CloudPlusDeviceGuard],
+  exports: [CloudPlusService, PendingAlarmService],
 })
 export class CloudPlusModule {}

@@ -11,6 +11,7 @@ import { SecurityAlertTriggerService } from './security-alert-trigger.service';
 import { SecurityAlertController } from './security-alert.controller';
 import { GatewayModule } from '../gateway/gateway.module';
 import { CloudPlusTcpModule } from '../cloud-plus-typeB-tcp/cloud-plus-tcp.module';
+import { CloudPlusModule } from '../cloud-plus-typeB/cloud-plus.module';
 import { NotificationModule } from '../notification/notification.module';
 
 @Module({
@@ -18,6 +19,7 @@ import { NotificationModule } from '../notification/notification.module';
     TypeOrmModule.forFeature([SecurityAlert, AccessEvent, User, Gate, DeviceConfig]),
     GatewayModule,
     forwardRef(() => CloudPlusTcpModule),
+    CloudPlusModule,
     NotificationModule,
     ScheduleModule.forRoot(),
   ],

@@ -17,6 +17,7 @@ import {
 } from '@database/entities/access-event.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { RfidRegistrationService } from '../rfid/rfid-registration.service';
+import { PendingAlarmService } from './pending-alarm.service';
 
 import {
   SearchCardAcsRequestDto,
@@ -50,6 +51,7 @@ export class CloudPlusService {
     private userRepository: Repository<User>,
     private gatewayService: GatewayService,
     private rfidRegistrationService: RfidRegistrationService,
+    private pendingAlarmService: PendingAlarmService,
   ) {}
 
   /**
@@ -278,6 +280,25 @@ export class CloudPlusService {
 
     if (device) {
       await this.updateDeviceStatus(device, clientIp);
+
+      // Deliver any pending buzzer/alarm command for this controller. In HTTP
+      // mode this heartbeat response is the only channel to command the device,
+      // so a security alert armed for this serial fires the alarm relay here.
+      const alarmCommand = this.pendingAlarmService.consume(device.deviceId);
+      if (alarmCommand) {
+        this.logger.warn(
+          `[HTTP-ALARM] Delivering command to ${device.deviceId} on heartbeat: ${JSON.stringify(alarmCommand)}`,
+        );
+        return { Key: key, ...alarmCommand };
+      }
+    } else {
+      // Heartbeat arrived but we could not map it to a registered DeviceConfig
+      // (unknown serial AND unknown IP). Any armed alarm for this controller can
+      // never be delivered until it is registered — surface it loudly.
+      this.logger.warn(
+        `[HTTP-ALARM] Heartbeat from unresolved controller (Key=${key}, ip=${clientIp ?? 'unknown'}). ` +
+          `No matching DeviceConfig by serial or IP — a buzzer command could not be delivered.`,
+      );
     }
 
     return { Key: key };
