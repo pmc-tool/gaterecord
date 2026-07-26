@@ -708,11 +708,12 @@ export class SimulatorService {
   ): Promise<void> {
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
     const reportToken = this.securityAlertService.generateReportToken(accessEvent.id);
-    const reportUrl = `${frontendUrl}/report-unauthorized?eventId=${accessEvent.id}&token=${reportToken}`;
+    const reportUrl = `${frontendUrl}/gate-management/report-unauthorized?eventId=${accessEvent.id}&token=${reportToken}`;
 
     const buildingName = pass.tenant?.name || gate.tenant?.name || 'the building';
+    const residentName = `${resident.firstName} ${resident.lastName}`;
 
-    // Create database notification for resident
+    // Create in-app notification for resident (email handled separately below)
     await this.notificationService.notifyVisitorEntry(
       resident.id,
       pass.visitorName,
@@ -723,11 +724,24 @@ export class SimulatorService {
         gateName: gate.name,
         visitorName: pass.visitorName,
         visitorPassId: pass.id,
-        link: `/access-log?id=${accessEvent.id}`,
+        link: `/gate-management/report-unauthorized?eventId=${accessEvent.id}&token=${reportToken}`,
       },
+      false, // skip the generic email; send the dedicated report-button email instead
     );
 
-    this.logger.log(`Visitor entry notification sent to ${resident.email}`);
+    // Send the visitor-entry email containing the "Report Unauthorized" button
+    await this.emailService.sendVisitorEntryNotification(
+      resident.email,
+      residentName,
+      pass.visitorName,
+      buildingName,
+      gate.name,
+      accessEvent.createdAt,
+      accessEvent.id,
+      reportUrl,
+    );
+
+    this.logger.log(`Visitor entry notification (with report button) sent to ${resident.email}`);
   }
 
   private async handleObstacle(gate: Gate, detected: boolean): Promise<SimulatorFeedbackDto> {

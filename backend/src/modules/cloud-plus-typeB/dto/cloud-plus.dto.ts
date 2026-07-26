@@ -120,9 +120,16 @@ export class GetStatusRequestDto {
 
 /**
  * GetStatus Response - Heartbeat acknowledgment
+ *
+ * Optionally carries an alarm command back to an HTTP-mode controller:
+ *   AcsRes '2' + ActIndex '2' + Time N = fire the ALARM relay for N seconds
+ *   AcsRes '3' + ActIndex '2'          = close (silence) the ALARM relay
  */
 export class GetStatusResponseDto {
   Key: string; // Echo back the key
+  AcsRes?: string; // Optional command result (2=alarm, 3=close)
+  ActIndex?: string; // Optional relay position (2=alarm relay)
+  Time?: string; // Optional relay hold time in seconds
 }
 
 /**

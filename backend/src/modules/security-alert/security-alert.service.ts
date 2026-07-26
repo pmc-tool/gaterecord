@@ -16,6 +16,7 @@ import { GatewayService } from '../gateway/gateway.service';
 import { EmailService } from '../notification/email.service';
 import { NotificationService } from '../notification/notification.service';
 import { CloudPlusTcpService } from '../cloud-plus-typeB-tcp/cloud-plus-tcp.service';
+import { PendingAlarmService } from '../cloud-plus-typeB/pending-alarm.service';
 
 export interface CreateSecurityAlertDto {
   tenantId: string;
@@ -61,6 +62,7 @@ export class SecurityAlertService {
     private readonly notificationService: NotificationService,
     @Inject(forwardRef(() => CloudPlusTcpService))
     private readonly tcpService: CloudPlusTcpService,
+    private readonly pendingAlarmService: PendingAlarmService,
   ) {}
 
   async create(dto: CreateSecurityAlertDto): Promise<SecurityAlert> {
@@ -149,11 +151,52 @@ export class SecurityAlertService {
         });
         this.logger.warn(`Hardware alarm triggered on controllers: ${serials.join(', ')}`);
       } else {
-        this.logger.warn(`No connected controllers found for hardware alarm`);
+        this.logger.warn(`No TCP-connected controllers found for hardware alarm`);
       }
+
+      // Also arm the HTTP-mode alarm queue. HTTP-client controllers hold no TCP
+      // socket, so the TCP path above no-ops for them; this delivers the alarm on
+      // the controller's next GetStatus heartbeat instead. Harmless for TCP units.
+      await this.armHttpAlarm(alert);
     } catch (error) {
       this.logger.error(`Failed to trigger hardware alarm: ${error}`);
     }
+  }
+
+  /**
+   * Arm the pending-alarm queue for every controller serial behind this alert,
+   * so an HTTP-mode controller sounds its alarm relay on the next heartbeat.
+   */
+  private async armHttpAlarm(alert: SecurityAlert): Promise<void> {
+    const serials = await this.resolveControllerSerials(alert);
+    if (serials.length === 0) {
+      this.logger.error(
+        `[HTTP-ALARM] No controller serials resolved for alert ${alert.id} ` +
+          `(gateId=${alert.gateId ?? 'none'}, controllerSerial=${alert.controllerSerial ?? 'none'}). ` +
+          `Buzzer will NOT fire — register a DeviceConfig (deviceId=controller serial) for this gate.`,
+      );
+      return;
+    }
+    this.logger.warn(`[HTTP-ALARM] Arming buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`);
+    for (const serial of serials) {
+      this.pendingAlarmService.arm(serial);
+    }
+  }
+
+  /** Collect controller serials from the alert's controllerSerial or its gate. */
+  private async resolveControllerSerials(alert: SecurityAlert): Promise<string[]> {
+    if (alert.controllerSerial) {
+      return [alert.controllerSerial];
+    }
+    if (alert.gateId) {
+      const devices = await this.deviceRepository.find({ where: { gateId: alert.gateId } });
+      const serials = devices.map((d) => d.deviceId).filter((s): s is string => !!s);
+      this.logger.debug(
+        `[HTTP-ALARM] Gate ${alert.gateId} → ${devices.length} device(s), serials: [${serials.join(', ')}]`,
+      );
+      return serials;
+    }
+    return [];
   }
 
   /**
@@ -161,6 +204,16 @@ export class SecurityAlertService {
    */
   private async stopHardwareAlarm(alert: SecurityAlert): Promise<void> {
     try {
+      // Always disarm the HTTP alarm queue so the CLOSE command is delivered on
+      // the controller's next heartbeat, even if the TCP path was never used.
+      const serials = await this.resolveControllerSerials(alert);
+      if (serials.length > 0) {
+        this.logger.warn(`[HTTP-ALARM] Silencing buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`);
+      }
+      for (const serial of serials) {
+        this.pendingAlarmService.disarm(serial);
+      }
+
       if (!alert.hardwareAlarmSent) return;
 
       let success = false;
@@ -186,6 +239,8 @@ export class SecurityAlertService {
     accessEventId: string,
     reportToken: string,
   ): Promise<SecurityAlert> {
+    this.logger.warn(`[REPORT] Unauthorized-visitor report received for accessEvent=${accessEventId}`);
+
     // The reportToken is base64 encoded combination of accessEventId and timestamp
     // Verify the token matches the access event
     try {
@@ -193,9 +248,14 @@ export class SecurityAlertService {
       const [tokenEventId] = decoded.split(':');
 
       if (tokenEventId !== accessEventId) {
+        this.logger.error(
+          `[REPORT] Token mismatch: token points to ${tokenEventId}, request is ${accessEventId}`,
+        );
         throw new ForbiddenException('Invalid report token');
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof ForbiddenException) throw err;
+      this.logger.error(`[REPORT] Malformed report token for accessEvent=${accessEventId}`);
       throw new ForbiddenException('Invalid report token');
     }
 
