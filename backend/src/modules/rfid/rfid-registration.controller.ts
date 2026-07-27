@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsUUID, IsIn, IsOptional, IsBoolean } from 'class-validator';
+import { IsString, IsUUID, IsIn, IsOptional, IsBoolean, IsInt } from 'class-validator';
 import { RfidRegistrationService } from './rfid-registration.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -32,6 +32,24 @@ class StartRegistrationDto {
   @IsOptional()
   @IsUUID()
   tenantId?: string;
+
+  // ── Optional reader scope ────────────────────────────────────────────────
+  // Pins the session to one physical reader so ONLY a tap there completes it.
+  // Omitted by the phone-NFC and typed-UID flows, which stay tenant-wide.
+  @IsOptional()
+  @IsUUID()
+  gateId?: string;
+
+  /** DeviceConfig.id (uuid PK), not the controller serial. */
+  @IsOptional()
+  @IsUUID()
+  deviceId?: string;
+
+  /** Cloud Plus reader channel: 0 = Reader A, 1 = Reader B. */
+  @IsOptional()
+  @IsInt()
+  @IsIn([0, 1])
+  readerChannel?: number;
 }
 
 class CancelRegistrationDto {
@@ -72,7 +90,7 @@ export class RfidRegistrationController {
   @Post('start')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Start RFID card registration session' })
-  startRegistration(@CurrentUser() user: User, @Body() dto: StartRegistrationDto) {
+  async startRegistration(@CurrentUser() user: User, @Body() dto: StartRegistrationDto) {
     // The tenant comes from the caller, never the body — a non-super-admin
     // cannot register a card into another building.
     const tenantId =
@@ -84,17 +102,25 @@ export class RfidRegistrationController {
     this.logger.log(`Target Type: ${dto.targetType}`);
     this.logger.log(`Target ID: ${dto.targetId}`);
 
-    const { sessionId, expiresAt } = this.rfidRegistrationService.startSession(
-      dto.targetType,
-      dto.targetId,
-      tenantId,
-    );
+    let session: { sessionId: string; expiresAt: Date };
+    try {
+      session = await this.rfidRegistrationService.startSession(
+        dto.targetType,
+        dto.targetId,
+        tenantId,
+        { gateId: dto.gateId, deviceId: dto.deviceId, readerChannel: dto.readerChannel },
+      );
+    } catch (error) {
+      // A bad reader scope is a client mistake, not a server fault.
+      const msg = error instanceof Error ? error.message : 'Failed to start registration';
+      throw new BadRequestException(msg);
+    }
 
-    this.logger.log(`Session created: ${sessionId}`);
+    this.logger.log(`Session created: ${session.sessionId}`);
 
     return {
-      sessionId,
-      expiresAt: expiresAt.toISOString(),
+      sessionId: session.sessionId,
+      expiresAt: session.expiresAt.toISOString(),
       message: 'Registration session started. Please scan the RFID card.',
     };
   }

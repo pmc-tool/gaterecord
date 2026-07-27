@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { Vehicle } from '@database/entities/vehicle.entity';
+import { Gate } from '@database/entities/gate.entity';
+import { DeviceConfig } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
 
 /**
@@ -13,6 +15,32 @@ import { GatewayService } from '../gateway/gateway.service';
  */
 export type RegistrationTargetType = 'vehicle' | 'vehicle-card' | 'resident';
 
+/**
+ * Optionally pins a session to one physical reader, so the admin can pick
+ * "Main Gate -> CTRL-002 -> Reader A" and have ONLY a tap there complete this
+ * registration.
+ *
+ * Every field is optional and a session with none of them set stays
+ * tenant-wide — that is the pre-existing behaviour the phone-NFC and typed-UID
+ * flows rely on, and it must keep working untouched.
+ *
+ * `readerChannel` is the Cloud Plus `Reader` value: 0 and 1 are the two card
+ * readers (Reader A / Reader B); channel 2 is the alarm relay, not a reader.
+ */
+export interface RegistrationScope {
+  gateId?: string;
+  /** DeviceConfig.id (the uuid PK), not the controller serial. */
+  deviceId?: string;
+  readerChannel?: number;
+}
+
+/** Where a scan physically happened, as resolved by the Cloud Plus handler. */
+export interface ScanContext {
+  gateId?: string;
+  deviceId?: string;
+  readerChannel?: number;
+}
+
 interface RegistrationSession {
   sessionId: string;
   targetType: RegistrationTargetType;
@@ -20,6 +48,10 @@ interface RegistrationSession {
   tenantId: string;
   createdAt: Date;
   expiresAt: Date;
+  /** Unset for the tenant-wide (phone NFC / typed UID) flows. */
+  gateId?: string;
+  deviceId?: string;
+  readerChannel?: number;
 }
 
 @Injectable()
@@ -33,6 +65,10 @@ export class RfidRegistrationService {
     private rfidCardRepository: Repository<RfidCard>,
     @InjectRepository(Vehicle)
     private vehicleRepository: Repository<Vehicle>,
+    @InjectRepository(Gate)
+    private gateRepository: Repository<Gate>,
+    @InjectRepository(DeviceConfig)
+    private deviceConfigRepository: Repository<DeviceConfig>,
     @Inject(forwardRef(() => GatewayService))
     private gatewayService: GatewayService,
   ) {
@@ -43,11 +79,16 @@ export class RfidRegistrationService {
   /**
    * Start a new RFID registration session
    */
-  startSession(
+  async startSession(
     targetType: RegistrationTargetType,
     targetId: string,
     tenantId: string,
-  ): { sessionId: string; expiresAt: Date } {
+    scope?: RegistrationScope,
+  ): Promise<{ sessionId: string; expiresAt: Date }> {
+    // Validate the scope against the CALLER's tenant before trusting it, so a
+    // building admin cannot pin a session to another building's reader.
+    const validScope = await this.validateScope(tenantId, scope);
+
     const sessionId = uuidv4();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 5 * 60 * 1000); // 5 minutes
@@ -59,6 +100,7 @@ export class RfidRegistrationService {
       tenantId,
       createdAt: now,
       expiresAt,
+      ...validScope,
     };
 
     this.activeSessions.set(sessionId, session);
@@ -73,10 +115,74 @@ export class RfidRegistrationService {
     this.logger.log(`Session ID: ${sessionId}`);
     this.logger.log(`Target: ${targetType}:${targetId}`);
     this.logger.log(`Tenant ID: ${tenantId}`);
+    this.logger.log(
+      `Scope: ${
+        this.isScoped(session)
+          ? `gate=${session.gateId ?? '*'} device=${session.deviceId ?? '*'} reader=${
+              session.readerChannel ?? '*'
+            }`
+          : 'tenant-wide (any reader)'
+      }`,
+    );
     this.logger.log(`Expires at: ${expiresAt.toISOString()}`);
     this.logger.log(`Total active sessions: ${this.activeSessions.size}`);
 
     return { sessionId, expiresAt };
+  }
+
+  /**
+   * Reject a scope that does not belong to the caller's tenant, and a device
+   * that is not actually attached to the chosen gate — otherwise the session
+   * could never be completed and the admin would wait at a reader forever.
+   *
+   * An empty/absent scope is valid and yields an empty object, which is what
+   * keeps the tenant-wide flows behaving exactly as before.
+   */
+  private async validateScope(
+    tenantId: string,
+    scope?: RegistrationScope,
+  ): Promise<RegistrationScope> {
+    if (!scope || (!scope.gateId && !scope.deviceId && scope.readerChannel === undefined)) {
+      return {};
+    }
+
+    if (scope.readerChannel !== undefined && ![0, 1].includes(scope.readerChannel)) {
+      // Channel 2 is the alarm relay on this controller, never a card reader.
+      throw new Error('readerChannel must be 0 (Reader A) or 1 (Reader B)');
+    }
+
+    if (scope.gateId) {
+      const gate = await this.gateRepository.findOne({
+        where: { id: scope.gateId, tenantId },
+      });
+      if (!gate) {
+        throw new Error('Gate not found in this building');
+      }
+    }
+
+    if (scope.deviceId) {
+      const device = await this.deviceConfigRepository.findOne({
+        where: { id: scope.deviceId, tenantId },
+      });
+      if (!device) {
+        throw new Error('Device not found in this building');
+      }
+      if (scope.gateId && device.gateId !== scope.gateId) {
+        throw new Error('Device is not assigned to the selected gate');
+      }
+    }
+
+    return {
+      gateId: scope.gateId,
+      deviceId: scope.deviceId,
+      readerChannel: scope.readerChannel,
+    };
+  }
+
+  private isScoped(session: RegistrationSession): boolean {
+    return Boolean(
+      session.gateId || session.deviceId || session.readerChannel !== undefined,
+    );
   }
 
   /**
@@ -116,6 +222,52 @@ export class RfidRegistrationService {
   }
 
   /**
+   * Pick the session a scan at a given reader should complete.
+   *
+   * A SCOPED session wins over a tenant-wide one, and only when every scope
+   * field it declares matches where the scan actually happened. That is what
+   * lets two admins register at two different readers at the same time without
+   * binding a card to the wrong person — the bug the old
+   * "first session in the tenant" lookup had.
+   *
+   * A tenant-wide session (no scope) still matches ANY scan in the building,
+   * so the existing phone-NFC and typed-UID flows are unaffected.
+   */
+  getActiveSessionForScan(tenantId: string, ctx: ScanContext = {}): RegistrationSession | null {
+    const sessionIds = this.sessionsByTenant.get(tenantId);
+    if (!sessionIds || sessionIds.size === 0) {
+      return null;
+    }
+
+    const now = new Date();
+    let tenantWide: RegistrationSession | null = null;
+
+    for (const sessionId of sessionIds) {
+      const session = this.activeSessions.get(sessionId);
+      if (!session || session.expiresAt <= now) continue;
+
+      if (!this.isScoped(session)) {
+        // Remember it, but keep looking for a scoped session that matches.
+        tenantWide = tenantWide ?? session;
+        continue;
+      }
+
+      if (session.gateId && session.gateId !== ctx.gateId) continue;
+      if (session.deviceId && session.deviceId !== ctx.deviceId) continue;
+      if (
+        session.readerChannel !== undefined &&
+        session.readerChannel !== ctx.readerChannel
+      ) {
+        continue;
+      }
+
+      return session;
+    }
+
+    return tenantWide;
+  }
+
+  /**
    * Process an RFID scan during registration mode
    * Returns true if the scan was handled by a registration session
    */
@@ -123,6 +275,7 @@ export class RfidRegistrationService {
     tenantId: string,
     rfidUid: string,
     scanType: 'vehicle' | 'human',
+    ctx: ScanContext = {},
   ): Promise<boolean> {
     this.logger.log(`========================================`);
     this.logger.log(`RFID SCAN RECEIVED - Checking for registration`);
@@ -138,9 +291,18 @@ export class RfidRegistrationService {
       );
     });
 
-    const session = this.getActiveSessionForTenant(tenantId);
+    this.logger.log(
+      `Scan context: gate=${ctx.gateId ?? '-'} device=${ctx.deviceId ?? '-'} reader=${
+        ctx.readerChannel ?? '-'
+      }`,
+    );
+
+    // Returning false here is the safe outcome: the Cloud Plus handler falls
+    // through to normal access validation, so a resident tapping at a reader
+    // that is NOT the one being registered against simply opens the gate.
+    const session = this.getActiveSessionForScan(tenantId, ctx);
     if (!session) {
-      this.logger.log(`NO REGISTRATION SESSION for tenant ${tenantId}`);
+      this.logger.log(`NO MATCHING REGISTRATION SESSION for tenant ${tenantId} at this reader`);
       this.logger.log(
         `Available tenant sessions: ${JSON.stringify(Array.from(this.sessionsByTenant.keys()))}`,
       );
@@ -403,6 +565,9 @@ export class RfidRegistrationService {
         tenantId: session.tenantId,
         targetType: session.targetType,
         targetId: session.targetId,
+        gateId: session.gateId ?? null,
+        deviceId: session.deviceId ?? null,
+        readerChannel: session.readerChannel ?? null,
         expiresAt: session.expiresAt.toISOString(),
       });
     });
