@@ -157,10 +157,19 @@ export class CloudPlusService {
         if (this.rfidRegistrationService.hasActiveSession(tenantId)) {
           const normalizedUid = card.toUpperCase().replace(/:/g, '');
           const scanType = handleType === 'vehicle' ? 'vehicle' : 'human';
+          // Tell the registration service WHERE this tap happened. A session
+          // pinned to one reader only completes on a match; on a mismatch this
+          // returns false and we fall through to normal access validation, so a
+          // resident tapping elsewhere still just opens the gate.
           const handled = await this.rfidRegistrationService.processRegistrationScan(
             tenantId,
             normalizedUid,
             scanType,
+            {
+              gateId: activeGate.id,
+              deviceId: device?.id,
+              readerChannel: reader,
+            },
           );
           if (handled) {
             const registrationResult: ValidationResult = {
@@ -237,6 +246,7 @@ export class CloudPlusService {
         activeGate,
         validationResult,
         this.getAccessMethod(credentialType),
+        { deviceId: device?.id, readerChannel: reader },
       );
 
       // Step 5: Notify frontend via WebSocket
@@ -865,6 +875,10 @@ export class CloudPlusService {
     gate: Gate,
     result: ValidationResult,
     method: AccessMethod,
+    // Which physical reader reported this scan. Recorded in `metadata` rather
+    // than as columns so this needs no migration; both are optional so the
+    // simulator (which has no device) still logs cleanly.
+    origin?: { deviceId?: string; readerChannel?: number },
   ): Promise<AccessEvent> {
     const subjectTypeMap: Record<string, AccessSubjectType> = {
       vehicle: AccessSubjectType.VEHICLE,
@@ -894,6 +908,10 @@ export class CloudPlusService {
       metadata: {
         source: 'cloud-plus-typeB',
         info: result.info,
+        ...(origin?.deviceId ? { deviceId: origin.deviceId } : {}),
+        ...(origin?.readerChannel !== undefined
+          ? { readerChannel: origin.readerChannel }
+          : {}),
       },
     });
 
