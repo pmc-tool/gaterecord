@@ -23,6 +23,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { UserSyncModule } from './modules/user-sync/user-sync.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { PlanUsageModule } from './modules/plan-usage/plan-usage.module';
+import { ResidentRequestsModule } from './modules/resident-requests/resident-requests.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { SubscriptionGuard } from './common/guards/subscription.guard';
 import { HealthController } from './health.controller';
@@ -69,6 +70,7 @@ import { HealthController } from './health.controller';
     UserSyncModule,
     OnboardingModule,
     PlanUsageModule,
+    ResidentRequestsModule,
   ],
   controllers: [HealthController],
   providers: [
