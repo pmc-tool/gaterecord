@@ -9,12 +9,9 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole } from '@database/entities/user.entity';
-import {
-  Tenant,
-  TenantStatus,
-  SubscriptionStatus,
-} from '@database/entities/tenant.entity';
+import { Tenant, TenantStatus, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
+import { BuildingJoinRequest } from '@database/entities/building-join-request.entity';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 
@@ -40,6 +37,8 @@ export class OnboardingService {
     private tenantRepository: Repository<Tenant>,
     @InjectRepository(SubscriptionPlan)
     private subscriptionPlanRepository: Repository<SubscriptionPlan>,
+    @InjectRepository(BuildingJoinRequest)
+    private joinRequestRepository: Repository<BuildingJoinRequest>,
   ) {}
 
   /**
@@ -72,10 +71,28 @@ export class OnboardingService {
 
     const plans = await this.getSubscriptionPlans();
 
+    // Purely additive — every existing field keeps its exact meaning.
+    //
+    // Someone waiting on a building admin's decision is still stored as
+    // role=building_admin with no tenant, because changing the role before
+    // approval would strand them. That makes them indistinguishable from a
+    // building admin who simply has not created their building yet, so the
+    // client cannot tell the two apart without this. Skipped entirely once a
+    // tenant exists: an onboarded user is not waiting on anything.
+    const joinRequestStatus = user.tenantId
+      ? null
+      : ((
+          await this.joinRequestRepository.findOne({
+            where: { userId: user.id },
+            order: { createdAt: 'DESC' },
+          })
+        )?.status ?? null);
+
     return {
       needsOnboarding: user.tenantId === null || user.tenantId === undefined,
       tenantId: user.tenantId ?? null,
       role: user.role,
+      joinRequestStatus,
       tenant: user.tenant
         ? {
             id: user.tenant.id,
@@ -213,9 +230,7 @@ export class OnboardingService {
     // after that the expiry cron suspends the tenant and the SubscriptionGuard
     // makes it read-only until they subscribe.
     const validityDays = selectedPlan.defaultValidityDays || 60;
-    const trialExpiresAt = new Date(
-      Date.now() + validityDays * 24 * 60 * 60 * 1000,
-    );
+    const trialExpiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000);
 
     // Free plan → ACTIVE immediately. No PENDING_PAYMENT / TRIALING here: payment
     // for a paid plan happens later, through checkout.
