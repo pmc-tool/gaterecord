@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
+import { User, UserRole } from '@database/entities/user.entity';
 import { Vehicle } from '@database/entities/vehicle.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
@@ -63,6 +64,8 @@ export class RfidRegistrationService {
   constructor(
     @InjectRepository(RfidCard)
     private rfidCardRepository: Repository<RfidCard>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     @InjectRepository(Vehicle)
     private vehicleRepository: Repository<Vehicle>,
     @InjectRepository(Gate)
@@ -315,7 +318,7 @@ export class RfidRegistrationService {
     try {
       // Save the RFID UID to the appropriate target
       if (session.targetType === 'vehicle') {
-        await this.assignRfidToVehicle(session.targetId, rfidUid);
+        await this.assignRfidToVehicle(session.targetId, session.tenantId, rfidUid);
       } else if (session.targetType === 'vehicle-card') {
         await this.createRfidCardForVehicle(session.targetId, session.tenantId, rfidUid);
       } else {
@@ -387,7 +390,7 @@ export class RfidRegistrationService {
     this.logger.log(`Manual scan for session ${sessionId}: ${normalizedUid}`);
 
     if (session.targetType === 'vehicle') {
-      await this.assignRfidToVehicle(session.targetId, normalizedUid);
+      await this.assignRfidToVehicle(session.targetId, session.tenantId, normalizedUid);
     } else if (session.targetType === 'vehicle-card') {
       await this.createRfidCardForVehicle(session.targetId, session.tenantId, normalizedUid);
     } else {
@@ -410,9 +413,15 @@ export class RfidRegistrationService {
   /**
    * Assign RFID UID to a vehicle
    */
-  private async assignRfidToVehicle(vehicleId: string, rfidUid: string): Promise<void> {
+  private async assignRfidToVehicle(
+    vehicleId: string,
+    tenantId: string,
+    rfidUid: string,
+  ): Promise<void> {
     const vehicle = await this.vehicleRepository.findOne({ where: { id: vehicleId } });
-    if (!vehicle) {
+    // Same building as the session, as createRfidCardForVehicle already
+    // requires: otherwise an admin could set the tag of any building's vehicle.
+    if (!vehicle || vehicle.tenantId !== tenantId) {
       throw new Error('Vehicle not found');
     }
 
@@ -441,6 +450,14 @@ export class RfidRegistrationService {
     tenantId: string,
     rfidUid: string,
   ): Promise<RfidCard> {
+    // The session may have been opened before the resident was removed from the
+    // building. A card created for them now would still open the gate, because
+    // the gate checks the card's validity window, not its holder's building.
+    const resident = await this.userRepository.findOne({ where: { id: userId } });
+    if (!resident || resident.role !== UserRole.RESIDENT || resident.tenantId !== tenantId) {
+      throw new Error('This resident is no longer in the building');
+    }
+
     await this.assertUidFree(tenantId, rfidUid);
 
     const card = this.rfidCardRepository.create({

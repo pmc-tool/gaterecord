@@ -489,7 +489,24 @@ export class CloudPlusService {
 
   private validateVehicleAccess(vehicle: Vehicle, rfidUid: string): ValidationResult {
     const now = new Date();
-    const ownerName = `${vehicle.owner.firstName} ${vehicle.owner.lastName}`;
+    const owner = vehicle.owner;
+    const ownerName = owner ? `${owner.firstName} ${owner.lastName}` : 'Vehicle';
+
+    // Access comes from the owner's place in the building, not from the tag
+    // alone, so a vehicle whose owner has left (or whose owner row is gone)
+    // cannot open the gate.
+    if (!owner || owner.tenantId !== vehicle.tenantId) {
+      return {
+        allowed: false,
+        name: ownerName,
+        info: vehicle.licensePlate,
+        subjectType: 'vehicle',
+        subjectId: vehicle.id,
+        subjectIdentifier: rfidUid,
+        residentId: vehicle.ownerId,
+        denialReason: 'Owner no longer in this building',
+      };
+    }
 
     // Check validity period
     if (vehicle.validFrom && vehicle.validFrom > now) {
@@ -552,6 +569,10 @@ export class CloudPlusService {
       residentId: vehicle.ownerId,
     };
 
+    // As for the vehicle's own tag: no owner in this building, no access.
+    if (!vehicle.owner || vehicle.owner.tenantId !== vehicle.tenantId) {
+      return { ...base, allowed: false, denialReason: 'Owner no longer in this building' };
+    }
     if (vehicle.status !== VehicleStatus.ACTIVE) {
       return { ...base, allowed: false, denialReason: 'Vehicle inactive' };
     }
@@ -567,6 +588,20 @@ export class CloudPlusService {
   private validateRfidCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {
     const now = new Date();
     const userName = `${rfidCard.user.firstName} ${rfidCard.user.lastName}`;
+
+    // The card only works for someone who still belongs to this building.
+    if (rfidCard.user.tenantId !== rfidCard.tenantId) {
+      return {
+        allowed: false,
+        name: userName,
+        info: 'Access Card',
+        subjectType: 'rfid_card',
+        subjectId: rfidCard.id,
+        subjectIdentifier: rfidUid,
+        residentId: rfidCard.userId,
+        denialReason: 'Card holder no longer in this building',
+      };
+    }
 
     // Check validity period
     if (rfidCard.validFrom && rfidCard.validFrom > now) {

@@ -5,6 +5,8 @@ import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
 import { User } from '@database/entities/user.entity';
 
+import { ResidentRemovalService } from '@modules/residents/resident-removal.service';
+
 import { ResidentRequestsService } from './resident-requests.service';
 import { CreateJoinRequestDto } from './dto/create-join-request.dto';
 import { SearchBuildingsDto } from './dto/search-buildings.dto';
@@ -30,7 +32,10 @@ import { SearchBuildingsDto } from './dto/search-buildings.dto';
 @Controller('resident-join')
 @SubscriptionExempt()
 export class ResidentJoinController {
-  constructor(private readonly residentRequestsService: ResidentRequestsService) {}
+  constructor(
+    private readonly residentRequestsService: ResidentRequestsService,
+    private readonly residentRemovalService: ResidentRemovalService,
+  ) {}
 
   @Get('buildings')
   @ApiOperation({ summary: 'Search buildings to request joining as a resident' })
@@ -44,7 +49,7 @@ export class ResidentJoinController {
   @ApiOperation({ summary: "Get the caller's own latest join request, or null" })
   @ApiResponse({ status: 200, description: 'The latest request, or null if none was ever made' })
   async getMyRequest(@CurrentUser() user: User) {
-    return this.residentRequestsService.getMyRequest(user.id);
+    return this.residentRequestsService.getMyRequest(user);
   }
 
   @Post('request')
@@ -66,5 +71,21 @@ export class ResidentJoinController {
   @ApiResponse({ status: 404, description: 'No request awaiting review' })
   async cancelMyRequest(@CurrentUser() user: User) {
     return this.residentRequestsService.cancelMyRequest(user.id);
+  }
+
+  /**
+   * The resident's own way out, and the counterpart to createRequest. Exempt
+   * from SubscriptionGuard with the rest of this controller, so a resident can
+   * leave even while the building's subscription is suspended.
+   */
+  @Post('leave')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Leave your building: releases your cards and vehicles, keeps your account',
+  })
+  @ApiResponse({ status: 204, description: 'You are now a new gate-management user' })
+  @ApiResponse({ status: 409, description: 'Not currently a resident of any building' })
+  async leaveBuilding(@CurrentUser() user: User) {
+    await this.residentRemovalService.removeFromBuilding(user.id);
   }
 }

@@ -13,6 +13,7 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { CreateResidentDto, UpdateResidentDto } from './dto/resident.dto';
 import { AccountIdentityClient } from '../account-identity/account-identity.client';
 import { EmailService } from '../notification/email.service';
+import { ResidentRemovalService } from './resident-removal.service';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -28,6 +29,7 @@ export class ResidentsService {
     private readonly accountIdentityClient: AccountIdentityClient,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    private readonly residentRemovalService: ResidentRemovalService,
   ) {}
 
   async findAll(currentUser: User, query: { search?: string; tenantId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: User[]; total: number; page: number; limit: number }> {
@@ -141,6 +143,14 @@ export class ResidentsService {
     });
 
     if (existingUser) {
+      // Typically a resident who left or was removed: their account was reset,
+      // not deleted, so it still owns the email. Moving an account into a
+      // building is the person's decision, so point the admin at the join flow.
+      if (!existingUser.tenantId && existingUser.role !== UserRole.SUPER_ADMIN) {
+        throw new ConflictException(
+          'This person already has a Gate Management account. Ask them to choose "Join as a resident" in Gate Management and pick your building, then approve their request.',
+        );
+      }
       throw new ConflictException('Email already in use');
     }
 
@@ -245,8 +255,13 @@ export class ResidentsService {
     return this.userRepository.save(resident);
   }
 
+  /**
+   * Removes the resident from the building rather than deleting the row: their
+   * cards and vehicles are released and they become a new gate-management user.
+   * See ResidentRemovalService.
+   */
   async remove(id: string, currentUser: User): Promise<void> {
     const resident = await this.findOne(id, currentUser);
-    await this.userRepository.remove(resident);
+    await this.residentRemovalService.removeFromBuilding(resident.id, resident.tenantId);
   }
 }

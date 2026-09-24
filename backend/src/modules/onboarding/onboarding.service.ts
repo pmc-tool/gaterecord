@@ -11,7 +11,10 @@ import { Repository } from 'typeorm';
 import { User, UserRole } from '@database/entities/user.entity';
 import { Tenant, TenantStatus, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
-import { BuildingJoinRequest } from '@database/entities/building-join-request.entity';
+import {
+  BuildingJoinRequest,
+  JoinRequestStatus,
+} from '@database/entities/building-join-request.entity';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 
@@ -79,14 +82,18 @@ export class OnboardingService {
     // building admin who simply has not created their building yet, so the
     // client cannot tell the two apart without this. Skipped entirely once a
     // tenant exists: an onboarded user is not waiting on anything.
-    const joinRequestStatus = user.tenantId
+    const latestRequest = user.tenantId
       ? null
-      : ((
-          await this.joinRequestRepository.findOne({
-            where: { userId: user.id },
-            order: { createdAt: 'DESC' },
-          })
-        )?.status ?? null);
+      : await this.joinRequestRepository.findOne({
+          where: { userId: user.id },
+          order: { createdAt: 'DESC' },
+        });
+    // Without a tenant, an approved request belongs to a building the user has
+    // since left or been removed from, so it says nothing about them now.
+    const joinRequestStatus =
+      latestRequest && latestRequest.status !== JoinRequestStatus.APPROVED
+        ? latestRequest.status
+        : null;
 
     return {
       needsOnboarding: user.tenantId === null || user.tenantId === undefined,
