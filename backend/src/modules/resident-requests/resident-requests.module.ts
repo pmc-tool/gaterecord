@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BuildingJoinRequest } from '@database/entities/building-join-request.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { User } from '@database/entities/user.entity';
+import { ResidentsModule } from '@modules/residents/residents.module';
 
 import { ResidentJoinController } from './resident-join.controller';
 import { ResidentRequestsController } from './resident-requests.controller';
@@ -20,7 +21,7 @@ import { ResidentRequestsService } from './resident-requests.service';
  * NotificationService needs no import here: NotificationModule is @Global().
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([BuildingJoinRequest, User, Tenant])],
+  imports: [TypeOrmModule.forFeature([BuildingJoinRequest, User, Tenant]), ResidentsModule],
   controllers: [ResidentJoinController, ResidentRequestsController],
   providers: [ResidentRequestsService],
   exports: [ResidentRequestsService],

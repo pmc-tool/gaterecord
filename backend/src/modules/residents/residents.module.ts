@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ResidentsController } from './residents.controller';
 import { ResidentsService } from './residents.service';
+import { ResidentRemovalService } from './resident-removal.service';
 import { User } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { AccountIdentityModule } from '../account-identity/account-identity.module';
@@ -9,7 +10,7 @@ import { AccountIdentityModule } from '../account-identity/account-identity.modu
 @Module({
   imports: [TypeOrmModule.forFeature([User, Tenant]), AccountIdentityModule],
   controllers: [ResidentsController],
-  providers: [ResidentsService],
-  exports: [ResidentsService],
+  providers: [ResidentsService, ResidentRemovalService],
+  exports: [ResidentsService, ResidentRemovalService],
 })
 export class ResidentsModule {}

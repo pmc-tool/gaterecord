@@ -16,6 +16,7 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { CreateUserDto, UpdateUserDto, UserQueryDto } from './dto/user.dto';
 import { AccountIdentityClient } from '../account-identity/account-identity.client';
 import { EmailService } from '../notification/email.service';
+import { ResidentRemovalService } from '../residents/resident-removal.service';
 
 @Injectable()
 export class UsersService {
@@ -29,6 +30,7 @@ export class UsersService {
     private accountIdentityClient: AccountIdentityClient,
     private emailService: EmailService,
     private configService: ConfigService,
+    private residentRemovalService: ResidentRemovalService,
   ) {}
 
   async create(createUserDto: CreateUserDto, currentUser: User): Promise<User> {
@@ -214,8 +216,13 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    // Check access
-    if (currentUser.role !== UserRole.SUPER_ADMIN && user.tenantId !== currentUser.tenantId) {
+    // Check access. A caller with no building must be refused outright: every
+    // other user without one would otherwise match (null === null), and those
+    // callers include every new user and every removed resident.
+    if (
+      currentUser.role !== UserRole.SUPER_ADMIN &&
+      (!currentUser.tenantId || user.tenantId !== currentUser.tenantId)
+    ) {
       throw new ForbiddenException('Access denied');
     }
 
@@ -235,6 +242,16 @@ export class UsersService {
       }
     }
 
+    // Only a super admin moves people between buildings. The web form sends the
+    // admin's own building, which is unchanged and therefore allowed.
+    if (
+      currentUser.role !== UserRole.SUPER_ADMIN &&
+      updateUserDto.tenantId !== undefined &&
+      updateUserDto.tenantId !== user.tenantId
+    ) {
+      throw new ForbiddenException('Cannot move a user to another building');
+    }
+
     if (updateUserDto.password) {
       const passwordHash = await bcrypt.hash(updateUserDto.password, 10);
       Object.assign(user, { ...updateUserDto, passwordHash });
@@ -252,6 +269,13 @@ export class UsersService {
     // Prevent self-deletion
     if (user.id === currentUser.id) {
       throw new ForbiddenException('Cannot delete yourself');
+    }
+
+    // A resident is taken out of the building, exactly as from the Residents
+    // page. Soft-deleting them would lock them out of gate management for good.
+    if (user.role === UserRole.RESIDENT) {
+      await this.residentRemovalService.removeFromBuilding(user.id, user.tenantId);
+      return;
     }
 
     await this.userRepository.softDelete(id);

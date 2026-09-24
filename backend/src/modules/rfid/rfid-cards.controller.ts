@@ -5,6 +5,7 @@ import {
   Param,
   HttpCode,
   HttpStatus,
+  ForbiddenException,
   NotFoundException,
   Query,
   Logger,
@@ -60,8 +61,12 @@ export class RfidCardsController {
       if (tenantId) where.tenantId = tenantId;
     } else {
       // Everyone else is confined to their own tenant; a supplied tenantId
-      // cannot widen that.
-      where.tenantId = user.tenantId as string;
+      // cannot widen that. A caller with no tenant must be refused: TypeORM
+      // drops a null condition, which would list every building's cards.
+      if (!user.tenantId) {
+        throw new ForbiddenException('User must belong to a tenant');
+      }
+      where.tenantId = user.tenantId;
     }
 
     return this.rfidCardRepository.find({

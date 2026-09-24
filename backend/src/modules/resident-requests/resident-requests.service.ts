@@ -146,14 +146,22 @@ export class ResidentRequestsService {
    * The caller's own latest request, or null. The frontend polls this to decide
    * between the chooser, the waiting screen and the rejection notice.
    */
-  async getMyRequest(userId: string) {
+  async getMyRequest(user: User) {
     const request = await this.requestRepository.findOne({
-      where: { userId },
+      where: { userId: user.id },
       relations: ['tenant'],
       order: { createdAt: 'DESC' },
     });
 
     if (!request) {
+      return null;
+    }
+
+    // An approval only means something while the user is still in that
+    // building. After they leave or are removed it is history, and reporting it
+    // would hold them on the "You're approved" screen instead of letting them
+    // start over like a new user.
+    if (request.status === JoinRequestStatus.APPROVED && request.tenantId !== user.tenantId) {
       return null;
     }
 

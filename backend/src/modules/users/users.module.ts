@@ -8,12 +8,14 @@ import { RfidCard } from '@database/entities/rfid-card.entity';
 import { Vehicle } from '@database/entities/vehicle.entity';
 import { UploadModule } from '../upload/upload.module';
 import { AccountIdentityModule } from '../account-identity/account-identity.module';
+import { ResidentsModule } from '../residents/residents.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Tenant, RfidCard, Vehicle]),
     UploadModule,
     AccountIdentityModule,
+    ResidentsModule,
   ],
   controllers: [UsersController],
   providers: [UsersService],

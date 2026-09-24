@@ -16,6 +16,7 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { LoginHistory } from '@database/entities/login-history.entity';
 import { StripeModule } from '../stripe/stripe.module';
+import { ResidentsModule } from '../residents/residents.module';
 
 @Module({
   imports: [
@@ -24,6 +25,8 @@ import { StripeModule } from '../stripe/stripe.module';
     TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken, Tenant, SubscriptionPlan, LoginHistory, GlobalUser]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     StripeModule,
+    // ResidentRemovalService: restores soft-deleted gate users as new users.
+    ResidentsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

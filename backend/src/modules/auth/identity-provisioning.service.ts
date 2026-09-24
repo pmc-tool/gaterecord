@@ -28,6 +28,7 @@ import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { GlobalUser, GlobalUserMeta } from '@database/entities/global-user.entity';
+import { ResidentRemovalService } from '../residents/resident-removal.service';
 
 /**
  * The identity claims this service consumes. Structurally compatible with
@@ -64,6 +65,7 @@ export class IdentityProvisioningService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(GlobalUser)
     private readonly globalUserRepository: Repository<GlobalUser>,
+    private readonly residentRemovalService: ResidentRemovalService,
   ) {}
 
   /**
@@ -200,8 +202,13 @@ export class IdentityProvisioningService {
    *   (b) by email    — a gaterecord account that predates the integration. It is
    *                     ADOPTED by stamping `userId`, never duplicated. Skipping
    *                     this would drive straight into the unique index on
-   *                     `gate_users.email` at (c).
-   *   (c) create      — a genuinely new user, provisioned as an unonboarded
+   *                     `gate_users.email` at (d).
+   *   (c) deleted     — a soft-deleted row. (a) and (b) cannot see it, but its
+   *                     `user_id` and `email` still hold the unique indexes, so
+   *                     (d) would fail on every request. It is restored as a new
+   *                     user instead: deleting someone removes them from gate
+   *                     management, it does not bar them from starting over.
+   *   (d) create      — a genuinely new user, provisioned as an unonboarded
    *                     building admin.
    */
   private async resolveGateUser(
@@ -233,8 +240,64 @@ export class IdentityProvisioningService {
       return byEmail;
     }
 
-    // (c) create.
+    // (c) deleted earlier.
+    const deleted = await this.findDeleted(sub, email);
+    if (deleted) {
+      return this.restoreDeletedGateUser(deleted, sub);
+    }
+
+    // (d) create.
     return this.createGateUser(sub, email, payload);
+  }
+
+  /**
+   * The soft-deleted row holding this identity's `user_id`, or failing that its
+   * email. Only reached after (a) and (b) found nothing live.
+   */
+  private async findDeleted(sub: string, email: string): Promise<User | null> {
+    const bySub = await this.userRepository.findOne({
+      where: { userId: sub },
+      withDeleted: true,
+    });
+    if (bySub) {
+      return bySub;
+    }
+
+    return this.userRepository
+      .createQueryBuilder('user')
+      .withDeleted()
+      .where('LOWER(user.email) = :email', { email })
+      .getOne();
+  }
+
+  /**
+   * Restores the row as a new user (see ResidentRemovalService), which also
+   * releases any cards, vehicles and passes it still held in its old building.
+   */
+  private async restoreDeletedGateUser(deleted: User, sub: string): Promise<User> {
+    if (deleted.userId && deleted.userId !== sub) {
+      // Same rule as (b): the address belongs to a different global identity.
+      this.logger.warn(
+        `Refusing to restore gate user ${deleted.id} for sub ${sub}: it is linked to a different identity`,
+      );
+      throw new UnauthorizedException('User not found');
+    }
+
+    // A no-op when a concurrent first request has already restored it.
+    await this.residentRemovalService.restoreDeletedUser(deleted.id);
+
+    const restored = await this.userRepository.findOne({ where: { id: deleted.id } });
+    if (!restored) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (!restored.userId) {
+      await this.userRepository.update(restored.id, { userId: sub });
+      restored.userId = sub;
+    }
+
+    this.logger.log(`Restored deleted gate user ${restored.id} as a new user for ${sub}`);
+    return restored;
   }
 
   /**

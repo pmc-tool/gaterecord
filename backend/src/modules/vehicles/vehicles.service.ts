@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -144,6 +145,8 @@ export class VehiclesService {
       throw new ConflictException('License plate already registered for this building');
     }
 
+    await this.assertOwnerInBuilding(createDto.ownerId, createDto.tenantId);
+
     const vehicle = this.vehicleRepository.create({
       ...createDto,
       status: createDto.isActive === false ? VehicleStatus.INACTIVE : VehicleStatus.ACTIVE,
@@ -153,6 +156,10 @@ export class VehiclesService {
 
   async update(id: string, updateDto: UpdateVehicleDto, currentUser: User): Promise<Vehicle> {
     const vehicle = await this.findOne(id, currentUser);
+
+    if (updateDto.ownerId && updateDto.ownerId !== vehicle.ownerId) {
+      await this.assertOwnerInBuilding(updateDto.ownerId, vehicle.tenantId);
+    }
 
     if (updateDto.rfidUid && updateDto.rfidUid !== vehicle.rfidUid) {
       const existingRfid = await this.vehicleRepository.findOne({
@@ -191,5 +198,17 @@ export class VehiclesService {
   async remove(id: string, currentUser: User): Promise<void> {
     const vehicle = await this.findOne(id, currentUser);
     await this.vehicleRepository.remove(vehicle);
+  }
+
+  /**
+   * A vehicle's owner must belong to its building. The owner picker is loaded
+   * once per page, so without this an admin could still attach a vehicle to a
+   * resident who has since left or been removed.
+   */
+  private async assertOwnerInBuilding(ownerId: string, tenantId: string): Promise<void> {
+    const owner = await this.vehicleRepository.manager.findOne(User, { where: { id: ownerId } });
+    if (!owner || owner.tenantId !== tenantId) {
+      throw new BadRequestException('The owner must be a resident of this building');
+    }
   }
 }
