@@ -6,9 +6,14 @@ import { ResidentRemovalService } from './resident-removal.service';
 import { User } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { AccountIdentityModule } from '../account-identity/account-identity.module';
+import { BuildingStructureModule } from '../building-structure/building-structure.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Tenant]), AccountIdentityModule],
+  imports: [
+    TypeOrmModule.forFeature([User, Tenant]),
+    AccountIdentityModule,
+    BuildingStructureModule,
+  ],
   controllers: [ResidentsController],
   providers: [ResidentsService, ResidentRemovalService],
   exports: [ResidentsService, ResidentRemovalService],

@@ -21,3 +21,5 @@ export * from './ota-update.entity';
 export * from './login-history.entity';
 export * from './password-reset-token.entity';
 export * from './building-join-request.entity';
+export * from './building-floor.entity';
+export * from './building-flat.entity';
