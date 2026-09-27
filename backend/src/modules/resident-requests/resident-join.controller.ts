@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
 import { CurrentUser } from '@common/decorators/current-user.decorator';
@@ -6,6 +17,7 @@ import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decor
 import { User } from '@database/entities/user.entity';
 
 import { ResidentRemovalService } from '@modules/residents/resident-removal.service';
+import { BuildingStructureService } from '@modules/building-structure/building-structure.service';
 
 import { ResidentRequestsService } from './resident-requests.service';
 import { CreateJoinRequestDto } from './dto/create-join-request.dto';
@@ -35,6 +47,7 @@ export class ResidentJoinController {
   constructor(
     private readonly residentRequestsService: ResidentRequestsService,
     private readonly residentRemovalService: ResidentRemovalService,
+    private readonly buildingStructureService: BuildingStructureService,
   ) {}
 
   @Get('buildings')
@@ -43,6 +56,17 @@ export class ResidentJoinController {
   @ApiResponse({ status: 403, description: 'Caller already belongs to a building' })
   async searchBuildings(@CurrentUser() user: User, @Query() query: SearchBuildingsDto) {
     return this.residentRequestsService.searchBuildings(user, query);
+  }
+
+  @Get('buildings/:tenantId/floors')
+  @ApiOperation({ summary: "A building's floors and flats, to pick your flat when requesting" })
+  @ApiResponse({ status: 200, description: 'Floor and flat names only (no occupancy)' })
+  @ApiResponse({ status: 403, description: 'Caller already belongs to a building' })
+  async getFloorPlan(
+    @CurrentUser() user: User,
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+  ) {
+    return this.buildingStructureService.getJoinFloorPlan(user, tenantId);
   }
 
   @Get('request')

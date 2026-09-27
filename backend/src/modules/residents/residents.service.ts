@@ -14,6 +14,11 @@ import { CreateResidentDto, UpdateResidentDto } from './dto/resident.dto';
 import { AccountIdentityClient } from '../account-identity/account-identity.client';
 import { EmailService } from '../notification/email.service';
 import { ResidentRemovalService } from './resident-removal.service';
+import {
+  BuildingStructureService,
+  floorLookupKey,
+  ResidentFloorView,
+} from '../building-structure/building-structure.service';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -30,9 +35,10 @@ export class ResidentsService {
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
     private readonly residentRemovalService: ResidentRemovalService,
+    private readonly buildingStructureService: BuildingStructureService,
   ) {}
 
-  async findAll(currentUser: User, query: { search?: string; tenantId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: User[]; total: number; page: number; limit: number }> {
+  async findAll(currentUser: User, query: { search?: string; tenantId?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: (User & { floor: ResidentFloorView | null })[]; total: number; page: number; limit: number }> {
     const page = query.page || 1;
     const limit = query.limit || 10;
     const skip = (page - 1) * limit;
@@ -77,7 +83,16 @@ export class ResidentsService {
       .take(limit)
       .getManyAndCount();
 
-    return { data, total, page, limit };
+    // Additive: the floor the resident's unit sits on in the building's floor
+    // plan, or null when the unit matches no configured flat.
+    const floors = await this.buildingStructureService.findFloorsForUnits(data);
+    const withFloors = data.map((resident) =>
+      Object.assign(resident, {
+        floor: floors.get(floorLookupKey(resident.tenantId, resident.unit)) ?? null,
+      }),
+    );
+
+    return { data: withFloors, total, page, limit };
   }
 
   async findOne(id: string, currentUser: User): Promise<User> {

@@ -5,6 +5,7 @@ import { BuildingJoinRequest } from '@database/entities/building-join-request.en
 import { Tenant } from '@database/entities/tenant.entity';
 import { User } from '@database/entities/user.entity';
 import { ResidentsModule } from '@modules/residents/residents.module';
+import { BuildingStructureModule } from '@modules/building-structure/building-structure.module';
 
 import { ResidentJoinController } from './resident-join.controller';
 import { ResidentRequestsController } from './resident-requests.controller';
@@ -21,7 +22,12 @@ import { ResidentRequestsService } from './resident-requests.service';
  * NotificationService needs no import here: NotificationModule is @Global().
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([BuildingJoinRequest, User, Tenant]), ResidentsModule],
+  imports: [
+    TypeOrmModule.forFeature([BuildingJoinRequest, User, Tenant]),
+    ResidentsModule,
+    // The requester's flat picker reads the building's floor plan.
+    BuildingStructureModule,
+  ],
   controllers: [ResidentJoinController, ResidentRequestsController],
   providers: [ResidentRequestsService],
   exports: [ResidentRequestsService],
