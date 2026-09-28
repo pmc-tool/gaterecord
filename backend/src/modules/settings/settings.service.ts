@@ -24,7 +24,13 @@ export class SettingsService {
   // ==================== Password Management ====================
 
   async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ message: string }> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    // passwordHash is select: false on the entity; this is one of the few reads
+    // that needs it, so it is selected explicitly.
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.id = :userId', { userId })
+      .getOne();
     if (!user) {
       throw new NotFoundException('User not found');
     }

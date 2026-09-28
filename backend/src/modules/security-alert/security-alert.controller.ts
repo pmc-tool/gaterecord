@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Public } from '@common/decorators/public.decorator';
+import { ContextOptional } from '@common/decorators/context-optional.decorator';
 import { User, UserRole } from '@database/entities/user.entity';
 import { SecurityAlertStatus, SecurityAlertType, SecurityAlertPriority } from '@database/entities/security-alert.entity';
 
@@ -192,6 +193,18 @@ export class SecurityAlertController {
       throw new BadRequestException('User must belong to a tenant to create alerts');
     }
 
+    // The alert is stamped with the caller's tenant, but its gate / controller
+    // drive the hardware alarm, so they must be in that same building.
+    if (dto.gateId) {
+      await this.securityAlertService.assertGateInTenant(dto.gateId, req.user.tenantId);
+    }
+    if (dto.deviceId || dto.controllerSerial) {
+      await this.securityAlertService.assertControllerInTenant(
+        { deviceId: dto.deviceId, controllerSerial: dto.controllerSerial },
+        req.user.tenantId,
+      );
+    }
+
     this.logger.warn(`Creating test alert of type ${dto.type} by user ${req.user.email}`);
 
     const alert = await this.securityAlertService.create({
@@ -236,6 +249,10 @@ export class SecurityAlertController {
       throw new BadRequestException('User must belong to a tenant to simulate events');
     }
 
+    if (body.gateId) {
+      await this.securityAlertService.assertGateInTenant(body.gateId, req.user.tenantId);
+    }
+
     const count = body.count || 3;
     
     this.logger.warn(`Simulating ${count} denied access events for tenant ${req.user.tenantId}`);
@@ -266,6 +283,8 @@ export class SecurityAlertController {
   @Get('test/types')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  // Static enum lists, not building data.
+  @ContextOptional()
   @ApiOperation({ summary: 'Get all available security alert types for testing' })
   async getAlertTypes() {
     return {

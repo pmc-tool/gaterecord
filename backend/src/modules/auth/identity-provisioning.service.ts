@@ -14,10 +14,20 @@
  *                                  The Keycloak `sub` lives in its `userId` column.
  *
  * Role model: every user is a plain USER upstream — `profile_type` is never read here.
- * `gate_users.role` is gaterecord's own concept. A user with no gate row becomes
- * BUILDING_ADMIN with tenantId=null and must then complete onboarding; a user who
- * ALREADY has a gate row keeps its stored role, which is what stops an admin-created
- * resident being promoted to building_admin on their first Keycloak login.
+ * What a person may do in a building is a MEMBERSHIP (gate_memberships: one role
+ * per building, possibly many buildings), and this service never creates, ends or
+ * restores one. A brand-new identity gets a person row with ZERO memberships,
+ * which is what sends them to onboarding (create a building, or ask to join one).
+ * Its legacy role / tenant_id / unit columns hold the no-building sentinel
+ * (LEGACY_SENTINEL: building_admin, no tenant, no unit), which only
+ * MembershipsService's mirror rewrites afterwards. A person who ALREADY has a
+ * gate row is returned as it is, so whatever an admin gave them (a resident
+ * membership, say) is untouched by their first Keycloak login.
+ *
+ * gate_users.status is the platform-wide block: any value but ACTIVE refuses the
+ * request here (401), in every building at once. A building's own
+ * active/inactive belongs to the membership and is decided later, per request,
+ * by the membership context.
  *
  * Security note: never log token contents. Only ids, and only at debug level.
  */
@@ -26,8 +36,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { User, UserRole, UserStatus } from '@database/entities/user.entity';
+import { User, UserStatus } from '@database/entities/user.entity';
 import { GlobalUser, GlobalUserMeta } from '@database/entities/global-user.entity';
+import { LEGACY_SENTINEL } from '../memberships/memberships.service';
 import { ResidentRemovalService } from '../residents/resident-removal.service';
 
 /**
@@ -50,8 +61,7 @@ export interface IdentityTokenPayload {
 const PG_UNIQUE_VIOLATION = '23505';
 
 /** Both `users.id` and `gate_users.user_id` are uuid columns. */
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Cheap sanity check — the real authority on the address is Keycloak. */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -69,10 +79,11 @@ export class IdentityProvisioningService {
   ) {}
 
   /**
-   * Resolves the `gate_users` row to attach to the request, creating rows in both
-   * tables as needed, and returns it with the `tenant` relation loaded so that
-   * RolesGuard / TenantGuard / @CurrentUser see exactly the shape they already get
-   * under the existing local 'jwt' strategy.
+   * Resolves the PERSON (the `gate_users` row) behind a verified token, creating
+   * rows in both tables as needed, and returns it without relations and without
+   * passwordHash. It deliberately says nothing about which building the request
+   * acts in: the caller (KeycloakStrategy, SocketAuthService) hands the person to
+   * MembershipContextService, which loads that building in both modes.
    */
   async provisionFromToken(payload: IdentityTokenPayload): Promise<User> {
     const sub = typeof payload?.sub === 'string' ? payload.sub.trim() : '';
@@ -100,13 +111,15 @@ export class IdentityProvisioningService {
     // STEP 2 — resolve the gaterecord row (link or create).
     const user = await this.resolveGateUser(sub, email, payload);
 
-    // STEP 3 — enforce status, exactly as JwtStrategy does today.
+    // STEP 3 — enforce status, exactly as JwtStrategy does. A non-ACTIVE
+    // gate_users.status is the platform-wide block (a ban, or until the status
+    // split the copy of a single membership's status): 401 in every building.
     if (user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('User is not active');
     }
 
-    // STEP 4 — return with the tenant relation loaded.
-    return this.withTenant(user);
+    // The acting context (and with it the building) is resolved by the caller.
+    return user;
   }
 
   // ---------------------------------------------------------------------------
@@ -206,10 +219,11 @@ export class IdentityProvisioningService {
    *   (c) deleted     — a soft-deleted row. (a) and (b) cannot see it, but its
    *                     `user_id` and `email` still hold the unique indexes, so
    *                     (d) would fail on every request. It is restored as a new
-   *                     user instead: deleting someone removes them from gate
-   *                     management, it does not bar them from starting over.
-   *   (d) create      — a genuinely new user, provisioned as an unonboarded
-   *                     building admin.
+   *                     user with no building instead: deleting someone removes
+   *                     them from gate management, it does not bar them from
+   *                     starting over. Restoring never brings back a membership.
+   *   (d) create      — a genuinely new person with zero memberships, who goes
+   *                     to onboarding.
    */
   private async resolveGateUser(
     sub: string,
@@ -263,16 +277,24 @@ export class IdentityProvisioningService {
       return bySub;
     }
 
+    // Oldest first, so that if legacy data ever holds two rows whose addresses
+    // differ only in case, every request resolves to the same one.
     return this.userRepository
       .createQueryBuilder('user')
       .withDeleted()
       .where('LOWER(user.email) = :email', { email })
+      .orderBy('user.createdAt', 'ASC')
+      .addOrderBy('user.id', 'ASC')
       .getOne();
   }
 
   /**
-   * Restores the row as a new user (see ResidentRemovalService), which also
-   * releases any cards, vehicles and passes it still held in its old building.
+   * Restores the row as a new user with no building, through
+   * ResidentRemovalService.restoreDeletedUser (MembershipLifecycleService). That
+   * ends any membership still live, never un-deletes an ended one, writes the
+   * no-building sentinel and releases the cards, vehicles and passes the person
+   * still held in those buildings. gate_users.status is kept, so a person who
+   * was also suspended is still refused by step 3.
    */
   private async restoreDeletedGateUser(deleted: User, sub: string): Promise<User> {
     if (deleted.userId && deleted.userId !== sub) {
@@ -306,7 +328,10 @@ export class IdentityProvisioningService {
    * The fast path is a plain equality match on the lowercased address, which is
    * what every write path in this codebase stores and what the unique index can
    * serve. The fallback catches legacy rows written before that convention, which
-   * would otherwise fall through to a create and hit the unique index.
+   * would otherwise fall through to a create and hit the unique index. The unique
+   * index is case-sensitive, so the fallback can match several rows ('A@x.com'
+   * and 'a@X.com'); it takes the oldest, so adoption is deterministic rather than
+   * whatever row Postgres happens to return first.
    */
   private async findByEmail(email: string): Promise<User | null> {
     const exact = await this.userRepository.findOne({ where: { email } });
@@ -317,15 +342,23 @@ export class IdentityProvisioningService {
     return this.userRepository
       .createQueryBuilder('user')
       .where('LOWER(user.email) = :email', { email })
+      .orderBy('user.createdAt', 'ASC')
+      .addOrderBy('user.id', 'ASC')
       .getOne();
   }
 
   /**
-   * Creates the gate row for a brand-new user.
+   * Creates the person row for a brand-new identity, and nothing else: no
+   * membership. With zero memberships the person has no building to act in, so
+   * the web offers onboarding (create a building, which makes them its admin,
+   * or ask to join one as a resident). Every building role is added later by
+   * MembershipsService, which also rewrites the legacy columns set here.
    *
    * Note `gate_users.id` is its own generated uuid — it is NOT the Keycloak sub,
-   * which goes in `userId`. Role is BUILDING_ADMIN with tenantId=null: onboarding
-   * (building name, address, plan) is what creates the Tenant.
+   * which goes in `userId`. The legacy role / tenant_id / unit are the
+   * no-building sentinel (LEGACY_SENTINEL), exactly what the mirror writes for
+   * a person with zero memberships. status is ACTIVE: it is the platform ban,
+   * not a building status.
    *
    * Concurrency: two simultaneous first requests for the same new user both reach
    * here, and one loses the race on the unique index over `email` / `user_id`.
@@ -346,9 +379,9 @@ export class IdentityProvisioningService {
           userId: sub,
           firstName,
           lastName,
-          role: UserRole.BUILDING_ADMIN,
+          role: LEGACY_SENTINEL.role,
           status: UserStatus.ACTIVE,
-          tenantId: null,
+          tenantId: LEGACY_SENTINEL.tenantId,
           qrCode: `GR-${uuidv4()}`,
           // `password_hash` is NOT NULL and the local HS256 login path still reads
           // it during this dual-accept phase. Keycloak owns this user's credentials,
@@ -361,6 +394,9 @@ export class IdentityProvisioningService {
       );
 
       this.logger.log(`Provisioned gate user ${created.id} for global identity ${sub}`);
+      // The saved entity still holds the hash it was created with; the person
+      // handed to the request must look like a loaded row (select: false).
+      Reflect.deleteProperty(created, 'passwordHash');
       return created;
     } catch (error) {
       if (!this.isUniqueViolation(error)) {
@@ -408,29 +444,6 @@ export class IdentityProvisioningService {
 
     const username = this.trimmed(payload.preferred_username);
     return { firstName: username || email.split('@')[0], lastName: '' };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Step 4 — the shape consumers expect
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Reloads with the `tenant` relation. A freshly provisioned user has
-   * tenantId=null and therefore a null tenant, which is the signal the onboarding
-   * flow keys off.
-   */
-  private async withTenant(user: User): Promise<User> {
-    const withRelation = await this.userRepository.findOne({
-      where: { id: user.id },
-      relations: ['tenant'],
-    });
-
-    if (!withRelation) {
-      // Deleted between resolution and reload.
-      throw new UnauthorizedException('User not found');
-    }
-
-    return withRelation;
   }
 
   // ---------------------------------------------------------------------------

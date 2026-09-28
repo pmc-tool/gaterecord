@@ -1,6 +1,14 @@
-import { Injectable, Logger, NotFoundException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { isUUID } from 'class-validator';
 import {
   SecurityAlert,
   SecurityAlertType,
@@ -9,7 +17,7 @@ import {
   SecurityAlertSource,
 } from '@database/entities/security-alert.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
-import { User, UserRole } from '@database/entities/user.entity';
+import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
@@ -17,6 +25,8 @@ import { EmailService } from '../notification/email.service';
 import { NotificationService } from '../notification/notification.service';
 import { CloudPlusTcpService } from '../cloud-plus-typeB-tcp/cloud-plus-tcp.service';
 import { PendingAlarmService } from '../cloud-plus-typeB/pending-alarm.service';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { ALERT_RECIPIENT_ROLES } from '../memberships/membership-access.constants';
 
 export interface CreateSecurityAlertDto {
   tenantId: string;
@@ -63,6 +73,7 @@ export class SecurityAlertService {
     @Inject(forwardRef(() => CloudPlusTcpService))
     private readonly tcpService: CloudPlusTcpService,
     private readonly pendingAlarmService: PendingAlarmService,
+    private readonly membershipAccessService: MembershipAccessService,
   ) {}
 
   async create(dto: CreateSecurityAlertDto): Promise<SecurityAlert> {
@@ -92,21 +103,18 @@ export class SecurityAlertService {
     this.gatewayService.broadcastSecurityAlert(savedAlert);
 
     // Create database notifications for Security, Building Admin, and Super Admins
-    this.notificationService.notifySecurityAlert(
-      dto.tenantId,
-      dto.title,
-      dto.description,
-      {
+    this.notificationService
+      .notifySecurityAlert(dto.tenantId, dto.title, dto.description, {
         alertId: savedAlert.id,
         gateId: dto.gateId,
         gateName: dto.gateName,
         visitorName: dto.visitorName,
         priority: dto.priority,
         link: `/security-alerts?id=${savedAlert.id}`,
-      },
-    ).catch((err) => {
-      this.logger.error('Failed to create security alert notifications:', err);
-    });
+      })
+      .catch((err) => {
+        this.logger.error('Failed to create security alert notifications:', err);
+      });
 
     // If buzzer should be triggered, send command to frontend and hardware
     this.logger.warn(
@@ -121,6 +129,49 @@ export class SecurityAlertService {
     }
 
     return savedAlert;
+  }
+
+  /**
+   * Throws 403 unless the gate belongs to `tenantId`.
+   *
+   * create() trusts its DTO, and an alert's gateId drives the hardware alarm
+   * (triggerGateAlarm / the HTTP alarm queue) and the gate name shown to staff.
+   * Callers that take a gateId from a request body must check it here first, or a
+   * building admin could sound another building's gate alarm. An unknown gate is
+   * reported the same way as a foreign one, so ids cannot be probed.
+   */
+  async assertGateInTenant(gateId: string, tenantId: string): Promise<void> {
+    // A non-uuid id (the simulate route's body is not validated) is refused here
+    // rather than handed to Postgres as a uuid.
+    const gate =
+      tenantId && isUUID(gateId)
+        ? await this.gateRepository.findOne({ where: { id: gateId } })
+        : null;
+    if (!gate || gate.tenantId !== tenantId) {
+      throw new ForbiddenException('Gate does not belong to this building');
+    }
+  }
+
+  /**
+   * Same rule for a controller named directly, by DeviceConfig id (deviceId) or by
+   * serial (controllerSerial): triggerHardwareAlarm sends the alarm straight to
+   * that serial, so a foreign one would ring another building's controller.
+   */
+  async assertControllerInTenant(
+    ref: { deviceId?: string; controllerSerial?: string },
+    tenantId: string,
+  ): Promise<void> {
+    const lookups: Array<{ id: string } | { deviceId: string }> = [];
+    if (ref.deviceId) lookups.push({ id: ref.deviceId });
+    if (ref.controllerSerial) lookups.push({ deviceId: ref.controllerSerial });
+
+    for (const where of lookups) {
+      const usable = !!tenantId && (!('id' in where) || isUUID(where.id));
+      const device = usable ? await this.deviceRepository.findOne({ where }) : null;
+      if (!device || device.tenantId !== tenantId) {
+        throw new ForbiddenException('Controller does not belong to this building');
+      }
+    }
   }
 
   /**
@@ -177,7 +228,9 @@ export class SecurityAlertService {
       );
       return;
     }
-    this.logger.warn(`[HTTP-ALARM] Arming buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`);
+    this.logger.warn(
+      `[HTTP-ALARM] Arming buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`,
+    );
     for (const serial of serials) {
       this.pendingAlarmService.arm(serial);
     }
@@ -208,7 +261,9 @@ export class SecurityAlertService {
       // the controller's next heartbeat, even if the TCP path was never used.
       const serials = await this.resolveControllerSerials(alert);
       if (serials.length > 0) {
-        this.logger.warn(`[HTTP-ALARM] Silencing buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`);
+        this.logger.warn(
+          `[HTTP-ALARM] Silencing buzzer for alert ${alert.id} on serials: ${serials.join(', ')}`,
+        );
       }
       for (const serial of serials) {
         this.pendingAlarmService.disarm(serial);
@@ -239,7 +294,9 @@ export class SecurityAlertService {
     accessEventId: string,
     reportToken: string,
   ): Promise<SecurityAlert> {
-    this.logger.warn(`[REPORT] Unauthorized-visitor report received for accessEvent=${accessEventId}`);
+    this.logger.warn(
+      `[REPORT] Unauthorized-visitor report received for accessEvent=${accessEventId}`,
+    );
 
     // The reportToken is base64 encoded combination of accessEventId and timestamp
     // Verify the token matches the access event
@@ -281,8 +338,12 @@ export class SecurityAlertService {
       return existingAlert;
     }
 
-    // Get resident info from metadata
-    const residentId = accessEvent.metadata?.residentId as string;
+    // The host resident: the event's own resident_id first, then the metadata
+    // copy. Simulator visitor-pass events only set the column, so reading the
+    // metadata alone produced reports with no resident (no name, no email, and a
+    // host who could not see or cancel their own report).
+    const residentId =
+      accessEvent.residentId ?? (accessEvent.metadata?.residentId as string | undefined);
     const visitorName = accessEvent.subjectName || 'Unknown Visitor';
 
     let residentName = 'Unknown Resident';
@@ -317,47 +378,70 @@ export class SecurityAlertService {
     return alert;
   }
 
+  /**
+   * Who gets the unauthorized-visitor alert EMAIL: everyone with an ACTIVE
+   * building admin or security role in the event's building (read from
+   * memberships, so a person whose legacy row names another building is still
+   * reached, and deactivated or banned people are not), plus every active super
+   * admin. One email per address (compared case-insensitively), so a super
+   * admin who is also this building's admin is emailed once.
+   */
+  async findAlertEmailRecipients(tenantId: string): Promise<string[]> {
+    const members = isUUID(tenantId)
+      ? await this.membershipAccessService.findTenantMembers(tenantId, {
+          roles: ALERT_RECIPIENT_ROLES,
+          activeOnly: true,
+        })
+      : [];
+
+    const superAdmins = await this.userRepository.find({
+      where: { role: UserRole.SUPER_ADMIN, status: UserStatus.ACTIVE },
+    });
+
+    const seen = new Set<string>();
+    const emails: string[] = [];
+    for (const email of [
+      ...members.map((m) => m.user?.email),
+      ...superAdmins.map((u) => u.email),
+    ]) {
+      const key = email?.trim().toLowerCase();
+      if (!email || !key || seen.has(key)) continue;
+      seen.add(key);
+      emails.push(email);
+    }
+    return emails;
+  }
+
   private async sendSecurityAlerts(
     alert: SecurityAlert,
     accessEvent: AccessEvent,
     reportedBy: string,
   ): Promise<void> {
-    // Find all security staff and admins for this tenant
-    const securityUsers = await this.userRepository.find({
-      where: [
-        { tenantId: accessEvent.tenantId, role: UserRole.SECURITY },
-        { tenantId: accessEvent.tenantId, role: UserRole.BUILDING_ADMIN },
-      ],
-    });
+    const recipients = await this.findAlertEmailRecipients(accessEvent.tenantId);
 
-    // Also get super admins
-    const superAdmins = await this.userRepository.find({
-      where: { role: UserRole.SUPER_ADMIN },
-    });
-
-    const allRecipients = [...securityUsers, ...superAdmins];
-
-    for (const user of allRecipients) {
-      if (user.email) {
-        try {
-          await this.emailService.sendSecurityAlertEmail(
-            user.email,
-            alert.visitorName || 'Unknown',
-            reportedBy,
-            accessEvent.tenant?.name || 'Unknown Building',
-            alert.gateName || 'Unknown Gate',
-            accessEvent.timestamp,
-            reportedBy,
-            accessEvent.id,
-          );
-        } catch (error) {
-          this.logger.error(`Failed to send security alert to ${user.email}:`, error);
-        }
+    for (const email of recipients) {
+      try {
+        await this.emailService.sendSecurityAlertEmail(
+          email,
+          alert.visitorName || 'Unknown',
+          reportedBy,
+          accessEvent.tenant?.name || 'Unknown Building',
+          alert.gateName || 'Unknown Gate',
+          accessEvent.timestamp,
+          reportedBy,
+          accessEvent.id,
+        );
+      } catch (error) {
+        this.logger.error(`Failed to send security alert to ${email}:`, error);
       }
     }
   }
 
-  async findAll(user: User, status?: SecurityAlertStatus, tenantId?: string): Promise<SecurityAlert[]> {
+  async findAll(
+    user: User,
+    status?: SecurityAlertStatus,
+    tenantId?: string,
+  ): Promise<SecurityAlert[]> {
     const query = this.alertRepository
       .createQueryBuilder('alert')
       .leftJoinAndSelect('alert.tenant', 'tenant')
@@ -469,10 +553,13 @@ export class SecurityAlertService {
       throw new NotFoundException('Security alert not found');
     }
 
-    // Check access. Residents may only act on the alert they themselves created;
-    // staff may act on any alert in their tenant; super admin on any.
+    // Check access. Residents may only act on the alert they themselves created,
+    // in the building they are acting in; staff may act on any alert in their
+    // tenant; super admin on any. The tenant half matters once a person can be a
+    // resident of several buildings: residentId alone would let them clear their
+    // report in Tower B while acting as a resident of Tower A.
     if (user.role === UserRole.RESIDENT) {
-      if (alert.residentId !== user.id) {
+      if (alert.residentId !== user.id || alert.tenantId !== user.tenantId) {
         throw new ForbiddenException('Access denied');
       }
     } else if (user.role !== UserRole.SUPER_ADMIN && alert.tenantId !== user.tenantId) {

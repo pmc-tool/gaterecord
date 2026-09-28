@@ -1,4 +1,13 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsUUID, ValidateIf, IsNumber, MinLength } from 'class-validator';
+import {
+  IsString,
+  IsEmail,
+  IsOptional,
+  IsBoolean,
+  IsUUID,
+  ValidateIf,
+  IsNumber,
+  MinLength,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
@@ -34,7 +43,10 @@ export class CreateResidentDto {
   @IsString()
   unit: string;
 
-  @ApiPropertyOptional({ description: 'Required for super_admin, auto-set for building_admin' })
+  @ApiPropertyOptional({
+    description:
+      'Required for super_admin; a building admin always adds to the building they act in',
+  })
   @ValidateIf((o) => o.tenantId !== undefined && o.tenantId !== null && o.tenantId !== '')
   @IsUUID()
   @IsOptional()
@@ -46,6 +58,13 @@ export class CreateResidentDto {
   isActive?: boolean;
 }
 
+/**
+ * What PATCH /residents/:id accepts. There is no email: it is the person's
+ * platform identity, not a building's to change, so the global whitelist strips
+ * it. unit and isActive change the resident membership in the targeted
+ * building only; firstName, lastName and phone belong to the person (who may
+ * be in other buildings too) and only a platform admin may change them.
+ */
 export class UpdateResidentDto {
   @ApiPropertyOptional()
   @IsString()
@@ -58,11 +77,6 @@ export class UpdateResidentDto {
   lastName?: string;
 
   @ApiPropertyOptional()
-  @IsEmail()
-  @IsOptional()
-  email?: string;
-
-  @ApiPropertyOptional()
   @IsString()
   @IsOptional()
   phone?: string;
@@ -72,16 +86,34 @@ export class UpdateResidentDto {
   @IsOptional()
   unit?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Accepted only when it names the building the row already belongs to: residents are not moved between buildings.',
+  })
   @ValidateIf((o) => o.tenantId !== undefined && o.tenantId !== null && o.tenantId !== '')
   @IsUUID()
   @IsOptional()
   tenantId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'The status of the resident membership in this building.' })
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+}
+
+/**
+ * Names the building a GET/PATCH/DELETE /residents/:id acts on. A building
+ * admin never needs it; a platform admin passes it when the person is a
+ * resident of several buildings.
+ */
+export class ResidentTargetQueryDto {
+  @ApiPropertyOptional({
+    description:
+      'Super admin only: the building whose resident row this is. Optional when the person is a resident of exactly one building.',
+  })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
 }
 
 export class ResidentQueryDto {
@@ -90,7 +122,7 @@ export class ResidentQueryDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filter by tenant ID' })
+  @ApiPropertyOptional({ description: 'Filter by tenant ID (super admin only)' })
   @IsOptional()
   @IsUUID()
   tenantId?: string;

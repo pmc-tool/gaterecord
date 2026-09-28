@@ -21,6 +21,9 @@ import {
 } from './dto/cloud-plus.dto';
 import { Public } from '@common/decorators/public.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { RolesGuard } from '@common/guards/roles.guard';
+import { Roles } from '@common/decorators/roles.decorator';
+import { UserRole } from '@database/entities/user.entity';
 import { CloudPlusDeviceGuard } from './guards/cloud-plus-device.guard';
 
 /**
@@ -53,8 +56,8 @@ export class CloudPlusController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-     //on live test
-    console.log("On live test, get query:");
+    //on live test
+    console.log('On live test, get query:');
 
     this.logger.log(`GET SearchCardAcs gddss from ${req.ip}`);
 
@@ -76,10 +79,8 @@ export class CloudPlusController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-
     //on live test
-    console.log("On live test, body:", body);
-
+    console.log('On live test, body:', body);
 
     this.logger.log(`POST SearchCardAcs from ${req.ip}`);
 
@@ -137,8 +138,12 @@ export class CloudPlusController {
   /**
    * Register a new Cloud Plus controller device
    * This endpoint is protected and requires admin authentication
+   *
+   * Building admins and super admins only: without RolesGuard any signed-in
+   * resident or security user could register a controller into their building.
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @Post('cloud-plus/devices')
   async registerDevice(
     @Body() dto: RegisterCloudPlusDeviceDto,
@@ -165,9 +170,11 @@ export class CloudPlusController {
   }
 
   /**
-   * Get all Cloud Plus devices for the tenant
+   * Get all Cloud Plus devices for the tenant (building admins and super admins
+   * only — the list carries controller serials and IP addresses)
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @Get('cloud-plus/devices')
   async getDevices(@Req() req: Request): Promise<{ devices: any[] }> {
     const user = req['user'] as { tenantId?: string } | undefined;

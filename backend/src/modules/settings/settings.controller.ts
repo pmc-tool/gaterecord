@@ -15,6 +15,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateNotificationSettingsDto } from './dto/notification-settings.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
+import { ContextOptional } from '@common/decorators/context-optional.decorator';
 import { User } from '@database/entities/user.entity';
 import { RolesGuard } from '@common/guards/roles.guard';
 
@@ -26,6 +27,8 @@ import { RolesGuard } from '@common/guards/roles.guard';
 // are personal account operations, not tenant business writes, so they stay
 // available while suspended (err toward exemption for self-service).
 @SubscriptionExempt()
+// Per person, not per building: usable before any building is chosen.
+@ContextOptional()
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 

@@ -1,13 +1,22 @@
 /**
  * SubscriptionGuard — enforces tenant.status on write operations, and nothing else.
  *
- * FAIL-OPEN BY DESIGN. This guard is meant to run on EVERY authenticated request
- * (wired as an APP_GUARD alongside JwtAuthGuard). A false positive here would lock a
- * paying customer out of their own account, so it blocks ONLY when it is certain the
- * tenant is inactive. In every other case — active / trial tenants, a null or unknown
- * status, super admins, users with no tenant yet, unauthenticated requests, and
- * @Public() / @SubscriptionExempt() routes — it returns true and gets out of the way.
- * When in doubt, allow.
+ * FAIL-OPEN BY DESIGN for the legacy principal. This guard is meant to run on EVERY
+ * authenticated request (wired as an APP_GUARD alongside JwtAuthGuard). A false
+ * positive here would lock a paying customer out of their own account, so it blocks
+ * ONLY when it is certain the tenant is inactive. In every other case — active /
+ * trial tenants, a null or unknown status, super admins, users with no tenant yet,
+ * unauthenticated requests, @Public() / @SubscriptionExempt() routes, and
+ * @ContextOptional() routes for a membership-context principal — it returns true
+ * and gets out of the way. When in doubt, allow.
+ *
+ * The tenant it looks at is the one the request ACTS in: req.user.tenant, which
+ * is the active membership's building once GATE_MEMBERSHIP_CONTEXT is on (an
+ * admin of suspended Tower A acting as security of active Tower C can write in
+ * C; a resident writing in suspended Tower B gets 402), and the gate_users row's
+ * tenant in legacy mode, exactly as before. With a membership context the guard
+ * fails CLOSED instead of open on a missing building: "no tenant" there can only
+ * mean no context was chosen, which is not a reason to let a write through.
  *
  * When a tenant IS inactive (SUSPENDED, PENDING_PAYMENT, or is_paused === true) it
  * applies READ-ONLY GRACE: safe methods (GET / HEAD / OPTIONS) still pass, so the
@@ -16,8 +25,8 @@
  * body.
  *
  * It never authenticates, authorizes by role, or touches the database: req.user and
- * its eagerly-loaded `tenant` relation are populated upstream by JwtAuthGuard. It
- * logs nothing, so no PII can leak through it.
+ * its `tenant` are populated upstream by JwtAuthGuard (the strategies resolve the
+ * context). It logs nothing, so no PII can leak through it.
  */
 import {
   Injectable,
@@ -29,8 +38,11 @@ import {
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { SUBSCRIPTION_EXEMPT_KEY } from '../decorators/subscription-exempt.decorator';
+import { CONTEXT_OPTIONAL_KEY } from '../decorators/context-optional.decorator';
+import { contextKindOf, isActingUser } from '../context/acting-user';
+import { membershipInvalid, membershipRequired } from '../context/membership-context.errors';
 import { UserRole } from '@database/entities/user.entity';
-import { TenantStatus } from '@database/entities/tenant.entity';
+import { Tenant, TenantStatus } from '@database/entities/tenant.entity';
 
 /**
  * Stable, machine-readable code returned in the 402 body. Exported so the frontend
@@ -51,21 +63,13 @@ export class SubscriptionGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     // (a) @Public() routes are exempt — mirrors JwtAuthGuard so the two agree on
     //     which routes are open.
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-    if (isPublic) {
+    if (this.flag(context, IS_PUBLIC_KEY)) {
       return true;
     }
 
     // (b) @SubscriptionExempt() routes (billing, onboarding) must work even while
     //     suspended, so the customer can recover.
-    const isExempt = this.reflector.getAllAndOverride<boolean>(SUBSCRIPTION_EXEMPT_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-    if (isExempt) {
+    if (this.flag(context, SUBSCRIPTION_EXEMPT_KEY)) {
       return true;
     }
 
@@ -81,19 +85,64 @@ export class SubscriptionGuard implements CanActivate {
       return true;
     }
 
-    // (d) Super admins are never subscription-gated.
+    // (d) The membership context (GATE_MEMBERSHIP_CONTEXT on). JwtAuthGuard has
+    //     already refused 'none' and a tenantless 'membership' on this route;
+    //     they are re-checked here so this guard never depends on running second.
+    if (isActingUser(user) && contextKindOf(user) !== 'legacy') {
+      // @ContextOptional() routes are person-level (profile, settings,
+      // notifications, join requests, /memberships/me): with a membership
+      // context they do not act in a building, so no building's subscription
+      // can gate them. Only here: the legacy principal below keeps today's
+      // 402 on those routes (flag off is identical to before, L6).
+      if (this.flag(context, CONTEXT_OPTIONAL_KEY)) {
+        return true;
+      }
+
+      switch (contextKindOf(user)) {
+        case 'platform':
+          // A super admin acting platform-wide: never subscription-gated.
+          return true;
+        case 'none':
+          if (user.contextProblem === 'MEMBERSHIP_INVALID') {
+            throw membershipInvalid();
+          }
+          throw membershipRequired(user.contextProblemReason ?? 'NO_MEMBERSHIPS');
+        default:
+          // 'membership': gate on the ACTIVE membership's building, fail closed.
+          if (!user.tenantId || !user.tenant) {
+            throw membershipInvalid();
+          }
+          return this.allowForTenant(user.tenant, req);
+      }
+    }
+
+    // ---- Legacy principal: today's code path, unchanged. ----
+
+    // (e) Super admins are never subscription-gated.
     if (user.role === UserRole.SUPER_ADMIN) {
       return true;
     }
 
-    // (e) No tenant yet (e.g. a freshly provisioned user, pre-onboarding). Gating
+    // (f) No tenant yet (e.g. a freshly provisioned user, pre-onboarding). Gating
     //     that is not subscription's job.
     const tenant = user.tenant;
     if (!tenant) {
       return true;
     }
 
-    // (f) Only an EXPLICITLY inactive tenant is gated. Anything else — ACTIVE, TRIAL,
+    return this.allowForTenant(tenant, req);
+  }
+
+  private flag(context: ExecutionContext, key: string): boolean {
+    return !!this.reflector.getAllAndOverride<boolean>(key, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+  }
+
+  /** (g) + (h): the tenant-status rule, shared by both principals. */
+  private allowForTenant(tenant: Pick<Tenant, 'status' | 'isPaused'>, req: { method?: string }) {
+    // (g) Only an EXPLICITLY inactive tenant is gated. Anything else — ACTIVE, TRIAL,
     //     or a null / unknown status — falls through and is allowed.
     const isInactive =
       tenant.status === TenantStatus.SUSPENDED ||
@@ -103,7 +152,7 @@ export class SubscriptionGuard implements CanActivate {
       return true;
     }
 
-    // (g) Inactive tenant: read-only grace for safe methods, 402 for writes.
+    // (h) Inactive tenant: read-only grace for safe methods, 402 for writes.
     const method = String(req.method || '').toUpperCase();
     if (SAFE_METHODS.has(method)) {
       return true;

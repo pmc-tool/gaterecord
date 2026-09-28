@@ -45,14 +45,31 @@ import { Tenant } from '@database/entities/tenant.entity';
 import { User } from '@database/entities/user.entity';
 import { SubscriptionAuditLog } from '@database/entities/subscription-audit-log.entity';
 import { Payment } from '@database/entities/payment.entity';
+import { Membership } from '@database/entities/membership.entity';
 import { NotificationModule } from '../notification/notification.module';
+import { PeopleModule } from '../people/people.module';
 
+/*
+ * Memberships: MembershipsService (paid-signup admin membership) and
+ * MembershipAccessService (billing email recipients) come from the @Global
+ * MembershipsModule; PeopleModule provides MembershipLifecycleService (the
+ * shared person insert / email lookup). Membership is registered for the seat
+ * count behind the downgrade check.
+ */
 @Module({
   imports: [
     ConfigModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([SubscriptionPlan, Tenant, User, SubscriptionAuditLog, Payment]),
+    TypeOrmModule.forFeature([
+      SubscriptionPlan,
+      Tenant,
+      User,
+      SubscriptionAuditLog,
+      Payment,
+      Membership,
+    ]),
     NotificationModule,
+    PeopleModule,
   ],
   controllers: [StripeController, BillingController, AdminStripeController],
   providers: [StripeService, StripeScheduler, DefaultPlanExpiryCron],

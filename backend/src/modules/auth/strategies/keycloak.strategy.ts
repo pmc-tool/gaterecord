@@ -19,11 +19,17 @@
  */
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy, SecretOrKeyProvider } from 'passport-jwt';
+import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import * as jwksRsa from 'jwks-rsa';
-import { User } from '@database/entities/user.entity';
+import { Request } from 'express';
+import { ActingUser, readMembershipHeader } from '@common/context/acting-user';
 import { IdentityProvisioningService } from '../identity-provisioning.service';
+import { MembershipContextService } from '../../memberships/membership-context.service';
+import {
+  KEYCLOAK_ALGORITHMS,
+  createKeycloakSecretProvider,
+  resolveKeycloakIssuer,
+} from './keycloak-jwks';
 
 export const KEYCLOAK_STRATEGY_NAME = 'keycloak';
 
@@ -47,54 +53,49 @@ export class KeycloakStrategy extends PassportStrategy(Strategy, KEYCLOAK_STRATE
   constructor(
     configService: ConfigService,
     private readonly identityProvisioningService: IdentityProvisioningService,
+    private readonly membershipContextService: MembershipContextService,
   ) {
-    const domain = configService.get<string>('KEYCLOAK_DOMAIN');
-    const realm = configService.get<string>('KEYCLOAK_REALM');
+    // The realm coordinates and key source are shared with the socket handshake
+    // (SocketAuthService) through ./keycloak-jwks.ts, so HTTP and sockets can
+    // never disagree on which tokens are valid.
+    const issuer = resolveKeycloakIssuer(configService);
 
-    if (!domain || !realm) {
+    if (!issuer) {
       throw new Error('KeycloakStrategy requires KEYCLOAK_DOMAIN and KEYCLOAK_REALM to be set');
     }
-
-    const issuer = `${domain.replace(/\/+$/, '')}/realms/${realm}`;
-
-    // jwks-rsa fetches and caches the realm's public signing keys, keyed by the
-    // `kid` in the token header, so key rotation is picked up without a redeploy.
-    const secretOrKeyProvider: SecretOrKeyProvider = jwksRsa.passportJwtSecret({
-      jwksUri: `${issuer}/protocol/openid-connect/certs`,
-      cache: true,
-      cacheMaxAge: 600000, // 10 minutes, matching the account service
-      rateLimit: true,
-      jwksRequestsPerMinute: 10,
-    });
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKeyProvider,
-      algorithms: ['RS256'],
+      // jwks-rsa fetches and caches the realm's public signing keys, keyed by
+      // the `kid` in the token header, so key rotation is picked up without a
+      // redeploy.
+      secretOrKeyProvider: createKeycloakSecretProvider(issuer),
+      algorithms: KEYCLOAK_ALGORITHMS,
       issuer,
+      passReqToCallback: true,
     });
   }
 
   /**
    * Signature, issuer, algorithm and expiry are already verified by passport-jwt
-   * by the time this runs. Everything after that point is local bookkeeping, and
-   * it all belongs to IdentityProvisioningService:
+   * by the time this runs. Everything after that point is local bookkeeping:
    *
-   *   - the Keycloak `sub` lives in `gate_users.user_id`, NOT in `gate_users.id`
-   *     (that column is gaterecord's own generated uuid), so there is no direct
-   *     primary-key lookup to do here;
-   *   - a user with no gate row must be PROVISIONED, not rejected — the account
-   *     service owns signup, so a first request from a legitimate user is the
-   *     normal case, not an error;
-   *   - the global `users` mirror has to be kept in step at the same time.
+   *   - the PERSON, which belongs to IdentityProvisioningService: the Keycloak
+   *     `sub` lives in `gate_users.user_id`, NOT in `gate_users.id` (that column
+   *     is gaterecord's own generated uuid), a user with no gate row must be
+   *     PROVISIONED rather than rejected (the account service owns signup), the
+   *     global `users` mirror is kept in step, and anyone not ACTIVE gets a 401;
+   *   - the ACTING CONTEXT, which belongs to MembershipContextService: which of
+   *     the person's memberships this request acts as, from X-Gate-Membership.
    *
-   * Returns the local User entity (never the token claims) so that everything
-   * already consuming `req.user` — RolesGuard, TenantGuard, @CurrentUser — sees
-   * the exact same shape it sees under the existing 'jwt' strategy, with the
-   * `tenant` relation loaded and the ACTIVE-status check already applied.
+   * Returns the overlaid principal (never the token claims), the same shape the
+   * 'jwt' strategy returns, so RolesGuard, SubscriptionGuard and @CurrentUser
+   * see one thing whichever strategy accepted the token.
    */
-  async validate(payload: KeycloakJwtPayload): Promise<User> {
-    return this.identityProvisioningService.provisionFromToken(payload);
+  async validate(req: Request, payload: KeycloakJwtPayload): Promise<ActingUser> {
+    const person = await this.identityProvisioningService.provisionFromToken(payload);
+
+    return this.membershipContextService.resolve(person, readMembershipHeader(req));
   }
 }

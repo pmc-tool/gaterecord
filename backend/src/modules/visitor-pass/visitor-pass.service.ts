@@ -13,6 +13,7 @@ import {
 } from '@database/entities/visitor-pass.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
 import {
   CreateVisitorPassDto,
   UpdateVisitorPassDto,
@@ -22,6 +23,21 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
 import { ConfigService } from '@nestjs/config';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { STAFF_PASS_ROLES } from '../memberships/membership-access.constants';
+
+/**
+ * Whether the (overlaid) caller sees every pass of the building they act in:
+ * super admin, building admin and security (STAFF_PASS_ROLES). Every other role
+ * (resident, staff) — and a caller with no role at all — gets the "own passes"
+ * lens: passes they created or host.
+ */
+function seesAllPasses(user: User): boolean {
+  return STAFF_PASS_ROLES.includes(user.role);
+}
+
+/** The host role an on-premise registration may name (an active resident). */
+const HOST_ROLES = [UserRole.RESIDENT] as const;
 
 @Injectable()
 export class VisitorPassService {
@@ -31,6 +47,7 @@ export class VisitorPassService {
     @InjectRepository(Tenant)
     private readonly tenantRepository: Repository<Tenant>,
     private readonly configService: ConfigService,
+    private readonly membershipAccessService: MembershipAccessService,
   ) {}
 
   async create(createDto: CreateVisitorPassDto, currentUser: User): Promise<VisitorPass> {
@@ -50,12 +67,8 @@ export class VisitorPassService {
     // Calculate validity dates based on validity type
     const { validFrom, validUntil, maxUses } = this.calculateValidity(createDto);
 
-    // Determine registration type based on user role
-    const isStaffRegistration = [
-      UserRole.SUPER_ADMIN,
-      UserRole.BUILDING_ADMIN,
-      UserRole.SECURITY,
-    ].includes(currentUser.role);
+    // Determine registration type based on the role held where the caller acts
+    const isStaffRegistration = seesAllPasses(currentUser);
     const registrationType = isStaffRegistration
       ? createDto.registrationType || RegistrationType.ON_PREMISE
       : RegistrationType.SELF_SERVICE;
@@ -76,7 +89,8 @@ export class VisitorPassService {
 
     // Determine tenant ID
     let tenantId: string;
-    if (currentUser.role === UserRole.SUPER_ADMIN) {
+    const tenantScope = this.scopeTenant(currentUser);
+    if (tenantScope === null) {
       // Super admin must specify tenant ID
       if (!createDto.tenantId) {
         throw new BadRequestException(
@@ -84,11 +98,9 @@ export class VisitorPassService {
         );
       }
       tenantId = createDto.tenantId;
-    } else if (currentUser.tenantId) {
-      // Other users use their own tenant
-      tenantId = currentUser.tenantId;
     } else {
-      throw new BadRequestException('You must belong to a tenant to create visitor passes');
+      // Other users always use their own tenant (a body tenantId is ignored)
+      tenantId = tenantScope;
     }
 
     // Check visitor pass monthly limit based on subscription plan
@@ -123,6 +135,30 @@ export class VisitorPassService {
       );
     }
 
+    // A staff registration names the host resident. They must be an ACTIVE
+    // resident of THIS building (their membership here, not their legacy row),
+    // otherwise the pass (and the visitor's access event) would point at
+    // someone the building does not know. Their unit here is the default host
+    // unit.
+    let hostMembershipUnit: string | null = null;
+    if (registrationType === RegistrationType.ON_PREMISE && createDto.residentId) {
+      const host = await this.membershipAccessService.checkHolder(createDto.residentId, tenantId, {
+        roles: HOST_ROLES,
+      });
+      if (!host.allowed) {
+        throw new BadRequestException('The host must be an active resident of this building');
+      }
+      hostMembershipUnit = host.unit;
+    }
+
+    // Host unit: what was typed, else the named host's unit in this building,
+    // else (self-service) the creator's own unit in the building they act in.
+    const hostUnit =
+      createDto.hostUnit ||
+      hostMembershipUnit ||
+      (registrationType === RegistrationType.SELF_SERVICE ? currentUser.unit : undefined) ||
+      undefined;
+
     // Create visitor pass with ACTIVE status (no approval needed)
     const pass = this.visitorPassRepository.create({
       qrToken,
@@ -130,7 +166,7 @@ export class VisitorPassService {
       visitorPhone: createDto.visitorPhone,
       visitorEmail: createDto.visitorEmail,
       purpose: createDto.purpose,
-      hostUnit: createDto.hostUnit || currentUser.unit,
+      hostUnit,
       status: VisitorPassStatus.ACTIVE,
       validFrom,
       validUntil,
@@ -152,6 +188,26 @@ export class VisitorPassService {
 
     // Return the saved pass (notifications will be handled by controller)
     return savedPass;
+  }
+
+  /**
+   * The building every authenticated visitor-pass read or write is scoped to.
+   *
+   * Returns null ONLY for a super admin in the Platform context, whose reads
+   * are platform-wide (and who alone may narrow them with ?tenantId=). Every
+   * other caller acts in one building (assertBuildingContext): a null tenantId
+   * used to mean "no filter at all", so a tenantless row could list, cancel and
+   * delete every building's passes and read their working qr_tokens. Without a
+   * building context it is 409 MEMBERSHIP_REQUIRED, which makes the web open
+   * the role/building picker. A super admin acting inside one of their
+   * buildings is scoped to that building like anyone else.
+   */
+  private scopeTenant(currentUser: User): string | null {
+    if (isPlatformContext(currentUser)) {
+      return null;
+    }
+
+    return assertBuildingContext(currentUser);
   }
 
   private calculateValidity(dto: CreateVisitorPassDto): {
@@ -191,26 +247,30 @@ export class VisitorPassService {
   }
 
   async findAll(currentUser: User, query: VisitorPassQueryDto): Promise<VisitorPass[]> {
+    // Resolved before any query is built, so a tenantless caller never reaches
+    // the database.
+    const tenantScope = this.scopeTenant(currentUser);
+
     const queryBuilder = this.visitorPassRepository
       .createQueryBuilder('pass')
       .leftJoinAndSelect('pass.createdBy', 'createdBy')
       .leftJoinAndSelect('pass.tenant', 'tenant')
       .leftJoinAndSelect('pass.resident', 'resident');
 
-    // Filter by tenant for non-super-admin users
-    if (currentUser.tenantId) {
-      queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: currentUser.tenantId });
+    // Filter by tenant for non-super-admin users; ?tenantId= is ignored for them
+    if (tenantScope !== null) {
+      queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: tenantScope });
     } else if (query.tenantId) {
       // Super admin can filter by tenant
       queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: query.tenantId });
     }
 
-    // Residents only see their own passes (created by them OR where they are the host)
-    if (currentUser.role === 'resident') {
-      queryBuilder.andWhere(
-        '(pass.createdById = :userId OR pass.residentId = :userId)',
-        { userId: currentUser.id },
-      );
+    // Everyone but admins and security (residents, staff) only sees their own
+    // passes: created by them OR where they are the host
+    if (!seesAllPasses(currentUser)) {
+      queryBuilder.andWhere('(pass.createdById = :userId OR pass.residentId = :userId)', {
+        userId: currentUser.id,
+      });
     }
 
     // Apply filters
@@ -235,6 +295,10 @@ export class VisitorPassService {
   }
 
   async findOne(id: string, currentUser: User): Promise<VisitorPass> {
+    // update, cancel, remove, resend and :id/qr all come through here, so this
+    // one check covers every by-id route.
+    const tenantScope = this.scopeTenant(currentUser);
+
     const pass = await this.visitorPassRepository.findOne({
       where: { id },
       relations: ['createdBy', 'tenant', 'resident'],
@@ -244,16 +308,17 @@ export class VisitorPassService {
       throw new NotFoundException(`Visitor pass with ID ${id} not found`);
     }
 
-    // Check access: user must be creator, host resident, or admin of same tenant
+    // Check access: user must be creator, host resident, or admin / security of
+    // the same building
     if (
       pass.createdById !== currentUser.id &&
       pass.residentId !== currentUser.id &&
-      currentUser.role === 'resident'
+      !seesAllPasses(currentUser)
     ) {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
-    if (currentUser.tenantId && pass.tenantId !== currentUser.tenantId) {
+    if (tenantScope !== null && pass.tenantId !== tenantScope) {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
@@ -287,6 +352,8 @@ export class VisitorPassService {
     } | null;
     tenant: { id: string; name: string; address?: string } | null;
   }> {
+    const tenantScope = this.scopeTenant(currentUser);
+
     const pass = await this.visitorPassRepository.findOne({
       where: { qrToken },
       relations: ['createdBy', 'tenant', 'resident'],
@@ -297,7 +364,7 @@ export class VisitorPassService {
     }
 
     // Check access: Super Admin can see all, others only their tenant
-    if (currentUser.role !== UserRole.SUPER_ADMIN && pass.tenantId !== currentUser.tenantId) {
+    if (tenantScope !== null && pass.tenantId !== tenantScope) {
       throw new ForbiddenException('You do not have access to this visitor pass');
     }
 
@@ -329,11 +396,11 @@ export class VisitorPassService {
   ): Promise<VisitorPass> {
     const pass = await this.findOne(id, currentUser);
 
-    // Only creator or host resident can update (or admin)
+    // Only creator or host resident can update (or admin / security)
     if (
       pass.createdById !== currentUser.id &&
       pass.residentId !== currentUser.id &&
-      currentUser.role === 'resident'
+      !seesAllPasses(currentUser)
     ) {
       throw new ForbiddenException('You can only update your own visitor passes');
     }
@@ -374,16 +441,11 @@ export class VisitorPassService {
     // stricter action. Previously security could hard-delete any pass in the
     // building, erasing other people's records.
     const isBuildingOwner =
-      currentUser.role === UserRole.SUPER_ADMIN ||
-      currentUser.role === UserRole.BUILDING_ADMIN;
-    const isOwnerOrHost =
-      pass.createdById === currentUser.id ||
-      pass.residentId === currentUser.id;
+      currentUser.role === UserRole.SUPER_ADMIN || currentUser.role === UserRole.BUILDING_ADMIN;
+    const isOwnerOrHost = pass.createdById === currentUser.id || pass.residentId === currentUser.id;
 
     if (!isBuildingOwner && !isOwnerOrHost) {
-      throw new ForbiddenException(
-        'You can only delete visitor passes you created',
-      );
+      throw new ForbiddenException('You can only delete visitor passes you created');
     }
 
     await this.visitorPassRepository.remove(pass);
@@ -409,17 +471,18 @@ export class VisitorPassService {
     cancelled: number;
     used: number;
   }> {
+    const tenantScope = this.scopeTenant(currentUser);
+
     const queryBuilder = this.visitorPassRepository.createQueryBuilder('pass');
 
-    if (currentUser.tenantId) {
-      queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: currentUser.tenantId });
+    if (tenantScope !== null) {
+      queryBuilder.andWhere('pass.tenantId = :tenantId', { tenantId: tenantScope });
     }
 
-    if (currentUser.role === 'resident') {
-      queryBuilder.andWhere(
-        '(pass.createdById = :userId OR pass.residentId = :userId)',
-        { userId: currentUser.id },
-      );
+    if (!seesAllPasses(currentUser)) {
+      queryBuilder.andWhere('(pass.createdById = :userId OR pass.residentId = :userId)', {
+        userId: currentUser.id,
+      });
     }
 
     const passes = await queryBuilder.getMany();

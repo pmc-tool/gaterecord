@@ -34,6 +34,15 @@ export class CreateGateDto {
 }
 
 export class UpdateGateDto extends PartialType(CreateGateDto) {
+  // Redeclared only to document it: GatesService.update applies it for a Super
+  // Admin re-homing a gate into an existing tenant and drops it for everyone else.
+  @ApiPropertyOptional({
+    description: 'Super Admin only: move the gate to another building. Ignored for other roles.',
+  })
+  @IsUUID()
+  @IsOptional()
+  tenantId?: string;
+
   @ApiPropertyOptional({ enum: GateState })
   @IsEnum(GateState)
   @IsOptional()

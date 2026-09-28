@@ -28,7 +28,20 @@ import {
   AuditEventType,
 } from '@database/entities/subscription-audit-log.entity';
 import { EmailService } from '../notification/email.service';
+import { MembershipAccessService } from '../memberships/membership-access.service';
 
+/**
+ * Who receives a building's billing emails (dunning, trial expiry, suspension,
+ * pause reminders, refunds): its ACTIVE building_admin memberships
+ * (MembershipAccessService.findTenantAdminEmails). A person who admins Tower A
+ * and Tower D gets A's emails for A and D's for D, whichever building their
+ * gate_users row points at; an inactive admin, a banned person or a removed
+ * membership gets nothing. Super admins are no longer copied (they are platform
+ * staff, not a building's billing contact). A building with no active admin
+ * falls back to its contact email, so a billing warning is never sent nowhere.
+ *
+ * Every cron run fetches the recipients of all its buildings in ONE query.
+ */
 @Injectable()
 export class StripeScheduler {
   private readonly logger = new Logger(StripeScheduler.name);
@@ -44,11 +57,38 @@ export class StripeScheduler {
     private planRepository: Repository<SubscriptionPlan>,
     @InjectRepository(SubscriptionAuditLog)
     private auditLogRepository: Repository<SubscriptionAuditLog>,
+    private membershipAccessService: MembershipAccessService,
   ) {
     const secretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     if (secretKey) {
       this.stripe = new Stripe(secretKey);
     }
+  }
+
+  /**
+   * Billing email recipients for each building, keyed by tenant id: its active
+   * building admins, or its contact email when it has none. One query for the
+   * whole batch; an empty batch makes none.
+   */
+  private async billingRecipients(
+    tenants: readonly Pick<Tenant, 'id' | 'contactEmail'>[],
+  ): Promise<Map<string, string[]>> {
+    const recipients = new Map<string, string[]>();
+    if (tenants.length === 0) {
+      return recipients;
+    }
+
+    const admins = await this.membershipAccessService.findTenantAdminEmails(
+      tenants.map((tenant) => tenant.id),
+    );
+    for (const tenant of tenants) {
+      const emails = admins.get(tenant.id) ?? [];
+      recipients.set(
+        tenant.id,
+        emails.length > 0 ? emails : tenant.contactEmail ? [tenant.contactEmail] : [],
+      );
+    }
+    return recipients;
   }
 
   // ==================== Daily Sync Job ====================
@@ -163,22 +203,22 @@ export class StripeScheduler {
         subscriptionStatus: SubscriptionStatus.PAST_DUE,
         status: In([TenantStatus.ACTIVE, TenantStatus.TRIAL]),
       },
-      relations: ['subscriptionPlan', 'users'],
+      relations: ['subscriptionPlan'],
     });
+    const recipients = await this.billingRecipients(pastDueTenants);
 
     for (const tenant of pastDueTenants) {
-      // Find admin users to notify
-      const adminUsers =
-        tenant.users?.filter((u) => u.role === 'building_admin' || u.role === 'super_admin') || [];
+      // The building's admins to notify
+      const emails = recipients.get(tenant.id) ?? [];
 
-      for (const admin of adminUsers) {
-        await this.sendDunningEmail(tenant, admin.email, 'payment_failed');
+      for (const email of emails) {
+        await this.sendDunningEmail(tenant, email, 'payment_failed');
       }
 
       await this.logAuditEvent({
         tenantId: tenant.id,
         eventType: AuditEventType.DUNNING_EMAIL_SENT,
-        metadata: { reason: 'payment_failed', recipientCount: adminUsers.length },
+        metadata: { reason: 'payment_failed', recipientCount: emails.length },
       });
     }
 
@@ -211,9 +251,11 @@ export class StripeScheduler {
           subscriptionExpiresAt: LessThan(sevenDaysFromNow),
         },
       ],
-      relations: ['subscriptionPlan', 'users'],
+      relations: ['subscriptionPlan'],
     });
 
+    // Only send at 7 days and 3 days
+    const due: { tenant: Tenant; daysLeft: number }[] = [];
     for (const tenant of expiringTrials) {
       if (!tenant.subscriptionExpiresAt) continue;
 
@@ -221,20 +263,22 @@ export class StripeScheduler {
         (tenant.subscriptionExpiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000),
       );
 
-      // Only send at 7 days and 3 days
       if (daysLeft !== 7 && daysLeft !== 3 && daysLeft !== 1) continue;
+      due.push({ tenant, daysLeft });
+    }
+    const recipients = await this.billingRecipients(due.map(({ tenant }) => tenant));
 
-      const adminUsers =
-        tenant.users?.filter((u) => u.role === 'building_admin' || u.role === 'super_admin') || [];
+    for (const { tenant, daysLeft } of due) {
+      const emails = recipients.get(tenant.id) ?? [];
 
-      for (const admin of adminUsers) {
-        await this.sendTrialExpiryEmail(tenant, admin.email, daysLeft);
+      for (const email of emails) {
+        await this.sendTrialExpiryEmail(tenant, email, daysLeft);
       }
 
       await this.logAuditEvent({
         tenantId: tenant.id,
         eventType: AuditEventType.TRIAL_ENDING_SOON,
-        metadata: { daysLeft, recipientCount: adminUsers.length },
+        metadata: { daysLeft, recipientCount: emails.length },
       });
     }
 
@@ -262,8 +306,8 @@ export class StripeScheduler {
         currentPeriodEnd: LessThan(cutoffDate),
         status: TenantStatus.ACTIVE,
       },
-      relations: ['users'],
     });
+    const recipients = await this.billingRecipients(overduetenants);
 
     for (const tenant of overduetenants) {
       const previousStatus = tenant.status;
@@ -271,11 +315,8 @@ export class StripeScheduler {
       await this.tenantRepository.save(tenant);
 
       // Notify admins
-      const adminUsers =
-        tenant.users?.filter((u) => u.role === 'building_admin' || u.role === 'super_admin') || [];
-
-      for (const admin of adminUsers) {
-        await this.sendSuspensionEmail(tenant, admin.email);
+      for (const email of recipients.get(tenant.id) ?? []) {
+        await this.sendSuspensionEmail(tenant, email);
       }
 
       await this.logAuditEvent({
@@ -315,9 +356,11 @@ export class StripeScheduler {
         isPaused: true,
         pauseResumesAt: LessThan(threeDaysFromNow),
       },
-      relations: ['subscriptionPlan', 'users'],
+      relations: ['subscriptionPlan'],
     });
 
+    // Only send at 3 days and 1 day
+    const due: { tenant: Tenant; daysUntilResume: number }[] = [];
     for (const tenant of resumingSoon) {
       if (!tenant.pauseResumesAt) continue;
 
@@ -325,14 +368,16 @@ export class StripeScheduler {
         (tenant.pauseResumesAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000),
       );
 
-      // Only send at 3 days and 1 day
       if (daysUntilResume !== 3 && daysUntilResume !== 1) continue;
+      due.push({ tenant, daysUntilResume });
+    }
+    const recipients = await this.billingRecipients(due.map(({ tenant }) => tenant));
 
-      const adminUsers =
-        tenant.users?.filter((u) => u.role === 'building_admin' || u.role === 'super_admin') || [];
+    for (const { tenant, daysUntilResume } of due) {
+      const emails = recipients.get(tenant.id) ?? [];
 
-      for (const admin of adminUsers) {
-        await this.sendPauseResumeReminderEmail(tenant, admin.email, daysUntilResume);
+      for (const email of emails) {
+        await this.sendPauseResumeReminderEmail(tenant, email, daysUntilResume);
       }
 
       await this.logAuditEvent({
@@ -341,7 +386,7 @@ export class StripeScheduler {
         metadata: {
           type: 'pause_resume_reminder',
           daysUntilResume,
-          recipientCount: adminUsers.length,
+          recipientCount: emails.length,
         },
       });
     }
@@ -360,21 +405,15 @@ export class StripeScheduler {
   }): Promise<void> {
     const { tenant, amount, reason } = payload;
 
-    // Get admin users for this tenant
-    const adminUsers = await this.tenantRepository
-      .createQueryBuilder('tenant')
-      .innerJoin('tenant.users', 'user')
-      .where('tenant.id = :tenantId', { tenantId: tenant.id })
-      .andWhere('user.role IN (:...roles)', { roles: ['super_admin', 'building_admin'] })
-      .select(['user.email'])
-      .getRawMany();
+    // The building's admins
+    const emails = (await this.billingRecipients([tenant])).get(tenant.id) ?? [];
 
-    for (const admin of adminUsers) {
-      await this.sendRefundConfirmationEmail(tenant, admin.user_email, amount, reason);
+    for (const email of emails) {
+      await this.sendRefundConfirmationEmail(tenant, email, amount, reason);
     }
 
     this.logger.log(
-      `Refund confirmation sent to ${adminUsers.length} admins for tenant ${tenant.name}`,
+      `Refund confirmation sent to ${emails.length} admins for tenant ${tenant.name}`,
     );
   }
 
@@ -403,22 +442,11 @@ export class StripeScheduler {
       return;
     }
 
-    // Get admin users
-    const adminUsers = await this.tenantRepository
-      .createQueryBuilder('tenant')
-      .innerJoin('tenant.users', 'user')
-      .where('tenant.id = :tenantId', { tenantId: tenant.id })
-      .andWhere('user.role IN (:...roles)', { roles: ['super_admin', 'building_admin'] })
-      .select(['user.email'])
-      .getRawMany();
+    // The building's admins
+    const emails = (await this.billingRecipients([tenant])).get(tenant.id) ?? [];
 
-    for (const admin of adminUsers) {
-      await this.sendRefundConfirmationEmail(
-        tenant,
-        admin.user_email,
-        amount,
-        'refund_from_stripe',
-      );
+    for (const email of emails) {
+      await this.sendRefundConfirmationEmail(tenant, email, amount, 'refund_from_stripe');
     }
   }
 
@@ -430,17 +458,11 @@ export class StripeScheduler {
   }): Promise<void> {
     const { tenant, failureReason } = payload;
 
-    // Get admin users
-    const adminUsers = await this.tenantRepository
-      .createQueryBuilder('tenant')
-      .innerJoin('tenant.users', 'user')
-      .where('tenant.id = :tenantId', { tenantId: tenant.id })
-      .andWhere('user.role IN (:...roles)', { roles: ['super_admin', 'building_admin'] })
-      .select(['user.email'])
-      .getRawMany();
+    // The building's admins
+    const emails = (await this.billingRecipients([tenant])).get(tenant.id) ?? [];
 
-    for (const admin of adminUsers) {
-      await this.sendRefundFailedEmail(tenant, admin.user_email, failureReason || 'Unknown error');
+    for (const email of emails) {
+      await this.sendRefundFailedEmail(tenant, email, failureReason || 'Unknown error');
     }
 
     this.logger.warn(`Refund failed notification sent for tenant ${tenant.name}: ${failureReason}`);
@@ -722,8 +744,7 @@ export class StripeScheduler {
     amount: number,
     reason: string,
   ): Promise<void> {
-    const frontendUrl =
-      this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
     const billingUrl = `${frontendUrl}/billing`;
     const amountFormatted = `$${(amount / 100).toFixed(2)}`;
 
@@ -797,9 +818,6 @@ export class StripeScheduler {
    * Send refund failed notification
    */
   async sendRefundFailedEmail(tenant: Tenant, email: string, failureReason: string): Promise<void> {
-    const frontendUrl =
-      this.configService.get<string>('FRONTEND_URL') || 'https://yaad.global';
-
     const html = `
       <!DOCTYPE html>
       <html>

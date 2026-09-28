@@ -11,11 +11,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsUUID, IsIn, IsOptional, IsBoolean, IsInt } from 'class-validator';
-import { RfidRegistrationService } from './rfid-registration.service';
+import { RegistrationActor, RfidRegistrationService } from './rfid-registration.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
+import { MembershipErrorCode } from '@common/context/membership-context.errors';
 import { User, UserRole } from '@database/entities/user.entity';
 
 class StartRegistrationDto {
@@ -27,8 +29,8 @@ class StartRegistrationDto {
   @IsUUID()
   targetId: string;
 
-  // Optional and only honoured for a super admin; every other caller registers
-  // against their OWN tenant regardless of what is sent (see startRegistration).
+  // Required for a super admin in the Platform context and ignored for everyone
+  // else, who registers in the building they act in (see startRegistration).
   @IsOptional()
   @IsUUID()
   tenantId?: string;
@@ -71,11 +73,29 @@ class SubmitScanDto {
 }
 
 /**
+ * The actor of a registration request: the building the request acts in
+ * (assertBuildingContext: 409 MEMBERSHIP_REQUIRED without one), or null for a
+ * super admin in the Platform context.
+ */
+function registrationActorOf(user: User): RegistrationActor {
+  return {
+    userId: user.id,
+    tenantId: isPlatformContext(user) ? null : assertBuildingContext(user),
+  };
+}
+
+/**
  * RFID registration binds a physical card UID to a resident or vehicle, so it is
  * tenant-scoped and admin-only. Previously it had no guard and trusted the
  * tenantId in the request body — any authenticated user could register a card
- * for any target in any building. The tenant is now taken from the authenticated
- * caller (except a super admin, who may specify one).
+ * for any target in any building.
+ *
+ * GATE-5: every route is bound to the building the request ACTS in (its
+ * membership context). A session is started in that building (a super admin in
+ * the Platform context must name one with tenantId), and cancel / scan / status
+ * only see sessions of that building: a session started while acting in
+ * Tower C cannot be scanned or cancelled from a Tower B context. Hardware taps
+ * are unaffected; they complete the session of the device's building.
  */
 @ApiTags('RFID')
 @ApiBearerAuth()
@@ -91,12 +111,18 @@ export class RfidRegistrationController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Start RFID card registration session' })
   async startRegistration(@CurrentUser() user: User, @Body() dto: StartRegistrationDto) {
-    // The tenant comes from the caller, never the body — a non-super-admin
-    // cannot register a card into another building.
-    const tenantId =
-      user.role === UserRole.SUPER_ADMIN && dto.tenantId
-        ? dto.tenantId
-        : (user.tenantId as string);
+    // The building comes from the caller's context, never the body — except for
+    // a platform super admin, who has no building and must name one.
+    const actor = registrationActorOf(user);
+    const tenantId = actor.tenantId ?? dto.tenantId;
+    if (!tenantId) {
+      throw new BadRequestException({
+        statusCode: HttpStatus.BAD_REQUEST,
+        error: 'Bad Request',
+        code: MembershipErrorCode.TENANT_REQUIRED,
+        message: 'Choose the building (tenantId) to register the card in.',
+      });
+    }
 
     this.logger.log(`=== START REGISTRATION REQUEST ===`);
     this.logger.log(`Target Type: ${dto.targetType}`);
@@ -109,6 +135,7 @@ export class RfidRegistrationController {
         dto.targetId,
         tenantId,
         { gateId: dto.gateId, deviceId: dto.deviceId, readerChannel: dto.readerChannel },
+        user.id,
       );
     } catch (error) {
       // A bad reader scope is a client mistake, not a server fault.
@@ -128,8 +155,11 @@ export class RfidRegistrationController {
   @Post('cancel')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel RFID card registration session' })
-  cancelRegistration(@Body() dto: CancelRegistrationDto) {
-    const success = this.rfidRegistrationService.cancelSession(dto.sessionId);
+  cancelRegistration(@CurrentUser() user: User, @Body() dto: CancelRegistrationDto) {
+    const success = this.rfidRegistrationService.cancelSession(
+      dto.sessionId,
+      registrationActorOf(user),
+    );
 
     if (!success) {
       throw new BadRequestException('Registration session not found or already expired');
@@ -143,13 +173,16 @@ export class RfidRegistrationController {
   @Post('scan')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Submit an RFID UID scanned via phone NFC' })
-  async submitScan(@Body() dto: SubmitScanDto) {
+  async submitScan(@CurrentUser() user: User, @Body() dto: SubmitScanDto) {
+    // Resolved outside the try below: a missing context is a 409, not a 400.
+    const actor = registrationActorOf(user);
     this.logger.log(`Manual scan submission for session ${dto.sessionId}: ${dto.uid}`);
     try {
       const result = await this.rfidRegistrationService.submitManualScan(
         dto.sessionId,
         dto.uid,
         dto.raw ?? false,
+        actor,
       );
       return {
         message: 'Card registered successfully',
@@ -164,9 +197,11 @@ export class RfidRegistrationController {
 
   @Get('status')
   @ApiOperation({ summary: 'Get registration session status (debug)' })
-  getStatus() {
+  getStatus(@CurrentUser() user: User) {
     return {
-      hasActiveSessions: this.rfidRegistrationService.getActiveSessionsDebug(),
+      hasActiveSessions: this.rfidRegistrationService.getActiveSessionsDebug(
+        registrationActorOf(user),
+      ),
     };
   }
 }

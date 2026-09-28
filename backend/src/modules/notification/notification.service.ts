@@ -1,15 +1,38 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, LessThan } from 'typeorm';
-import { Notification, NotificationType, NotificationPriority } from '@database/entities/notification.entity';
-import { User, UserRole } from '@database/entities/user.entity';
+import { Repository, In, LessThan, FindOptionsWhere } from 'typeorm';
+import {
+  Notification,
+  NotificationType,
+  NotificationPriority,
+} from '@database/entities/notification.entity';
+import { User, UserRole, UserStatus } from '@database/entities/user.entity';
+import { isMembershipRole } from '@database/entities/membership.entity';
+import { isUuid } from '@common/context/acting-user';
 import { EmailService } from './email.service';
 import {
   CreateNotificationDto,
   NotificationQueryDto,
   NotificationCountDto,
 } from './dto/notification.dto';
+import { NotificationLens, whereForLens } from './notification-lens';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { ALERT_RECIPIENT_ROLES } from '../memberships/membership-access.constants';
 
+/**
+ * In-app (bell) notifications and their optional emails.
+ *
+ * Recipients are PEOPLE (gate_users.id). Who in a building should hear about
+ * something is read from memberships (MembershipAccessService
+ * .findActivePersonIds: an ACTIVE role in that building, not banned), never
+ * from gate_users.tenant_id, so a person who is security in Tower C hears about
+ * C's alerts even though their legacy row names another building, and hears
+ * about them once however many rows match. Super admins are found by their
+ * platform role (gate_users.role, A1).
+ *
+ * Reading follows the request's context through a NotificationLens (see
+ * notification-lens.ts): a building's items plus personal ones.
+ */
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
@@ -20,6 +43,7 @@ export class NotificationService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private emailService: EmailService,
+    private membershipAccessService: MembershipAccessService,
   ) {}
 
   /**
@@ -51,7 +75,14 @@ export class NotificationService {
 
     // Send email if requested and user has email notifications enabled
     if (dto.sendEmail && emailEnabled && user.email) {
-      await this.sendEmailToUser(user, dto.title, dto.message, dto.type, dto.priority, dto.metadata?.link as string);
+      await this.sendEmailToUser(
+        user,
+        dto.title,
+        dto.message,
+        dto.type,
+        dto.priority,
+        dto.metadata?.link as string,
+      );
       if (savedNotification) {
         await this.notificationRepository.update(savedNotification.id, {
           emailSent: true,
@@ -91,14 +122,20 @@ export class NotificationService {
   }
 
   /**
-   * Create notifications for multiple users (respects each user's settings)
+   * Create notifications for multiple users (respects each user's settings).
+   * Each person is notified once however often their id is listed, and people
+   * who are not ACTIVE (banned platform-wide, or deactivated in their only
+   * building) are skipped.
    */
   async createForUsers(
-    userIds: string[],
+    userIds: readonly string[],
     data: Omit<CreateNotificationDto, 'userId'>,
   ): Promise<Notification[]> {
+    const ids = [...new Set(userIds.filter((id) => isUuid(id)))];
+    if (ids.length === 0) return [];
+
     const users = await this.userRepository.find({
-      where: { id: In(userIds) },
+      where: { id: In(ids), status: UserStatus.ACTIVE },
     });
 
     const notifications: Notification[] = [];
@@ -123,7 +160,14 @@ export class NotificationService {
 
         // Send email if requested and enabled
         if (data.sendEmail && emailEnabled) {
-          await this.sendEmailToUser(user, data.title, data.message, data.type, data.priority, data.metadata?.link as string);
+          await this.sendEmailToUser(
+            user,
+            data.title,
+            data.message,
+            data.type,
+            data.priority,
+            data.metadata?.link as string,
+          );
           await this.notificationRepository.update(saved.id, {
             emailSent: true,
             emailSentAt: new Date(),
@@ -131,7 +175,14 @@ export class NotificationService {
         }
       } else if (data.sendEmail && emailEnabled) {
         // User wants email only (no in-app)
-        await this.sendEmailToUser(user, data.title, data.message, data.type, data.priority, data.metadata?.link as string);
+        await this.sendEmailToUser(
+          user,
+          data.title,
+          data.message,
+          data.type,
+          data.priority,
+          data.metadata?.link as string,
+        );
       }
     }
 
@@ -139,66 +190,66 @@ export class NotificationService {
   }
 
   /**
-   * Create notification for all users with specific roles in a tenant
+   * Notify everyone with an ACTIVE role in `roles` in the building, tagged with
+   * the building. Read from memberships, so the recipients are the people who
+   * hold that role THERE (not whoever's legacy gate_users row names it), each
+   * once. super_admin is not a building role and is ignored here; use
+   * createForSuperAdmins.
    */
   async createForTenantRoles(
     tenantId: string,
-    roles: UserRole[],
+    roles: readonly UserRole[],
     data: Omit<CreateNotificationDto, 'userId' | 'tenantId'>,
   ): Promise<Notification[]> {
-    const users = await this.userRepository.find({
-      where: roles.map((role) => ({ tenantId, role })),
-    });
-
-    if (users.length === 0) return [];
-
-    return this.createForUsers(
-      users.map((u) => u.id),
-      { ...data, tenantId },
-    );
+    const { notifications } = await this.notifyTenantRoles(tenantId, roles, data);
+    return notifications;
   }
 
   /**
-   * Create notification for super admins
+   * Create notification for super admins (platform role, A1). `excludeIds` are
+   * people already notified about the same thing (for example a super admin who
+   * is also a building admin of the alert's building), so nobody gets it twice.
+   * Pass `tenantId` in `data` to tag the copies with the building they are
+   * about; the platform bell shows every row either way.
    */
   async createForSuperAdmins(
     data: Omit<CreateNotificationDto, 'userId'>,
+    excludeIds: readonly string[] = [],
   ): Promise<Notification[]> {
     const superAdmins = await this.userRepository.find({
-      where: { role: UserRole.SUPER_ADMIN },
+      where: { role: UserRole.SUPER_ADMIN, status: UserStatus.ACTIVE },
     });
 
-    if (superAdmins.length === 0) return [];
+    const excluded = new Set(excludeIds);
+    const ids = superAdmins.map((u) => u.id).filter((id) => !excluded.has(id));
+    if (ids.length === 0) return [];
 
-    return this.createForUsers(
-      superAdmins.map((u) => u.id),
-      data,
-    );
+    return this.createForUsers(ids, data);
   }
 
   /**
-   * Get notifications for current user
+   * Get notifications for current user, through the context lens
    */
   async findForUser(
-    userId: string,
+    lens: NotificationLens,
     query: NotificationQueryDto,
   ): Promise<{ notifications: Notification[]; total: number }> {
     const page = parseInt(query.page || '1', 10);
     const limit = parseInt(query.limit || '20', 10);
     const skip = (page - 1) * limit;
 
-    const where: Record<string, unknown> = { userId };
+    const filters: FindOptionsWhere<Notification> = {};
 
     if (query.isRead !== undefined) {
-      where.isRead = query.isRead;
+      filters.isRead = query.isRead;
     }
 
     if (query.type) {
-      where.type = query.type;
+      filters.type = query.type;
     }
 
     const [notifications, total] = await this.notificationRepository.findAndCount({
-      where,
+      where: whereForLens(lens, filters),
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
@@ -208,12 +259,12 @@ export class NotificationService {
   }
 
   /**
-   * Get notification counts for current user
+   * Get notification counts for current user, through the context lens
    */
-  async getCountsForUser(userId: string): Promise<NotificationCountDto> {
+  async getCountsForUser(lens: NotificationLens): Promise<NotificationCountDto> {
     const [total, unread] = await Promise.all([
-      this.notificationRepository.count({ where: { userId } }),
-      this.notificationRepository.count({ where: { userId, isRead: false } }),
+      this.notificationRepository.count({ where: whereForLens(lens) }),
+      this.notificationRepository.count({ where: whereForLens(lens, { isRead: false }) }),
     ]);
 
     return { total, unread };
@@ -230,13 +281,14 @@ export class NotificationService {
   }
 
   /**
-   * Mark all notifications as read for a user
+   * Mark all notifications as read for a user: the ones the lens shows, so
+   * "mark all read" in Tower B leaves Tower A's unread items alone.
    */
-  async markAllAsRead(userId: string): Promise<void> {
-    await this.notificationRepository.update(
-      { userId, isRead: false },
-      { isRead: true, readAt: new Date() },
-    );
+  async markAllAsRead(lens: NotificationLens): Promise<void> {
+    await this.notificationRepository.update(whereForLens(lens, { isRead: false }), {
+      isRead: true,
+      readAt: new Date(),
+    });
   }
 
   /**
@@ -270,10 +322,39 @@ export class NotificationService {
     return result.affected || 0;
   }
 
+  /**
+   * createForTenantRoles, also returning who was reached. The building must be
+   * a uuid: a missing one would otherwise mean "no building filter".
+   */
+  private async notifyTenantRoles(
+    tenantId: string,
+    roles: readonly UserRole[],
+    data: Omit<CreateNotificationDto, 'userId' | 'tenantId'>,
+  ): Promise<{ notifications: Notification[]; personIds: string[] }> {
+    const buildingRoles = roles.filter(isMembershipRole);
+    if (!isUuid(tenantId) || buildingRoles.length === 0) {
+      this.logger.warn(`Notification "${data.title}" has no building or no building role; skipped`);
+      return { notifications: [], personIds: [] };
+    }
+
+    const personIds = await this.membershipAccessService.findActivePersonIds(
+      tenantId,
+      buildingRoles,
+    );
+    if (personIds.length === 0) return { notifications: [], personIds };
+
+    const notifications = await this.createForUsers(personIds, { ...data, tenantId });
+    return { notifications, personIds };
+  }
+
   // ============ Helper methods for specific notification types ============
 
   /**
-   * Create security alert notification
+   * Create security alert notification: the building's active admins and
+   * security, then every super admin who was not already reached that way.
+   * All copies are tagged with the building, so the alert shows in the bell of
+   * whoever acts in that building and in the platform view, and a super admin
+   * who is also an admin of the building gets exactly one.
    */
   async notifySecurityAlert(
     tenantId: string,
@@ -281,42 +362,45 @@ export class NotificationService {
     alertMessage: string,
     metadata: Record<string, unknown>,
   ): Promise<void> {
-    // Notify Security, Building Admin, and Super Admins
-    await this.createForTenantRoles(tenantId, [UserRole.SECURITY, UserRole.BUILDING_ADMIN], {
+    const alert = {
       type: NotificationType.SECURITY_ALERT,
       priority: NotificationPriority.CRITICAL,
       title: alertTitle,
       message: alertMessage,
-      metadata,
       sendEmail: true,
+    };
+
+    const { personIds } = await this.notifyTenantRoles(tenantId, ALERT_RECIPIENT_ROLES, {
+      ...alert,
+      metadata,
     });
 
-    await this.createForSuperAdmins({
-      type: NotificationType.SECURITY_ALERT,
-      priority: NotificationPriority.CRITICAL,
-      title: alertTitle,
-      message: alertMessage,
-      metadata: { ...metadata, tenantId },
-      sendEmail: true,
-    });
+    await this.createForSuperAdmins(
+      {
+        ...alert,
+        tenantId: isUuid(tenantId) ? tenantId : undefined,
+        metadata: { ...metadata, tenantId },
+      },
+      personIds,
+    );
   }
 
   /**
-   * Create visitor entry notification for resident
+   * Create visitor entry notification for resident. `tenantId` is the building
+   * the visitor entered (the gate's), passed explicitly: the resident's legacy
+   * gate_users.tenant_id may name another of their buildings.
    */
   async notifyVisitorEntry(
     residentId: string,
+    tenantId: string,
     visitorName: string,
     gateName: string,
     metadata: Record<string, unknown>,
     sendEmail = true,
   ): Promise<void> {
-    const user = await this.userRepository.findOne({ where: { id: residentId } });
-    if (!user) return;
-
     await this.create({
       userId: residentId,
-      tenantId: user.tenantId || undefined,
+      tenantId,
       type: NotificationType.VISITOR_ENTRY,
       priority: NotificationPriority.NORMAL,
       title: 'Visitor Arrived',

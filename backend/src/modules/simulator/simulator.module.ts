@@ -1,7 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { JwtModule } from '@nestjs/jwt';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SimulatorService } from './simulator.service';
 import { SimulatorController } from './simulator.controller';
 import { SimulatorGateway } from './simulator.gateway';
@@ -19,6 +17,7 @@ import { GatesModule } from '../gates/gates.module';
 import { AccessEventsModule } from '../access-events/access-events.module';
 import { SecurityAlertModule } from '../security-alert/security-alert.module';
 import { CloudPlusModule } from '../cloud-plus-typeB/cloud-plus.module';
+import { GatewayModule } from '../gateway/gateway.module';
 
 @Module({
   imports: [
@@ -34,17 +33,13 @@ import { CloudPlusModule } from '../cloud-plus-typeB/cloud-plus.module';
       User,
       Tenant,
     ]),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-      }),
-      inject: [ConfigService],
-    }),
     GatesModule,
     AccessEventsModule,
     SecurityAlertModule,
     forwardRef(() => CloudPlusModule),
+    // SocketContextService: SimulatorGateway authenticates its handshakes and
+    // resolves their membership context with it (no JwtModule of its own).
+    GatewayModule,
   ],
   controllers: [SimulatorController],
   providers: [SimulatorService, SimulatorGateway],

@@ -121,15 +121,30 @@ export class TenantsController {
   // Tenants
   @Post('tenants')
   @ApiOperation({ summary: 'Create new tenant (building)' })
-  @ApiResponse({ status: 201, description: 'Tenant created with admin credentials' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Tenant created. A new admin email gets a temporary password; an existing account is ' +
+      'added as building admin (existingAccount=true, temporaryPassword null).',
+  })
+  @ApiResponse({ status: 403, description: 'ACCOUNT_SUSPENDED: the existing account is banned' })
+  @ApiResponse({
+    status: 409,
+    description: 'Name or slug taken, or MULTI_MEMBERSHIP_DISABLED for an existing account',
+  })
   async createTenant(@Body() dto: CreateTenantDto) {
     const result = await this.tenantsService.createTenant(dto);
     return {
       tenant: result.tenant,
+      existingAccount: result.existingAccount,
+      membershipId: result.membershipId,
       adminCredentials: {
         email: dto.adminEmail,
         temporaryPassword: result.adminPassword,
-        message: 'Admin must change password on first login',
+        existingAccount: result.existingAccount,
+        message: result.existingAccount
+          ? 'Existing account added as building admin; it keeps its current password'
+          : 'Admin must change password on first login',
       },
     };
   }

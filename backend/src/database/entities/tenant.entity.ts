@@ -8,6 +8,8 @@ import { RfidCard } from './rfid-card.entity';
 import { VisitorPass } from './visitor-pass.entity';
 import { AccessEvent } from './access-event.entity';
 import { AccessPolicy } from './access-policy.entity';
+// Type-only, for the same load-order reason as in user.entity.ts.
+import type { Membership } from './membership.entity';
 
 export enum TenantStatus {
   ACTIVE = 'active',
@@ -122,8 +124,20 @@ export class Tenant extends BaseEntity {
   @Column({ name: 'pause_reason', nullable: true })
   pauseReason: string;
 
+  /**
+   * @deprecated Rows whose LEGACY gate_users.tenant_id points here, so a person
+   * who belongs to several buildings appears under one of them only. Use
+   * `memberships` or MembershipAccessService.findTenantMembers instead.
+   */
   @OneToMany(() => User, (user) => user.tenant)
   users: User[];
+
+  /**
+   * Everyone who holds a role in this building. Read-only from this side
+   * (persistence off); MembershipsService is the only writer.
+   */
+  @OneToMany('Membership', 'tenant', { persistence: false })
+  memberships: Membership[];
 
   @OneToMany(() => Gate, (gate) => gate.tenant)
   gates: Gate[];

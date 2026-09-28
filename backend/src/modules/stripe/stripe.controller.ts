@@ -24,6 +24,10 @@ import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
+import {
+  BuildingContextSubject,
+  assertBuildingContext,
+} from '@common/context/assert-building-context';
 import { UserRole } from '@database/entities/user.entity';
 import { StripeService } from './stripe.service';
 import {
@@ -160,9 +164,28 @@ export class StripeController {
   }
 }
 
+/** Who may bill a building: its building admins, acting in it. */
+const BILLING_ROLES: readonly UserRole[] = [UserRole.BUILDING_ADMIN];
+
+/**
+ * The building a /billing/* call pays for: the one the request acts in, as its
+ * building admin (assertBuildingContext). Throws before the service is called:
+ * 409 MEMBERSHIP_REQUIRED without a chosen building (and for a super admin in
+ * the Platform context, who bills through /admin/stripe instead), 403
+ * ROLE_NOT_ALLOWED_IN_BUILDING when the role held there is not building_admin.
+ * So an admin of Tower A and Tower D pays for D only while acting in D, and a
+ * null tenant never reaches a billing query.
+ */
+export function billingTenantId(req: { user?: BuildingContextSubject | null }): string {
+  return assertBuildingContext(req.user, BILLING_ROLES);
+}
+
 /**
  * Billing Controller (for authenticated users)
- * Endpoints for managing subscriptions, checkout, etc.
+ * Endpoints for managing subscriptions, checkout, etc., always for the building
+ * the request acts in (billingTenantId). Only building admins: RolesGuard checks
+ * the role held in the acting building, and billingTenantId checks it again
+ * together with the building itself.
  */
 @Controller('billing')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -178,9 +201,9 @@ export class BillingController {
    * POST /api/v1/billing/checkout
    */
   @Post('checkout')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async createCheckoutSession(@Req() req: any, @Body() dto: CreateCheckoutSessionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.createCheckoutSession(tenantId, dto);
   }
 
@@ -195,12 +218,9 @@ export class BillingController {
    * still reach this to pay and recover.
    */
   @Post('subscription/intent')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
-  async createSubscriptionIntent(
-    @Req() req: any,
-    @Body() dto: CreateCheckoutSessionDto,
-  ) {
-    const tenantId = req.user.tenantId;
+  @Roles(UserRole.BUILDING_ADMIN)
+  async createSubscriptionIntent(@Req() req: any, @Body() dto: CreateCheckoutSessionDto) {
+    const tenantId = billingTenantId(req);
     return this.stripeService.createSubscriptionIntent(tenantId, dto);
   }
 
@@ -215,12 +235,9 @@ export class BillingController {
    * subscription is visible as soon as the settings page loads.
    */
   @Post('subscription/activate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
-  async activateSubscription(
-    @Req() req: any,
-    @Body() body: { setupIntentId: string },
-  ) {
-    const tenantId = req.user.tenantId;
+  @Roles(UserRole.BUILDING_ADMIN)
+  async activateSubscription(@Req() req: any, @Body() body: { setupIntentId: string }) {
+    const tenantId = billingTenantId(req);
     return this.stripeService.activateSubscriptionFromSetupIntent(tenantId, body.setupIntentId);
   }
 
@@ -229,9 +246,9 @@ export class BillingController {
    * POST /api/v1/billing/portal
    */
   @Post('portal')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async createPortalSession(@Req() req: any, @Body() dto: CreatePortalSessionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.createPortalSession(tenantId, dto.returnUrl);
   }
 
@@ -240,9 +257,9 @@ export class BillingController {
    * GET /api/v1/billing/subscription
    */
   @Get('subscription')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getSubscription(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.getSubscriptionDetails(tenantId);
   }
 
@@ -251,9 +268,9 @@ export class BillingController {
    * POST /api/v1/billing/cancel
    */
   @Post('cancel')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async cancelSubscription(@Req() req: any, @Body() dto: CancelSubscriptionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     await this.stripeService.cancelSubscription(tenantId, dto.immediately);
     return { success: true, message: 'Subscription cancellation scheduled' };
   }
@@ -263,9 +280,9 @@ export class BillingController {
    * POST /api/v1/billing/resume
    */
   @Post('resume')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async resumeSubscription(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     await this.stripeService.resumeSubscription(tenantId);
     return { success: true, message: 'Subscription resumed' };
   }
@@ -278,9 +295,9 @@ export class BillingController {
    * Can set auto-resume date (max 1 year).
    */
   @Post('pause')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async pauseSubscription(@Req() req: any, @Body() dto: PauseSubscriptionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
 
     // Parse resume date if provided
     const resumesAt = dto.resumesAt ? new Date(dto.resumesAt) : undefined;
@@ -307,9 +324,9 @@ export class BillingController {
    * Immediately resumes billing for a paused subscription.
    */
   @Post('unpause')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async unpauseSubscription(@Req() req: any, @Body() dto: ResumeSubscriptionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
 
     const result = await this.stripeService.unpauseSubscription(tenantId, {
       billingCycleAnchor: dto.billingCycleAnchor,
@@ -327,9 +344,9 @@ export class BillingController {
    * GET /api/v1/billing/pause-status
    */
   @Get('pause-status')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getPauseStatus(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.getPauseStatus(tenantId);
   }
 
@@ -342,9 +359,9 @@ export class BillingController {
    * Shows how much the customer would get back if they cancel now.
    */
   @Get('refund/calculate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async calculateRefund(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.calculateProratedRefund(tenantId);
   }
 
@@ -355,9 +372,9 @@ export class BillingController {
    * Returns all refunds issued to this tenant.
    */
   @Get('refunds')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getRefundHistory(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.getRefundHistory(tenantId);
   }
 
@@ -368,17 +385,17 @@ export class BillingController {
    * Building admin can request a prorated refund when cancelling immediately.
    */
   @Post('refund/request')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async requestRefund(@Req() req: any, @Body() body: { reason?: string }) {
-    const tenantId = req.user.tenantId;
-    
+    const tenantId = billingTenantId(req);
+
     // Create refund with prorated amount
     const result = await this.stripeService.createRefund(tenantId, {
       reason: 'requested_by_customer' as any,
       internalNote: body.reason || 'Customer requested refund via billing settings',
       notifyCustomer: true,
     });
-    
+
     return {
       success: true,
       message: `Refund of ${result.amountFormatted} processed successfully`,
@@ -393,9 +410,9 @@ export class BillingController {
    * Returns all payments for this tenant.
    */
   @Get('payments')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getPaymentHistory(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     return this.stripeService.getTenantPaymentHistory(tenantId, { page, limit });
@@ -409,9 +426,9 @@ export class BillingController {
    * still view their invoices (and pay). Returns { invoices, hasMore }.
    */
   @Get('invoices')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getInvoices(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     const limit = parseInt(req.query.limit) || 24;
     return this.stripeService.getTenantInvoices(tenantId, { limit });
   }
@@ -425,9 +442,9 @@ export class BillingController {
    * Returns all plans the tenant can switch to.
    */
   @Get('plans')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async getAvailablePlans(@Req() req: any) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.getAvailablePlans(tenantId);
   }
 
@@ -438,9 +455,9 @@ export class BillingController {
    * Shows what the customer would pay/receive as credit.
    */
   @Post('plans/preview')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async previewPlanChange(@Req() req: any, @Body() dto: UpdateSubscriptionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.previewPlanChange(tenantId, dto.newPlanId, dto.billingCycle);
   }
 
@@ -451,9 +468,9 @@ export class BillingController {
    * Changes the subscription to a new plan with proration.
    */
   @Post('plans/change')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @Roles(UserRole.BUILDING_ADMIN)
   async changePlan(@Req() req: any, @Body() dto: UpdateSubscriptionDto) {
-    const tenantId = req.user.tenantId;
+    const tenantId = billingTenantId(req);
     return this.stripeService.changePlan(tenantId, dto.newPlanId, dto.billingCycle, {
       immediate: dto.immediate ?? true,
     });
@@ -612,7 +629,18 @@ export class AdminStripeController {
    */
   @Get('payments')
   async getAllPayments(@Req() req: any) {
-    const { page, limit, tenantId, planId, status, type, billingCycle, startDate, endDate, search } = req.query;
+    const {
+      page,
+      limit,
+      tenantId,
+      planId,
+      status,
+      type,
+      billingCycle,
+      startDate,
+      endDate,
+      search,
+    } = req.query;
 
     const result = await this.stripeService.getAllPayments({
       page: parseInt(page) || 1,

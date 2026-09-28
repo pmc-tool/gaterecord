@@ -22,7 +22,15 @@ import { ResidentsModule } from '../residents/residents.module';
   imports: [
     // GlobalUser is the platform-wide `users` mirror written by
     // IdentityProvisioningService on every Keycloak-authenticated request.
-    TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken, Tenant, SubscriptionPlan, LoginHistory, GlobalUser]),
+    TypeOrmModule.forFeature([
+      User,
+      RefreshToken,
+      PasswordResetToken,
+      Tenant,
+      SubscriptionPlan,
+      LoginHistory,
+      GlobalUser,
+    ]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     StripeModule,
     // ResidentRemovalService: restores soft-deleted gate users as new users.
@@ -39,12 +47,14 @@ import { ResidentsModule } from '../residents/residents.module';
     }),
   ],
   controllers: [AuthController],
-  // DUAL-ACCEPT PHASE. JwtStrategy ('jwt', HS256/JWT_SECRET) is untouched and
-  // remains the defaultStrategy; KeycloakStrategy ('keycloak', RS256/JWKS) is
-  // registered ALONGSIDE it so JwtAuthGuard can accept either. Registration is
+  // DUAL-ACCEPT PHASE. JwtStrategy ('jwt', HS256/JWT_SECRET) remains the
+  // defaultStrategy; KeycloakStrategy ('keycloak', RS256/JWKS) is registered
+  // ALONGSIDE it so JwtAuthGuard can accept either. Registration is
   // unconditional on purpose: an unregistered strategy named in the guard makes
   // passport raise 'Unknown authentication strategy', which the guard only
-  // downgrades to a logged 401 as a safety net.
+  // downgrades to a logged 401 as a safety net. Both end in
+  // MembershipContextService.resolve (provided by the global MembershipsModule),
+  // so either one yields the same acting principal for X-Gate-Membership.
   providers: [AuthService, JwtStrategy, KeycloakStrategy, IdentityProvisioningService],
   exports: [AuthService, JwtModule, IdentityProvisioningService],
 })

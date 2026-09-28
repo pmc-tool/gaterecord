@@ -1,15 +1,32 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, MoreThan, Not } from 'typeorm';
+import { DataSource, Repository, MoreThan, Not } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { Tenant, TenantStatus, BillingCycle, SubscriptionStatus } from '@database/entities/tenant.entity';
+import {
+  Tenant,
+  TenantStatus,
+  BillingCycle,
+  SubscriptionStatus,
+} from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { AccessEvent } from '@database/entities/access-event.entity';
 import { Payment, PaymentStatus, TransactionType } from '@database/entities/payment.entity';
+import { Membership } from '@database/entities/membership.entity';
+import {
+  BuildingJoinRequest,
+  JoinRequestStatus,
+} from '@database/entities/building-join-request.entity';
+import { isUniqueViolation } from '@database/pg-errors';
+import { accountSuspended } from '@common/context/membership-context.errors';
 import { EmailService } from '../notification/email.service';
+import { MembershipsService } from '../memberships/memberships.service';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { MembershipLifecycleService } from '../people/membership-lifecycle.service';
+import { countSeats, countSeatsByTenant, seatLimitOf } from '../people/seat-limit';
+import { MembershipRow, toMembershipRow } from '../people/people.views';
 import {
   CreateTenantDto,
   UpdateTenantDto,
@@ -17,8 +34,36 @@ import {
   UpdateSubscriptionPlanDto,
 } from './dto/tenant.dto';
 
+/** What POST /admin/tenants created. */
+export interface CreateTenantResult {
+  tenant: Tenant;
+  /**
+   * The one-off password of a NEW admin account, shown once to the super admin
+   * and emailed. null when the email already had an account: that person keeps
+   * their password and gets an "added to <building>" email instead (A4).
+   */
+  adminPassword: string | null;
+  /** True when the admin email already belonged to a person. */
+  existingAccount: boolean;
+  /** gate_users.id of the building admin. */
+  adminUserId: string;
+  /** Their new BUILDING_ADMIN membership in the tenant. */
+  membershipId: string;
+}
+
+/**
+ * GET /admin/tenants/:id: the tenant with its members listed from memberships.
+ * `users` keeps its old key but now holds one safe row per membership (the
+ * people.views projection: never a hash, sub, QR token or settings), so a
+ * person who belongs to the building only through a second membership is
+ * listed too.
+ */
+export type TenantDetail = Omit<Tenant, 'users'> & { users: MembershipRow[] };
+
 @Injectable()
 export class TenantsService {
+  private readonly logger = new Logger(TenantsService.name);
+
   constructor(
     @InjectRepository(Tenant)
     private tenantRepository: Repository<Tenant>,
@@ -34,6 +79,10 @@ export class TenantsService {
     private paymentRepository: Repository<Payment>,
     private emailService: EmailService,
     private configService: ConfigService,
+    private dataSource: DataSource,
+    private membershipsService: MembershipsService,
+    private membershipAccessService: MembershipAccessService,
+    private membershipLifecycleService: MembershipLifecycleService,
   ) {}
 
   /**
@@ -94,12 +143,15 @@ export class TenantsService {
     return this.planRepository.save(plan);
   }
 
-  async findAllPlans(query: { search?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ data: SubscriptionPlan[]; total: number; page: number; limit: number }> {
+  async findAllPlans(
+    query: { search?: string; status?: string; page?: number; limit?: number } = {},
+  ): Promise<{ data: SubscriptionPlan[]; total: number; page: number; limit: number }> {
     const page = query.page || 1;
     const limit = query.limit || 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.planRepository.createQueryBuilder('plan')
+    const qb = this.planRepository
+      .createQueryBuilder('plan')
       .leftJoinAndSelect('plan.tenants', 'tenants')
       .orderBy('plan.displayOrder', 'ASC')
       .addOrderBy('plan.createdAt', 'ASC');
@@ -117,10 +169,7 @@ export class TenantsService {
     }
     // If no status filter, return all plans (for admin)
 
-    const [data, total] = await qb
-      .skip(skip)
-      .take(limit)
-      .getManyAndCount();
+    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     return { data, total, page, limit };
   }
@@ -167,7 +216,9 @@ export class TenantsService {
 
     // System plans (e.g. the default/free plan) can be edited by super admin but never deleted
     if (plan.isSystem) {
-      throw new ConflictException('Cannot delete a system plan. This plan is required by the platform.');
+      throw new ConflictException(
+        'Cannot delete a system plan. This plan is required by the platform.',
+      );
     }
 
     // Check if any tenants are using this plan
@@ -187,7 +238,31 @@ export class TenantsService {
     });
   }
 
-  async createTenant(dto: CreateTenantDto): Promise<{ tenant: Tenant; adminPassword: string }> {
+  /**
+   * Super admin creates a building and names its first building admin by email.
+   *
+   * One transaction, so a refusal anywhere leaves no orphan tenant:
+   *   - the tenant row;
+   *   - the admin person: an EXISTING account (live or soft-deleted, matched
+   *     case-insensitively) is reused as it is — never renamed, never given a
+   *     new password; a soft-deleted one is restored first. A NEW email gets
+   *     today's temporary-password person (with a personal QR code, via
+   *     MembershipLifecycleService.insertPerson) who must change it at first
+   *     login;
+   *   - their BUILDING_ADMIN membership (MembershipsService.add, which re-mirrors
+   *     the legacy columns).
+   *
+   * Refusals: 409 for a taken name or slug; 403 ACCOUNT_SUSPENDED when the
+   * existing person is banned (adding would only hide them in one more
+   * building); 409 MULTI_MEMBERSHIP_DISABLED while GATE_MEMBERSHIP_CONTEXT is
+   * off and the person already belongs to another building.
+   *
+   * After commit (never fatal): a new admin gets the credentials email, an
+   * existing one the "added to <building> as Building Admin" email.
+   */
+  async createTenant(dto: CreateTenantDto): Promise<CreateTenantResult> {
+    const adminEmail = dto.adminEmail.trim().toLowerCase();
+
     // Check uniqueness
     const existingName = await this.tenantRepository.findOne({ where: { name: dto.name } });
     if (existingName) {
@@ -199,18 +274,17 @@ export class TenantsService {
       throw new ConflictException('Tenant slug already exists');
     }
 
-    const existingEmail = await this.userRepository.findOne({
-      where: { email: dto.adminEmail.toLowerCase() },
-    });
-    if (existingEmail) {
-      throw new ConflictException('Admin email already exists');
-    }
-
     // Verify plan exists
     const plan = await this.planRepository.findOne({ where: { id: dto.subscriptionPlanId } });
     if (!plan) {
       throw new NotFoundException('Subscription plan not found');
     }
+
+    // Only a new account gets a password. Hashed here, outside the transaction,
+    // so no row lock is held across bcrypt.
+    const known = await this.membershipLifecycleService.findPersonByEmail(adminEmail);
+    const newPassword = known ? null : this.generatePassword();
+    const newPasswordHash = newPassword ? await bcrypt.hash(newPassword, 10) : undefined;
 
     const now = new Date();
     // Use same trial logic as user self-signup
@@ -218,72 +292,154 @@ export class TenantsService {
     const trialExpiresAt = new Date();
     trialExpiresAt.setDate(trialExpiresAt.getDate() + trialDays);
 
-    // Create tenant with trial status (same as user self-signup)
-    const tenant = this.tenantRepository.create({
-      name: dto.name,
-      slug: dto.slug,
-      contactEmail: dto.contactEmail,
-      contactPhone: dto.contactPhone,
-      address: dto.address,
-      subscriptionPlanId: dto.subscriptionPlanId,
-      status: TenantStatus.TRIAL,
-      subscriptionStatus: SubscriptionStatus.TRIALING,
-      subscriptionStartedAt: now,
-      subscriptionExpiresAt: trialExpiresAt,
-      currentPeriodEnd: trialExpiresAt,
-      settings: {
-        signupDate: now.toISOString(),
-        startedAsTrial: true,
-        trialDays: trialDays,
-        createdBySuperAdmin: true,
-      },
-    });
+    let outcome: { tenant: Tenant; person: User; membership: Membership; existingAccount: boolean };
+    try {
+      outcome = await this.dataSource.transaction(async (m) => {
+        // Create tenant with trial status (same as user self-signup)
+        const savedTenant = await m.save(
+          m.create(Tenant, {
+            name: dto.name,
+            slug: dto.slug,
+            contactEmail: dto.contactEmail,
+            contactPhone: dto.contactPhone,
+            address: dto.address,
+            subscriptionPlanId: dto.subscriptionPlanId,
+            status: TenantStatus.TRIAL,
+            subscriptionStatus: SubscriptionStatus.TRIALING,
+            subscriptionStartedAt: now,
+            subscriptionExpiresAt: trialExpiresAt,
+            currentPeriodEnd: trialExpiresAt,
+            settings: {
+              signupDate: now.toISOString(),
+              startedAsTrial: true,
+              trialDays: trialDays,
+              createdBySuperAdmin: true,
+            },
+          }),
+        );
 
-    const savedTenant = await this.tenantRepository.save(tenant);
+        // Re-read under a lock: the account may have been created (or removed)
+        // since the lookup above.
+        let person = await this.membershipLifecycleService.findPersonByEmail(adminEmail, m, {
+          lock: true,
+        });
+        const existingAccount = person !== null;
 
-    // Generate random password for admin
-    const adminPassword = this.generatePassword();
-    const passwordHash = await bcrypt.hash(adminPassword, 10);
+        if (person) {
+          if (person.deletedAt) {
+            // Restoring ends any leftover membership and keeps the status.
+            await this.membershipLifecycleService.restoreDeletedPerson(person.id, m);
+          }
+          if (person.status !== UserStatus.ACTIVE) {
+            throw accountSuspended();
+          }
+        } else {
+          if (!newPasswordHash) {
+            // Seen above, gone now (hard-deleted in between): no password was
+            // prepared for a new account, so do not invent one here.
+            throw new ConflictException(
+              'The admin account changed while the building was being created. Please try again.',
+            );
+          }
+          person = await this.membershipLifecycleService.insertPerson(m, {
+            email: adminEmail,
+            firstName: dto.adminFirstName,
+            lastName: dto.adminLastName,
+            // No platform identity: this admin signs in with the temporary password.
+            userId: null,
+            passwordHash: newPasswordHash,
+            mustChangePassword: true,
+          });
+        }
 
-    // Create building admin user
-    const adminUser = this.userRepository.create({
-      email: dto.adminEmail.toLowerCase(),
-      passwordHash,
-      firstName: dto.adminFirstName,
-      lastName: dto.adminLastName,
-      role: UserRole.BUILDING_ADMIN,
-      status: UserStatus.ACTIVE,
-      tenantId: savedTenant.id,
-      mustChangePassword: true,
-    });
+        const membership = await this.membershipsService.add(
+          { userId: person.id, tenantId: savedTenant.id, role: UserRole.BUILDING_ADMIN },
+          m,
+        );
 
-    await this.userRepository.save(adminUser);
+        return { tenant: savedTenant, person, membership, existingAccount };
+      });
+    } catch (error) {
+      // A concurrent create took the name, slug or email first.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException(
+          'Tenant name, slug or admin email was just taken. Please try again.',
+        );
+      }
+      throw error;
+    }
 
-    // Send credentials email to building admin
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
-    const loginUrl = `${frontendUrl}/login`;
+    const { tenant: savedTenant, person, membership, existingAccount } = outcome;
+    const adminPassword = existingAccount ? null : newPassword;
+    const adminName = `${person.firstName ?? ''} ${person.lastName ?? ''}`.trim();
 
-    this.emailService.sendNewUserCredentialsEmail(
-      dto.adminEmail.toLowerCase(),
-      `${dto.adminFirstName} ${dto.adminLastName}`,
-      UserRole.BUILDING_ADMIN,
+    if (adminPassword) {
+      // Send credentials email to building admin
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
+      const loginUrl = `${frontendUrl}/login`;
+
+      this.emailService
+        .sendNewUserCredentialsEmail(
+          person.email,
+          adminName,
+          UserRole.BUILDING_ADMIN,
+          adminPassword,
+          savedTenant.name,
+          'Yaad Admin',
+          loginUrl,
+        )
+        .catch((error) => {
+          console.error('Failed to send credentials email:', error);
+        });
+    } else {
+      // An existing account keeps its password; it only learns about the building.
+      const loginUrl = this.configService.get<string>(
+        'GATE_LOGIN_URL',
+        'https://yaad.global/login',
+      );
+
+      Promise.resolve(
+        this.emailService.sendAddedToBuildingEmail(
+          person.email,
+          adminName,
+          UserRole.BUILDING_ADMIN,
+          savedTenant.name,
+          'Yaad Admin',
+          loginUrl,
+        ),
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `Added ${person.email} as admin of ${savedTenant.id} but the email failed to send: ` +
+            ((error as Error)?.message ?? ''),
+        );
+      });
+    }
+
+    return {
+      tenant: savedTenant,
       adminPassword,
-      dto.name,
-      'Yaad Admin',
-      loginUrl,
-    ).catch((error) => {
-      console.error('Failed to send credentials email:', error);
-    });
-
-    return { tenant: savedTenant, adminPassword };
+      existingAccount,
+      adminUserId: person.id,
+      membershipId: membership.id,
+    };
   }
 
-  async findAll(query: { search?: string; status?: string; startDate?: string; endDate?: string; page?: number; limit?: number } = {}): Promise<{ data: Tenant[]; total: number; page: number; limit: number }> {
+  async findAll(
+    query: {
+      search?: string;
+      status?: string;
+      startDate?: string;
+      endDate?: string;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<{ data: Tenant[]; total: number; page: number; limit: number }> {
     const page = query.page || 1;
     const limit = query.limit || 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.tenantRepository.createQueryBuilder('tenant')
+    const qb = this.tenantRepository
+      .createQueryBuilder('tenant')
       .leftJoinAndSelect('tenant.subscriptionPlan', 'subscriptionPlan')
       .orderBy('tenant.createdAt', 'DESC');
 
@@ -291,7 +447,7 @@ export class TenantsService {
     if (query.search) {
       qb.andWhere(
         '(LOWER(tenant.name) LIKE LOWER(:search) OR LOWER(tenant.slug) LIKE LOWER(:search) OR LOWER(tenant.contactEmail) LIKE LOWER(:search))',
-        { search: `%${query.search}%` }
+        { search: `%${query.search}%` },
       );
     }
 
@@ -308,18 +464,31 @@ export class TenantsService {
       qb.andWhere('tenant.createdAt <= :endDate', { endDate: `${query.endDate} 23:59:59` });
     }
 
-    const [data, total] = await qb
-      .skip(skip)
-      .take(limit)
-      .getManyAndCount();
+    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     return { data, total, page, limit };
   }
 
-  async findOne(id: string): Promise<Tenant> {
+  /**
+   * The tenant with its plan, gates and members. Members come from the
+   * building's memberships (MembershipAccessService.findTenantMembers: every live
+   * membership of a live person, any role and status, ordered by name), not
+   * from the legacy Tenant.users relation, which missed anyone whose
+   * gate_users row points at another of their buildings.
+   */
+  async findOne(id: string): Promise<TenantDetail> {
+    const tenant = await this.loadTenant(id, ['subscriptionPlan', 'gates']);
+    const members = await this.membershipAccessService.findTenantMembers(tenant.id);
+
+    // Spread into a plain object so the entity is never saved with it.
+    return { ...tenant, users: members.map((membership) => toMembershipRow(membership)) };
+  }
+
+  /** The tenant entity (404 when missing or deleted), for reads and in-place updates. */
+  private async loadTenant(id: string, relations: string[] = []): Promise<Tenant> {
     const tenant = await this.tenantRepository.findOne({
       where: { id },
-      relations: ['subscriptionPlan', 'users', 'gates'],
+      relations,
     });
 
     if (!tenant) {
@@ -343,7 +512,9 @@ export class TenantsService {
   }
 
   async update(id: string, dto: UpdateTenantDto): Promise<Tenant> {
-    const tenant = await this.findOne(id);
+    // No member relation is loaded here: saving an entity that carries one
+    // would make TypeORM reconcile it.
+    const tenant = await this.loadTenant(id, ['subscriptionPlan', 'gates']);
 
     if (dto.slug && dto.slug !== tenant.slug) {
       const existing = await this.tenantRepository.findOne({ where: { slug: dto.slug } });
@@ -356,30 +527,68 @@ export class TenantsService {
     return this.tenantRepository.save(tenant);
   }
 
+  /**
+   * Deletes a building, in one transaction:
+   *   1. cancels its PENDING join requests (nobody can be approved into a
+   *      building that is gone);
+   *   2. soft-deletes the tenant;
+   *   3. ends every live membership of it (MembershipsService.removeAllForTenant),
+   *      which re-mirrors each affected person's legacy columns onto their next
+   *      building, or the sentinel, and lifts a status mirrored from it.
+   *
+   * Locks follow the global order (join request, then tenant, then person), so
+   * this cannot deadlock with a concurrent approval or membership write.
+   * Gates, cards, vehicles and history stay with the soft-deleted tenant.
+   */
   async remove(id: string): Promise<void> {
-    const tenant = await this.findOne(id);
-    await this.tenantRepository.softDelete(tenant.id);
+    await this.loadTenant(id);
+
+    await this.dataSource.transaction(async (m) => {
+      const cancelled = await m.update(
+        BuildingJoinRequest,
+        { tenantId: id, status: JoinRequestStatus.PENDING },
+        { status: JoinRequestStatus.CANCELLED },
+      );
+
+      const tenant = await m.findOne(Tenant, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!tenant) {
+        // Deleted concurrently; the rollback restores the requests.
+        throw new NotFoundException('Tenant not found');
+      }
+
+      await m.softDelete(Tenant, { id: tenant.id });
+      const ended = await this.membershipsService.removeAllForTenant(tenant.id, m);
+
+      this.logger.log(
+        `Deleted tenant ${tenant.id} (${tenant.name}): ${ended} membership(s) ended, ` +
+          `${cancelled.affected ?? 0} pending join request(s) cancelled`,
+      );
+    });
   }
 
+  /**
+   * Counts for the tenant page. userCount is the shared seat rule (live
+   * memberships of live people: people/seat-limit.ts countSeats), the number
+   * the plan's maxUsers is enforced against. Counted in the database instead of
+   * loading every user, gate and access event as the old relations did.
+   */
   async getTenantStats(id: string): Promise<{
     userCount: number;
     gateCount: number;
     eventCount: number;
   }> {
-    const tenant = await this.tenantRepository.findOne({
-      where: { id },
-      relations: ['users', 'gates', 'accessEvents'],
-    });
+    const tenant = await this.loadTenant(id);
 
-    if (!tenant) {
-      throw new NotFoundException('Tenant not found');
-    }
+    const [userCount, gateCount, eventCount] = await Promise.all([
+      countSeats(this.dataSource.manager, tenant.id),
+      this.gateRepository.count({ where: { tenantId: tenant.id } }),
+      this.accessEventRepository.count({ where: { tenantId: tenant.id } }),
+    ]);
 
-    return {
-      userCount: tenant.users?.length || 0,
-      gateCount: tenant.gates?.length || 0,
-      eventCount: tenant.accessEvents?.length || 0,
-    };
+    return { userCount, gateCount, eventCount };
   }
 
   private generatePassword(): string {
@@ -389,6 +598,22 @@ export class TenantsService {
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return password + '!';
+  }
+
+  /**
+   * Distinct people with a live RESIDENT membership in a live building. Ended
+   * memberships drop out as the main alias; removed people and deleted
+   * buildings through the joins (TypeORM adds "deleted_at IS NULL" to both).
+   */
+  private async countResidentPeople(): Promise<number> {
+    const row = await this.dataSource.manager
+      .createQueryBuilder(Membership, 'membership')
+      .innerJoin('membership.user', 'person')
+      .innerJoin('membership.tenant', 'tenant')
+      .select('COUNT(DISTINCT membership.userId)', 'count')
+      .where('membership.role = :role', { role: UserRole.RESIDENT })
+      .getRawOne<{ count: string | number }>();
+    return Number(row?.count ?? 0);
   }
 
   async getSubscriptionStats(): Promise<{
@@ -447,7 +672,10 @@ export class TenantsService {
       .getRawMany();
 
     // Create a map for quick lookup
-    const lifetimeRevenueMap = new Map<string, { monthly: { amount: number; count: number }; yearly: { amount: number; count: number } }>();
+    const lifetimeRevenueMap = new Map<
+      string,
+      { monthly: { amount: number; count: number }; yearly: { amount: number; count: number } }
+    >();
     lifetimeRevenueQuery.forEach((row) => {
       const planId = row.planId;
       if (!lifetimeRevenueMap.has(planId)) {
@@ -603,10 +831,15 @@ export class TenantsService {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-    // Get all tenants with their plans
+    // Get all tenants with their plans. Members are counted per building in one
+    // grouped query below, instead of loading every user row.
     const tenants = await this.tenantRepository.find({
-      relations: ['subscriptionPlan', 'users', 'gates'],
+      relations: ['subscriptionPlan', 'gates'],
     });
+    const seatsByTenant = await countSeatsByTenant(
+      this.dataSource.manager,
+      tenants.map((t) => t.id),
+    );
 
     // Get all plans
     const plans = await this.planRepository.find({ where: { isActive: true } });
@@ -657,11 +890,11 @@ export class TenantsService {
     // New tenants this month
     const newTenantsThisMonth = tenants.filter((t) => new Date(t.createdAt) >= startOfMonth).length;
 
-    // User and gate counts
+    // User and gate counts. gate_users is one row per person; residents are the
+    // distinct people holding a resident membership, however many buildings
+    // they live in (the row's own role no longer says whether someone is one).
     const totalUsers = await this.userRepository.count();
-    const totalResidents = await this.userRepository.count({
-      where: { role: UserRole.RESIDENT },
-    });
+    const totalResidents = await this.countResidentPeople();
     const totalGates = await this.gateRepository.count();
     const onlineGates = await this.gateRepository.count({
       where: { isOnline: true },
@@ -719,12 +952,15 @@ export class TenantsService {
     for (const tenant of tenants) {
       if (!tenant.subscriptionPlan) continue;
 
-      const userCount = tenant.users?.length || 0;
+      // The shared seat rule: live memberships of the building, compared with
+      // maxUsers the way the add-person checks compare them. A negative
+      // maxUsers is unlimited and never "at limit".
+      const userCount = seatsByTenant.get(tenant.id) ?? 0;
       const gateCount = tenant.gates?.length || 0;
-      const maxUsers = tenant.subscriptionPlan.maxUsers;
+      const maxUsers = seatLimitOf(tenant.subscriptionPlan);
       const maxGates = tenant.subscriptionPlan.maxGates;
 
-      if (userCount >= maxUsers * 0.8) {
+      if (maxUsers !== null && userCount >= maxUsers * 0.8) {
         tenantsAtLimit.push({
           id: tenant.id,
           name: tenant.name,
@@ -763,7 +999,8 @@ export class TenantsService {
       // Financial metrics
       mrr: Math.round(mrr * 100) / 100,
       arr: Math.round(mrr * 12 * 100) / 100,
-      totalRevenue: Math.round((monthlySubscriptionsRevenue + yearlySubscriptionsRevenue) * 100) / 100,
+      totalRevenue:
+        Math.round((monthlySubscriptionsRevenue + yearlySubscriptionsRevenue) * 100) / 100,
       monthlySubscriptionsRevenue: Math.round(monthlySubscriptionsRevenue * 100) / 100,
       yearlySubscriptionsRevenue: Math.round(yearlySubscriptionsRevenue * 100) / 100,
       revenueGrowth: Math.round(revenueGrowth * 10) / 10,
@@ -852,7 +1089,7 @@ export class TenantsService {
     // Current active tenants
     const activeTenants = tenants.filter((t) => t.status === TenantStatus.ACTIVE);
     const trialTenants = tenants.filter((t) => t.status === TenantStatus.TRIAL);
-    
+
     activeTenants.forEach((t) => {
       activeSubscriptions++;
       if (t.billingCycle === BillingCycle.MONTHLY) {
@@ -874,9 +1111,7 @@ export class TenantsService {
     // Estimate churned this month (tenants that became suspended this month)
     const churnedThisMonth = tenants.filter(
       (t) =>
-        t.status === TenantStatus.SUSPENDED &&
-        t.updatedAt &&
-        new Date(t.updatedAt) >= startOfMonth,
+        t.status === TenantStatus.SUSPENDED && t.updatedAt && new Date(t.updatedAt) >= startOfMonth,
     ).length;
 
     // Calculate last month MRR for comparison (tenants that existed before this month)
@@ -884,7 +1119,9 @@ export class TenantsService {
       (t) =>
         new Date(t.createdAt) < startOfMonth &&
         (t.status === TenantStatus.ACTIVE ||
-          (t.status === TenantStatus.SUSPENDED && t.updatedAt && new Date(t.updatedAt) >= startOfMonth)),
+          (t.status === TenantStatus.SUSPENDED &&
+            t.updatedAt &&
+            new Date(t.updatedAt) >= startOfMonth)),
     );
 
     lastMonthActiveTenants.forEach((t) => {
@@ -924,7 +1161,8 @@ export class TenantsService {
         new Date(t.createdAt) >= startOfLastMonth &&
         new Date(t.createdAt) < startOfMonth,
     ).length;
-    const trialConversionRate = totalTrialsLastMonth > 0 ? (convertedTrials / totalTrialsLastMonth) * 100 : 0;
+    const trialConversionRate =
+      totalTrialsLastMonth > 0 ? (convertedTrials / totalTrialsLastMonth) * 100 : 0;
 
     // Expiring trials in next 7 days
     const expiringTrials = trialTenants.filter((t) => {
@@ -957,7 +1195,8 @@ export class TenantsService {
       },
     });
 
-    const paymentSuccessRate = monthlyPayments > 0 ? (successfulPayments / monthlyPayments) * 100 : 100;
+    const paymentSuccessRate =
+      monthlyPayments > 0 ? (successfulPayments / monthlyPayments) * 100 : 100;
 
     // Past due subscriptions
     const pastDueCount = tenants.filter(
@@ -1026,7 +1265,9 @@ export class TenantsService {
           t.subscriptionPlanId === plan.id &&
           new Date(t.createdAt) < startOfMonth &&
           (t.status === TenantStatus.ACTIVE ||
-            (t.status === TenantStatus.SUSPENDED && t.updatedAt && new Date(t.updatedAt) >= startOfMonth)),
+            (t.status === TenantStatus.SUSPENDED &&
+              t.updatedAt &&
+              new Date(t.updatedAt) >= startOfMonth)),
       ).length;
 
       const planChurnRate = planLastMonth > 0 ? (planChurned / planLastMonth) * 100 : 0;
@@ -1038,7 +1279,8 @@ export class TenantsService {
           t.status === TenantStatus.ACTIVE,
       ).length;
 
-      const planGrowth = planLastMonth > 0 ? ((planSubscribers.length - planLastMonth) / planLastMonth) * 100 : 0;
+      const planGrowth =
+        planLastMonth > 0 ? ((planSubscribers.length - planLastMonth) / planLastMonth) * 100 : 0;
 
       return {
         planName: plan.name,
@@ -1135,10 +1377,7 @@ export class TenantsService {
       queryBuilder.andWhere('tenant.subscriptionPlanId = :planId', { planId: params.planId });
     }
 
-    const [tenants, total] = await queryBuilder
-      .skip(skip)
-      .take(limit)
-      .getManyAndCount();
+    const [tenants, total] = await queryBuilder.skip(skip).take(limit).getManyAndCount();
 
     const data = tenants.map((t) => ({
       id: t.id,
