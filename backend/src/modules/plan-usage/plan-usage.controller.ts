@@ -9,9 +9,10 @@ import { User, UserRole } from '@database/entities/user.entity';
 import { PlanUsageService } from './plan-usage.service';
 
 /**
- * Live plan usage for the caller's tenant: used vs limit for each metered
- * resource. Drives the billing page's usage meters and the "upgrade to add more"
- * CTAs.
+ * Live plan usage for the building the request acts in: used vs limit for each
+ * metered resource. Drives the billing page's usage meters and the "upgrade to
+ * add more" CTAs. A super admin in the Platform context gets an all-zero block;
+ * inside a building only its building admin may read it (PlanUsageService).
  *
  * @SubscriptionExempt: a SUSPENDED tenant must be able to SEE their usage to
  * decide to upgrade, so this read must survive read-only mode.

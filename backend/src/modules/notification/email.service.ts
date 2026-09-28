@@ -10,6 +10,28 @@ export interface EmailOptions {
   text?: string;
 }
 
+/** 'building_admin' -> 'Building Admin': how a role is named in every email. */
+export function formatRole(role: string): string {
+  return role
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Entity-encodes a value for an HTML body or a quoted attribute. Names and
+ * building names are typed by other people (an admin names the building, the
+ * person names themselves), so they are never interpolated raw into markup.
+ */
+export function escapeHtml(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -450,7 +472,13 @@ export class EmailService {
   }
 
   /**
-   * Send credentials email to newly created user
+   * Send credentials email to newly created user.
+   *
+   * For a BRAND-NEW platform identity only: it carries the temporary password
+   * the account service just generated. Someone who already has an account
+   * (another building, or a platform login) and is given a role in one more
+   * building gets sendAddedToBuildingEmail instead, which contains no
+   * credentials and leaves their password alone.
    */
   async sendNewUserCredentialsEmail(
     userEmail: string,
@@ -461,10 +489,7 @@ export class EmailService {
     createdByName: string,
     loginUrl: string,
   ): Promise<boolean> {
-    const roleDisplayName = role
-      .split('_')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
+    const roleDisplayName = formatRole(role);
 
     const html = `
       <!DOCTYPE html>
@@ -540,6 +565,90 @@ export class EmailService {
     return this.sendEmail({
       to: userEmail,
       subject: `Your Yaad Account - ${buildingName}`,
+      html,
+    });
+  }
+
+  /**
+   * Tells someone who ALREADY has an account that they now hold a role in one
+   * more building. Sent when an admin adds an existing email (there is no
+   * invitation to accept: the role is live at once).
+   *
+   * Deliberately contains no credentials and no password hint: the person keeps
+   * signing in exactly as before and then picks the building in the role
+   * picker. Every interpolated value is escaped.
+   */
+  async sendAddedToBuildingEmail(
+    userEmail: string,
+    userName: string,
+    role: string,
+    buildingName: string,
+    addedByName: string | null | undefined,
+    loginUrl: string,
+  ): Promise<boolean> {
+    const roleLabel = formatRole(role);
+    const name = escapeHtml(userName.trim() || userEmail);
+    const building = escapeHtml(buildingName);
+    const addedBy = addedByName?.trim() ? escapeHtml(addedByName.trim()) : 'An administrator';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #722ed1 0%, #531dab 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .header h1 { margin: 0; font-size: 26px; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+          .button { display: inline-block; background: #722ed1; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
+          .info-box { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #722ed1; }
+          .role-badge { display: inline-block; background: #722ed1; color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; }
+          .footer { text-align: center; color: #888; font-size: 12px; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>You have been added to ${building}</h1>
+          </div>
+          <div class="content">
+            <p>Hello <strong>${name}</strong>,</p>
+            <p>${addedBy} has added you to <strong>${building}</strong>.</p>
+
+            <p>Your role in this building: <span class="role-badge">${escapeHtml(roleLabel)}</span></p>
+
+            <div class="info-box">
+              <p><strong>How to get there</strong></p>
+              <ol>
+                <li>Sign in with your existing Yaad account. Your password has not changed.</li>
+                <li>Open Gate Management.</li>
+                <li>Choose <strong>${escapeHtml(roleLabel)}</strong>, then <strong>${building}</strong>.</li>
+              </ol>
+            </div>
+
+            <div style="text-align: center;">
+              <a href="${escapeHtml(loginUrl)}" class="button">Open Yaad</a>
+            </div>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from Yaad.</p>
+            <p>If you did not expect this email, please contact the building's administrator.</p>
+            <p>© ${new Date().getFullYear()} Yaad. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // A subject is plain text, not markup, so it is not escaped; line breaks
+    // are folded so a building name can never start a new header line.
+    const subjectBuilding = buildingName.replace(/[\r\n]+/g, ' ').trim();
+
+    return this.sendEmail({
+      to: userEmail,
+      subject: `You now have access to ${subjectBuilding} as ${roleLabel} - Yaad`,
       html,
     });
   }

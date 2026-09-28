@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { isUUID } from 'class-validator';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 
 import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
@@ -23,6 +24,7 @@ import {
   AccessResult,
   AccessSubjectType,
 } from '@database/entities/access-event.entity';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
 
 import { CloudPlusTcpServer } from './cloud-plus-tcp.server';
 import {
@@ -39,7 +41,6 @@ import {
 } from './tcp-protocol';
 import {
   GateAction,
-  GateControlDto,
   OpenGateWithInfoDto,
   SetAlarmDto,
   SetFireDto,
@@ -328,7 +329,7 @@ export class CloudPlusTcpService {
     dto: SetAlarmDto,
     currentUser: User,
   ): Promise<GateControlResponse> {
-    const { devices, gate } = await this.validateGateAccess(gateId, currentUser);
+    const { devices } = await this.validateGateAccess(gateId, currentUser);
 
     const command = buildSetAlarmCommand(dto.enable, dto.longtime);
     const results = this.sendCommandToAllDevices(devices, command);
@@ -398,7 +399,9 @@ export class CloudPlusTcpService {
     const success = this.tcpServer.sendCommand(serial, command);
 
     if (success) {
-      this.logger.warn(`>>> SECURITY ALARM TRIGGERED on controller ${serial} for ${durationSeconds}s`);
+      this.logger.warn(
+        `>>> SECURITY ALARM TRIGGERED on controller ${serial} for ${durationSeconds}s`,
+      );
     }
 
     return { success, serial };
@@ -448,7 +451,9 @@ export class CloudPlusTcpService {
         const success = this.tcpServer.sendCommand(serial, command);
         results.push({ serial, success });
         if (success) {
-          this.logger.warn(`>>> SECURITY ALARM TRIGGERED on controller ${serial} (gate: ${gateId})`);
+          this.logger.warn(
+            `>>> SECURITY ALARM TRIGGERED on controller ${serial} (gate: ${gateId})`,
+          );
         }
       } else {
         results.push({ serial, success: false });
@@ -528,7 +533,9 @@ export class CloudPlusTcpService {
         const success = this.tcpServer.sendCommand(serial, command);
         results.push({ serial, success });
         if (success) {
-          this.logger.warn(`>>> BUILDING ALARM TRIGGERED on controller ${serial} (tenant: ${tenantId})`);
+          this.logger.warn(
+            `>>> BUILDING ALARM TRIGGERED on controller ${serial} (tenant: ${tenantId})`,
+          );
         }
       }
     }
@@ -652,6 +659,36 @@ export class CloudPlusTcpService {
           tenantId,
         };
       });
+  }
+
+  /**
+   * Throws unless the gate exists and belongs to the caller's building (any
+   * building for a SUPER_ADMIN). For routes such as GET tcp/connected that take
+   * a gate id but otherwise never look at the caller.
+   *
+   * Fails closed on a caller without a building context: 409
+   * MEMBERSHIP_REQUIRED (assertBuildingContext) before any lookup, rather than
+   * relying on `gate.tenantId !== null` to refuse. Only the Platform context
+   * sees every building's gates.
+   */
+  async assertGateInScope(gateId: string, currentUser: User): Promise<Gate> {
+    const scopeTenantId = isPlatformContext(currentUser)
+      ? null
+      : assertBuildingContext(currentUser);
+
+    // The route param is not validated; a non-uuid would be a driver error (500).
+    const gate = isUUID(gateId)
+      ? await this.gateRepository.findOne({ where: { id: gateId } })
+      : null;
+    if (!gate) {
+      throw new NotFoundException('Gate not found');
+    }
+
+    if (scopeTenantId !== null && gate.tenantId !== scopeTenantId) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    return gate;
   }
 
   /**
@@ -946,6 +983,10 @@ export class CloudPlusTcpService {
   }
 
   private async logManualControl(gate: Gate, operator: User, action: string): Promise<void> {
+    // The person pressing the button is the OPERATOR, not a resident: writing
+    // them into resident_id put staff opens into "my entries" history and made
+    // any admin look like a resident of the building. resident_id stays null.
+    const operatorName = `${operator.firstName} ${operator.lastName}`;
     const accessEvent = this.accessEventRepository.create({
       tenantId: gate.tenantId,
       gateId: gate.id,
@@ -953,8 +994,9 @@ export class CloudPlusTcpService {
       method: AccessMethod.MANUAL,
       subjectType: AccessSubjectType.USER,
       subjectId: operator.id,
-      subjectName: `${operator.firstName} ${operator.lastName}`,
-      residentId: operator.id,
+      subjectName: operatorName,
+      operatorId: operator.id,
+      operatorName,
       result: AccessResult.ALLOWED,
       metadata: {
         source: 'tcp-manual',

@@ -27,11 +27,15 @@ import { RolesGuard } from '@common/guards/roles.guard';
 import { User, UserRole } from '@database/entities/user.entity';
 
 /**
- * Floors and flats of the caller's own building (Building Settings).
+ * Floors and flats of the building the request acts in (Building Settings).
  *
  * Authenticated by the global JwtAuthGuard. NOT @SubscriptionExempt: this is
  * ordinary tenant business data, so a suspended building keeps read access and
  * has writes refused with 402, like residents or gates.
+ *
+ * RolesGuard admits building admins and super admins; the service then pins
+ * the building: the acting building_admin membership for every write, and a
+ * Platform-context super admin only for reads with ?tenantId=.
  */
 @ApiTags('Building Structure')
 @ApiBearerAuth()
@@ -46,9 +50,10 @@ export class BuildingStructureController {
   @ApiQuery({
     name: 'tenantId',
     required: false,
-    description: 'Super admin only: read another building. Ignored for other roles.',
+    description: 'Super admin in the Platform context only: read that building. Ignored otherwise.',
   })
-  @ApiResponse({ status: 409, description: 'Account is not linked to a building' })
+  @ApiResponse({ status: 409, description: 'No building chosen (MEMBERSHIP_REQUIRED)' })
+  @ApiResponse({ status: 403, description: 'Not a building admin of the building acted in' })
   async getStructure(
     @CurrentUser() user: User,
     @Query('tenantId', new ParseUUIDPipe({ optional: true })) tenantId?: string,

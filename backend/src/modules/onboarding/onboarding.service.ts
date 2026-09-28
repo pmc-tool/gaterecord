@@ -2,29 +2,55 @@ import {
   Injectable,
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User, UserRole } from '@database/entities/user.entity';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { User, UserRole, UserStatus } from '@database/entities/user.entity';
 import { Tenant, TenantStatus, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
+import { Membership } from '@database/entities/membership.entity';
 import {
   BuildingJoinRequest,
   JoinRequestStatus,
 } from '@database/entities/building-join-request.entity';
+import { isUniqueViolation } from '@database/pg-errors';
+import { ActingUser, isActingUser, isUuid } from '@common/context/acting-user';
+import { assertBuildingContext } from '@common/context/assert-building-context';
+import { multiMembershipDisabled } from '@common/context/membership-context.errors';
+import { isMembershipContextEnabled } from '@common/context/membership-flags';
+import { MembershipsService, toMembershipTenantView } from '../memberships/memberships.service';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
+import {
+  BuildingCreationPolicy,
+  MAX_BUILDINGS_CREATED_PER_PERSON_ENV,
+  ONBOARDING_MULTI_BUILDING_POLICY_ENV,
+  buildingCreationRefused,
+  decideBuildingCreation,
+  parseBuildingCreationPolicy,
+  parseMaxBuildingsCreated,
+} from './building-creation-policy';
+
+/** Who may rename the building the request acts in. */
+const BUILDING_EDIT_ROLES: readonly UserRole[] = [UserRole.BUILDING_ADMIN];
 
 /**
  * The "Get Started" flow for users provisioned from the account/Keycloak service.
  *
- * A lazily-provisioned user lands here with role=building_admin and tenantId=null.
- * Until they call POST /onboarding/building they have no tenant, so every
- * tenant-scoped endpoint in the app is closed to them. This service is the one
- * thing they can do.
+ * A lazily-provisioned person lands here with no membership at all. Until they
+ * create a building (POST /onboarding/building) or are approved into one, every
+ * building-scoped endpoint is closed to them. This service is the one thing
+ * they can do.
+ *
+ * With memberships it is also how someone who already belongs somewhere adds a
+ * building of their own: the admin of Tower A, or a resident of Tower B, can
+ * create Tower E and becomes its building admin through a new membership. The
+ * person row itself is never written here (MembershipsService keeps its legacy
+ * mirror), and ONBOARDING_MULTI_BUILDING_POLICY / MAX_BUILDINGS_CREATED_PER_PERSON
+ * bound how many buildings one person can create (building-creation-policy.ts).
  *
  * Explicitly NOT in scope: creating users, hashing passwords, issuing tokens,
  * emailing credentials. Authentication belongs to the upstream account service.
@@ -34,14 +60,17 @@ export class OnboardingService {
   private readonly logger = new Logger(OnboardingService.name);
 
   constructor(
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
     @InjectRepository(Tenant)
     private tenantRepository: Repository<Tenant>,
     @InjectRepository(SubscriptionPlan)
     private subscriptionPlanRepository: Repository<SubscriptionPlan>,
     @InjectRepository(BuildingJoinRequest)
     private joinRequestRepository: Repository<BuildingJoinRequest>,
+    @InjectRepository(Membership)
+    private membershipRepository: Repository<Membership>,
+    private dataSource: DataSource,
+    private membershipsService: MembershipsService,
+    private configService: ConfigService,
   ) {}
 
   /**
@@ -58,47 +87,50 @@ export class OnboardingService {
    * Whether the caller still has to onboard, plus the plan list so the client can
    * render the picker in one round trip.
    *
-   * Re-reads the user from the database rather than trusting the request-scoped
-   * copy: the strategy loaded that row when the request arrived, and onboarding
-   * state is exactly the thing a concurrent request may have just changed.
+   *   - needsOnboarding: the person holds NO membership in a live building, of
+   *     any status, and is not a super admin (L8). Someone whose only
+   *     memberships are inactive or pending is not sent back to Get Started:
+   *     the picker shows those rows disabled instead. A super admin with no
+   *     building goes to the Platform dashboard, not to Get Started. Counted
+   *     fresh on every call: the membership is exactly the thing a concurrent
+   *     request (a create, an approval) may have just changed.
+   *     While GATE_MEMBERSHIP_CONTEXT is off a gate_users row that still names
+   *     a building also counts as onboarded, as it always did.
+   *   - isSuperAdmin: from the person's own role, before any context.
+   *   - tenantId, role, tenant: the building and role this request ACTS in
+   *     (the overlay), all null when none is chosen. The list of every
+   *     membership is GET /memberships/me; it is deliberately not repeated here.
+   *   - joinRequestStatus: the latest join request's status, reported only while
+   *     the person has no building (then an approved request belongs to a
+   *     building they have since left, so it reads as null).
    */
-  async getStatus(userId: string) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: ['tenant'],
-    });
+  async getStatus(user: User | ActingUser) {
+    const [memberships, plans] = await Promise.all([
+      this.countMemberships(user.id),
+      this.getSubscriptionPlans(),
+    ]);
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    const isSuperAdmin = isActingUser(user)
+      ? user.isSuperAdmin
+      : user.role === UserRole.SUPER_ADMIN;
+    const hasBuilding = memberships > 0 || (!isMembershipContextEnabled() && !!user.tenantId);
 
-    const plans = await this.getSubscriptionPlans();
-
-    // Purely additive — every existing field keeps its exact meaning.
-    //
-    // Someone waiting on a building admin's decision is still stored as
-    // role=building_admin with no tenant, because changing the role before
-    // approval would strand them. That makes them indistinguishable from a
-    // building admin who simply has not created their building yet, so the
-    // client cannot tell the two apart without this. Skipped entirely once a
-    // tenant exists: an onboarded user is not waiting on anything.
-    const latestRequest = user.tenantId
+    const latestRequest = hasBuilding
       ? null
       : await this.joinRequestRepository.findOne({
           where: { userId: user.id },
           order: { createdAt: 'DESC' },
         });
-    // Without a tenant, an approved request belongs to a building the user has
-    // since left or been removed from, so it says nothing about them now.
     const joinRequestStatus =
       latestRequest && latestRequest.status !== JoinRequestStatus.APPROVED
         ? latestRequest.status
         : null;
 
     return {
-      needsOnboarding: user.tenantId === null || user.tenantId === undefined,
+      needsOnboarding: !isSuperAdmin && !hasBuilding,
+      isSuperAdmin,
       tenantId: user.tenantId ?? null,
-      role: user.role,
+      role: user.role ?? null,
       joinRequestStatus,
       tenant: user.tenant
         ? {
@@ -113,46 +145,22 @@ export class OnboardingService {
   }
 
   /**
-   * Create the caller's building and attach it to their existing gate_users row.
-   *
-   * TENANT-CREATION LOGIC IS INTENTIONALLY MIRRORED FROM AuthService.signup()
-   * (src/modules/auth/auth.service.ts). The two must be kept in step: plan
-   * resolution, slug construction, trial expiry, status and subscription fields
-   * are all deliberately identical, so that a tenant behaves the same for
-   * trial/billing purposes regardless of which path created it. If you change the
-   * semantics in one place, change the other. The only intentional divergence is
-   * that this path does NOT create a user — it updates the one that already exists.
-   */
-  /**
-   * Rename / re-address the caller's OWN building.
+   * Rename / re-address the building the request acts in, as its building admin.
    *
    * Exists because PATCH /admin/tenants/:id is super-admin only, so a building
-   * admin had no way to correct their own building's details. Scoped strictly to
-   * the caller's tenantId — the id is never taken from the request, so this
-   * cannot be used to edit someone else's building.
+   * admin had no way to correct their own building's details. The building comes
+   * from the acting context (assertBuildingContext), never from the request, so
+   * this cannot be used to edit someone else's building: an admin of Tower A
+   * acting as a resident of Tower B gets 403, and without a chosen building 409.
    *
    * The slug is intentionally NOT regenerated: it is a stable public identifier
    * and rewriting it on every rename would break anything already referencing it.
    */
-  async updateBuilding(userId: string, dto: UpdateBuildingDto) {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    if (user.role !== UserRole.BUILDING_ADMIN && user.role !== UserRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only a building admin can edit building details');
-    }
-
-    if (!user.tenantId) {
-      throw new ConflictException(
-        'This account is not linked to a building yet. Complete onboarding first.',
-      );
-    }
+  async updateBuilding(user: User | ActingUser, dto: UpdateBuildingDto) {
+    const tenantId = assertBuildingContext(user, BUILDING_EDIT_ROLES);
 
     const tenant = await this.tenantRepository.findOne({
-      where: { id: user.tenantId },
+      where: { id: tenantId },
     });
 
     if (!tenant) {
@@ -184,21 +192,36 @@ export class OnboardingService {
     };
   }
 
-  async createBuilding(userId: string, dto: CreateBuildingDto) {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Onboarding is once-only. Re-running it would create a second tenant and
-    // silently orphan the first one (along with its gates, residents and events),
-    // so refuse rather than repair.
-    if (user.tenantId) {
-      throw new ConflictException(
-        'This account has already completed onboarding and belongs to a building',
-      );
-    }
+  /**
+   * Create a building and make the caller its building admin.
+   *
+   * TENANT-CREATION LOGIC IS INTENTIONALLY MIRRORED FROM AuthService.signup()
+   * (src/modules/auth/auth.service.ts). The two must be kept in step: plan
+   * resolution, slug construction, trial expiry, status and subscription fields
+   * are all deliberately identical, so that a tenant behaves the same for
+   * trial/billing purposes regardless of which path created it. If you change the
+   * semantics in one place, change the other. The only intentional divergence is
+   * that this path does NOT create a user — it gives the one that already exists
+   * a BUILDING_ADMIN membership in the new building.
+   *
+   * One transaction: the person row is locked first (so one person's concurrent
+   * creates are counted against the policy one at a time), then the tenant and
+   * the membership are written together, so a refusal from
+   * MembershipsService.add() leaves no building behind. gate_users is never
+   * written here; the membership write re-mirrors its legacy columns.
+   *
+   * Refusals, before anything is written:
+   *   - 409 MULTI_MEMBERSHIP_DISABLED while GATE_MEMBERSHIP_CONTEXT is off and the
+   *     person already has a building (today's once-only rule);
+   *   - 403 BUILDING_LIMIT_REACHED / BUILDING_CREATION_NOT_ALLOWED from the
+   *     policy (building-creation-policy.ts);
+   *   - 409 'Building name already registered'.
+   *
+   * The response adds membershipId and membership {id, role, tenant} so the web
+   * can switch straight into the new building.
+   */
+  async createBuilding(user: User | ActingUser, dto: CreateBuildingDto) {
+    const personId = user.id;
 
     // Check if building name already exists
     const existingTenant = await this.tenantRepository.findOne({
@@ -244,45 +267,108 @@ export class OnboardingService {
     const tenantStatus = TenantStatus.ACTIVE;
     const subscriptionStatus = SubscriptionStatus.ACTIVE;
 
-    const now = new Date();
+    const policy = this.creationPolicy();
+    const maxCreated = parseMaxBuildingsCreated(
+      this.configService.get<string>(MAX_BUILDINGS_CREATED_PER_PERSON_ENV),
+    );
+    const multiMembership = isMembershipContextEnabled();
 
-    // Create tenant (building)
-    const tenant = this.tenantRepository.create({
-      name: dto.buildingName,
-      slug: slug + '-' + Date.now().toString(36),
-      // Contact details come from the authenticated user rather than the request
-      // body — the account service owns them and the client must not be able to
-      // set a contact address it does not control.
-      contactEmail: user.email.toLowerCase(),
-      contactPhone: user.phone,
-      address: dto.buildingAddress,
-      status: tenantStatus,
-      subscriptionPlanId: selectedPlan.id,
-      subscriptionStartedAt: now,
-      subscriptionExpiresAt: trialExpiresAt,
-      currentPeriodEnd: trialExpiresAt,
-      subscriptionStatus,
-      settings: {
-        paymentInfo: dto.paymentInfo,
-        signupDate: now.toISOString(),
-        startedAsTrial: dto.startTrial || false,
-        trialDays: validityDays,
-        requiresPayment: dto.requiresPayment || false,
-      },
-    });
+    let created: { tenant: Tenant; membership: Membership; person: User };
+    try {
+      created = await this.dataSource.transaction(async (m) => {
+        const person = await m.findOne(User, {
+          where: { id: personId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!person) {
+          throw new NotFoundException('User not found');
+        }
 
-    const savedTenant = await this.tenantRepository.save(tenant);
+        const live = await this.membershipsService.listLiveForUser(person.id, m);
 
-    // Attach the EXISTING user to the new tenant. No user row is created here and
-    // the stored role is left untouched.
-    user.tenantId = savedTenant.id;
-    const savedUser = await this.userRepository.save(user);
+        // Flag off: one building per person, as before. The legacy tenant_id
+        // also counts, so a row that names a building without a membership
+        // (written by an older backend) is never silently re-homed.
+        if (!multiMembership && (live.length > 0 || person.tenantId)) {
+          throw multiMembershipDisabled();
+        }
+
+        const refusal = decideBuildingCreation({
+          policy,
+          maxCreated,
+          liveMemberships: live.length,
+          createdSoFar: maxCreated === null ? 0 : await this.countBuildingsCreatedBy(m, person.id),
+          adminOfMultiBuildingPlan:
+            policy === 'plan' && live.length > 0
+              ? await this.isAdminOnMultiBuildingPlan(m, person.id)
+              : false,
+        });
+        if (refusal) {
+          throw buildingCreationRefused(refusal, maxCreated);
+        }
+
+        const now = new Date();
+
+        // Create tenant (building)
+        const tenant = await m.save(
+          m.create(Tenant, {
+            name: dto.buildingName,
+            slug: slug + '-' + Date.now().toString(36),
+            // Contact details come from the authenticated user rather than the
+            // request body — the account service owns them and the client must
+            // not be able to set a contact address it does not control.
+            contactEmail: person.email.toLowerCase(),
+            contactPhone: person.phone,
+            address: dto.buildingAddress,
+            status: tenantStatus,
+            subscriptionPlanId: selectedPlan.id,
+            subscriptionStartedAt: now,
+            subscriptionExpiresAt: trialExpiresAt,
+            currentPeriodEnd: trialExpiresAt,
+            subscriptionStatus,
+            settings: {
+              paymentInfo: dto.paymentInfo,
+              signupDate: now.toISOString(),
+              startedAsTrial: dto.startTrial || false,
+              trialDays: validityDays,
+              requiresPayment: dto.requiresPayment || false,
+              // Who created it here: counted by MAX_BUILDINGS_CREATED_PER_PERSON.
+              createdByUserId: person.id,
+            },
+          }),
+        );
+
+        // The creator becomes its building admin. No user row is written.
+        const membership = await this.membershipsService.add(
+          { userId: person.id, tenantId: tenant.id, role: UserRole.BUILDING_ADMIN },
+          m,
+        );
+
+        return { tenant, membership, person };
+      });
+    } catch (error) {
+      // Two concurrent creates of the same name: the loser's insert hits the
+      // unique index after the pre-check passed.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException('Building name already registered');
+      }
+      throw error;
+    }
+
+    const { tenant: savedTenant, membership, person } = created;
 
     this.logger.log(
-      `User ${savedUser.id} onboarded tenant ${savedTenant.id} (${savedTenant.slug}) on plan ${selectedPlan.name}`,
+      `User ${person.id} created tenant ${savedTenant.id} (${savedTenant.slug}) on plan ` +
+        `${selectedPlan.name} as building admin (membership ${membership.id})`,
     );
 
     return {
+      membershipId: membership.id,
+      membership: {
+        id: membership.id,
+        role: membership.role,
+        tenant: toMembershipTenantView(savedTenant),
+      },
       tenant: {
         id: savedTenant.id,
         name: savedTenant.name,
@@ -294,16 +380,72 @@ export class OnboardingService {
         subscriptionExpiresAt: savedTenant.subscriptionExpiresAt,
         currentPeriodEnd: savedTenant.currentPeriodEnd,
       },
+      // The person as they are in the NEW building (what they act as once they
+      // switch to membershipId), in the shape this response always had.
       user: {
-        id: savedUser.id,
-        email: savedUser.email,
-        firstName: savedUser.firstName,
-        lastName: savedUser.lastName,
-        role: savedUser.role,
-        tenantId: savedUser.tenantId,
-        profileImageUrl: savedUser.profileImageUrl,
-        qrCode: savedUser.qrCode,
+        id: person.id,
+        email: person.email,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        role: membership.role,
+        tenantId: savedTenant.id,
+        profileImageUrl: person.profileImageUrl,
+        qrCode: person.qrCode,
       },
     };
+  }
+
+  // ============ Internals ============
+
+  /** The policy, read per call (like the rollout flag) so a change needs no code. */
+  private creationPolicy(): BuildingCreationPolicy {
+    const raw = this.configService.get<string>(ONBOARDING_MULTI_BUILDING_POLICY_ENV);
+    const { policy, unrecognised } = parseBuildingCreationPolicy(raw);
+    if (unrecognised !== null) {
+      this.logger.warn(
+        `${ONBOARDING_MULTI_BUILDING_POLICY_ENV}='${unrecognised}' is not one of open, plan, ` +
+          `off; treating it as 'off'.`,
+      );
+    }
+    return policy;
+  }
+
+  /**
+   * The person's memberships in live buildings, any role and status. Soft-deleted
+   * memberships drop out as the main alias and deleted buildings through the
+   * join (TypeORM adds "deleted_at IS NULL" to both), the same set the picker
+   * lists (GET /memberships/me).
+   */
+  protected async countMemberships(personId: string): Promise<number> {
+    if (!isUuid(personId)) {
+      return 0;
+    }
+    return this.membershipRepository
+      .createQueryBuilder('membership')
+      .innerJoin('membership.tenant', 'tenant')
+      .where('membership.userId = :personId', { personId })
+      .getCount();
+  }
+
+  /** Live buildings this person created through onboarding. */
+  protected async countBuildingsCreatedBy(m: EntityManager, personId: string): Promise<number> {
+    return m
+      .createQueryBuilder(Tenant, 'tenant')
+      .where(`tenant.settings ->> 'createdByUserId' = :personId`, { personId })
+      .getCount();
+  }
+
+  /** An ACTIVE building_admin membership in a live building whose plan has multi_building. */
+  protected async isAdminOnMultiBuildingPlan(m: EntityManager, personId: string): Promise<boolean> {
+    const count = await m
+      .createQueryBuilder(Membership, 'membership')
+      .innerJoin('membership.tenant', 'tenant')
+      .innerJoin('tenant.subscriptionPlan', 'plan')
+      .where('membership.userId = :personId', { personId })
+      .andWhere('membership.role = :role', { role: UserRole.BUILDING_ADMIN })
+      .andWhere('membership.status = :status', { status: UserStatus.ACTIVE })
+      .andWhere(`plan.features ->> 'multi_building' = 'true'`)
+      .getCount();
+    return count > 0;
   }
 }

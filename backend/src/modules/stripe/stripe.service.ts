@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import Stripe from 'stripe';
 import * as bcrypt from 'bcrypt';
@@ -42,6 +42,12 @@ import {
   PaymentStatus,
   TransactionType,
 } from '@database/entities/payment.entity';
+import { isUniqueViolation } from '@database/pg-errors';
+import { emailHasAccount } from '@common/context/membership-context.errors';
+import { isMembershipContextEnabled } from '@common/context/membership-flags';
+import { MembershipsService } from '../memberships/memberships.service';
+import { MembershipLifecycleService } from '../people/membership-lifecycle.service';
+import { countSeats, seatLimitOf } from '../people/seat-limit';
 import {
   CreateCheckoutSessionDto,
   SignupCheckoutDto,
@@ -54,6 +60,58 @@ import {
   RefundHistory,
   RefundReason,
 } from './dto';
+
+/**
+ * What provisionPaidSignup did for one paid signup checkout. The same session
+ * can arrive twice (the webhook, and the verify-payment fallback after the
+ * Stripe redirect), so "created" tells the first caller from a replay.
+ */
+export interface PaidSignupProvisioning {
+  /** The building paid for (created now, or found from an earlier call). */
+  tenant: Tenant;
+  /** True only for the call that created the tenant. */
+  created: boolean;
+  /**
+   * gate_users.id of the building admin THIS signup created (also stored as
+   * tenant.settings.signupCreatedUserId), or null when the email already had an
+   * account. Only this person may be signed in straight after payment.
+   */
+  signupCreatedUserId: string | null;
+  /** The admin person this call attached; null on a replay or when none could be. */
+  admin: User | null;
+  /** The plan paid for (null only when a replay finds it deleted since). */
+  plan: SubscriptionPlan | null;
+}
+
+/** Where a paid signup keeps its bookkeeping on the tenant row (settings jsonb). */
+export const SIGNUP_SETTINGS = {
+  /** The person the signup created; the only one verify-payment may log in. */
+  createdUserId: 'signupCreatedUserId',
+  /** The Checkout Session that paid for the building (idempotency key). */
+  sessionId: 'signupSessionId',
+  /** Set when the admin email could not be attached (support follow-up). */
+  adminPending: 'signupAdminPending',
+  /**
+   * When verify-payment signed the created person in. That login is single-use
+   * (AuthService.loginAfterPaidSignup claims it once, atomically); a replayed
+   * session id afterwards gets 401 and the person signs in normally.
+   */
+  loginConsumedAt: 'signupLoginConsumedAt',
+} as const;
+
+/**
+ * How long after the paid building was created verify-payment may still sign
+ * its creator in (the checkout's success redirect lands within seconds).
+ */
+export const PAID_SIGNUP_LOGIN_WINDOW_MINUTES = 30;
+
+/** The person a paid signup created, from a tenant row (null when none). */
+export function signupCreatedUserIdOf(
+  tenant: Pick<Tenant, 'settings'> | null | undefined,
+): string | null {
+  const value = tenant?.settings?.[SIGNUP_SETTINGS.createdUserId];
+  return typeof value === 'string' && value ? value : null;
+}
 
 /**
  * Tags SetupIntents minted for the in-app Stripe Elements checkout
@@ -173,6 +231,8 @@ export class StripeService implements OnModuleInit {
     private auditLogRepository: Repository<SubscriptionAuditLog>,
     @InjectRepository(Payment)
     private paymentRepository: Repository<Payment>,
+    private membershipsService: MembershipsService,
+    private membershipLifecycleService: MembershipLifecycleService,
   ) {}
 
   onModuleInit() {
@@ -193,6 +253,29 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
+   * Null-tenant guard for every tenant-scoped billing method (SEC-4).
+   *
+   * Callers pass req.user.tenantId straight through, and it is null for a
+   * tenantless caller (a fresh Keycloak sign-up, a removed resident). TypeORM
+   * silently DROPS a `where: { id: null }` / `where: { tenantId: null }` clause
+   * instead of matching nothing, so without this check GET /billing/payments
+   * listed every tenant's payments and the findOne-based methods acted on an
+   * arbitrary tenant. It runs first, before ensureStripe() and before any
+   * repository call. `code` sits at the top level of the body, in the same style
+   * as SUBSCRIPTION_ALREADY_ACTIVE.
+   */
+  private requireTenantId(tenantId: string | null | undefined): void {
+    if (!tenantId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'TENANT_REQUIRED',
+        message: 'A building is required for billing operations.',
+      });
+    }
+  }
+
+  /**
    * Extract subscription ID from session.subscription
    * Can be either a string ID or an expanded Subscription object
    */
@@ -209,7 +292,11 @@ export class StripeService implements OnModuleInit {
    * Calculate the effective price after applying discount
    * Checks if discount is valid (not expired) before applying
    */
-  private calculateEffectivePrice(basePrice: number, discountPercent: number, discountValidUntil: Date | null): number {
+  private calculateEffectivePrice(
+    basePrice: number,
+    discountPercent: number,
+    discountValidUntil: Date | null,
+  ): number {
     // Check if discount is valid
     if (discountPercent <= 0) {
       return basePrice;
@@ -386,6 +473,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     dto: CreateCheckoutSessionDto,
   ): Promise<CheckoutSessionResponse> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -486,8 +574,16 @@ export class StripeService implements OnModuleInit {
           billingCycle: dto.billingCycle,
         },
       },
-      success_url: dto.successUrl || `${frontendUrl}/gate-management/billing/settings?success=true`,
-      cancel_url: dto.cancelUrl || `${frontendUrl}/gate-management/billing/settings?canceled=true`,
+      // The defaults carry tenant=<id> (the Stripe return carrier), so the web
+      // restores the paid building's admin context after the full-page
+      // redirect instead of asking again or landing in another building. URLs
+      // the web builds carry its own gm=<membership> instead.
+      success_url:
+        dto.successUrl ||
+        `${frontendUrl}/gate-management/billing/settings?success=true&tenant=${encodeURIComponent(tenant.id)}`,
+      cancel_url:
+        dto.cancelUrl ||
+        `${frontendUrl}/gate-management/billing/settings?canceled=true&tenant=${encodeURIComponent(tenant.id)}`,
       metadata: {
         tenantId: tenant.id,
         planId: plan.id,
@@ -523,6 +619,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     dto: CreateCheckoutSessionDto,
   ): Promise<{ clientSecret: string }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -575,9 +672,7 @@ export class StripeService implements OnModuleInit {
         ? plan.stripePriceIdMonthly
         : plan.stripePriceIdYearly;
     if (!priceId) {
-      throw new BadRequestException(
-        'Plan not synced to Stripe. Please contact support.',
-      );
+      throw new BadRequestException('Plan not synced to Stripe. Please contact support.');
     }
 
     const customerId = await this.ensureStripeCustomer(tenant);
@@ -603,9 +698,7 @@ export class StripeService implements OnModuleInit {
     });
 
     if (!setupIntent.client_secret) {
-      throw new BadRequestException(
-        'Could not initialize payment. Please try again.',
-      );
+      throw new BadRequestException('Could not initialize payment. Please try again.');
     }
 
     this.logger.log(
@@ -618,16 +711,23 @@ export class StripeService implements OnModuleInit {
   /**
    * Create Stripe Checkout Session for NEW SIGNUP (no account created yet)
    * Account will be created when payment succeeds via webhook
+   *
+   * An email that already has an account is refused before anyone pays: 409
+   * EMAIL_HAS_ACCOUNT, "sign in and add a building from Get Started". Paid
+   * signup creates accounts; it must never become a way to act on an existing
+   * one (its password is never replaced, and verify-payment never signs it in).
    */
   async createSignupCheckoutSession(dto: SignupCheckoutDto): Promise<CheckoutSessionResponse> {
     this.ensureStripe();
 
-    // Validate email doesn't exist
-    const existingUser = await this.userRepository.findOne({
-      where: { email: dto.email.toLowerCase() },
-    });
+    // Validate email doesn't exist (case-insensitively, like every other
+    // account lookup: legacy rows may differ from the lowercased address in case)
+    const existingUser = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: dto.email.trim().toLowerCase() })
+      .getOne();
     if (existingUser) {
-      throw new ConflictException('Email already registered');
+      throw emailHasAccount();
     }
 
     // Validate building name doesn't exist
@@ -720,6 +820,7 @@ export class StripeService implements OnModuleInit {
    * Create Stripe Billing Portal session
    */
   async createPortalSession(tenantId: string, returnUrl?: string): Promise<PortalSessionResponse> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
@@ -735,7 +836,10 @@ export class StripeService implements OnModuleInit {
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
-      return_url: returnUrl || `${frontendUrl}/gate-management/billing/settings`,
+      // tenant=<id>: the Stripe return carrier (see createCheckoutSession).
+      return_url:
+        returnUrl ||
+        `${frontendUrl}/gate-management/billing/settings?tenant=${encodeURIComponent(tenant.id)}`,
     });
 
     return { url: session.url };
@@ -747,6 +851,7 @@ export class StripeService implements OnModuleInit {
    * Get subscription details for a tenant
    */
   async getSubscriptionDetails(tenantId: string): Promise<StripeSubscriptionDetails | null> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -804,6 +909,7 @@ export class StripeService implements OnModuleInit {
    * Cancel subscription
    */
   async cancelSubscription(tenantId: string, immediately: boolean = false): Promise<void> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
@@ -835,6 +941,7 @@ export class StripeService implements OnModuleInit {
    * Resume a canceled subscription (if cancel_at_period_end was true)
    */
   async resumeSubscription(tenantId: string): Promise<void> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
@@ -867,6 +974,7 @@ export class StripeService implements OnModuleInit {
       behavior?: 'keep_as_draft' | 'mark_uncollectible' | 'void';
     } = {},
   ): Promise<{ success: boolean; pausedUntil?: Date }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -968,6 +1076,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     options: { billingCycleAnchor?: boolean } = {},
   ): Promise<{ success: boolean; nextBillingDate: Date }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -1049,6 +1158,7 @@ export class StripeService implements OnModuleInit {
     canPause: boolean;
     remainingPauseDays?: number;
   }> {
+    this.requireTenantId(tenantId);
     const tenant = await this.tenantRepository.findOne({
       where: { id: tenantId },
     });
@@ -1111,6 +1221,7 @@ export class StripeService implements OnModuleInit {
       };
     }[];
   }> {
+    this.requireTenantId(tenantId);
     const tenant = await this.tenantRepository.findOne({
       where: { id: tenantId },
       relations: ['subscriptionPlan'],
@@ -1121,7 +1232,8 @@ export class StripeService implements OnModuleInit {
     }
 
     // Check if tenant is on trial
-    const isOnTrial = tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
+    const isOnTrial =
+      tenant.subscriptionStatus === SubscriptionStatus.TRIALING && !tenant.stripeSubscriptionId;
 
     // Get all active public plans
     const allPlans = await this.planRepository.find({
@@ -1134,8 +1246,7 @@ export class StripeService implements OnModuleInit {
     // every plan is offered for a clean RE-SUBSCRIBE — otherwise the pricing page
     // shows their old, cancelled plan as "Your plan" and blocks re-selecting it.
     const hasNoLiveSubscription =
-      !tenant.stripeSubscriptionId &&
-      tenant.subscriptionStatus !== SubscriptionStatus.TRIALING;
+      !tenant.stripeSubscriptionId && tenant.subscriptionStatus !== SubscriptionStatus.TRIALING;
     const currentPlan = hasNoLiveSubscription ? null : tenant.subscriptionPlan;
     const currentMonthly = isOnTrial ? 0 : Number(currentPlan?.monthlyPrice) || 0;
 
@@ -1178,7 +1289,7 @@ export class StripeService implements OnModuleInit {
               }
             });
           }
-          
+
           return {
             id: plan.id,
             name: plan.name,
@@ -1191,7 +1302,8 @@ export class StripeService implements OnModuleInit {
             isUpgrade: Number(plan.monthlyPrice) > currentMonthly,
             priceDifference: {
               monthly: Number(plan.monthlyPrice) - currentMonthly,
-              yearly: Number(plan.yearlyPrice) - (isOnTrial ? 0 : Number(currentPlan?.yearlyPrice || 0)),
+              yearly:
+                Number(plan.yearlyPrice) - (isOnTrial ? 0 : Number(currentPlan?.yearlyPrice || 0)),
             },
           };
         }),
@@ -1219,6 +1331,7 @@ export class StripeService implements OnModuleInit {
     daysRemaining: number;
     immediateChange: boolean;
   }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -1352,12 +1465,18 @@ export class StripeService implements OnModuleInit {
    * their own modules), so no module wiring changes are required.
    */
   private async assertUsageFitsPlan(tenantId: string, targetPlan: SubscriptionPlan): Promise<void> {
+    this.requireTenantId(tenantId);
     const manager = this.tenantRepository.manager;
+    // Users are the shared seat rule (people/seat-limit.ts): live memberships of
+    // the building, including people whose gate_users row points at another of
+    // their buildings, which the old row count missed.
     const [gateCount, userCount, vehicleCount] = await Promise.all([
       manager.count(Gate, { where: { tenantId } }),
-      this.userRepository.count({ where: { tenantId } }),
+      countSeats(manager, tenantId),
       manager.count(Vehicle, { where: { tenantId } }),
     ]);
+    // A negative maxUsers is unlimited and never blocks a downgrade.
+    const maxUsers = seatLimitOf(targetPlan);
 
     const violations: Array<{
       resource: 'gates' | 'users' | 'vehicles';
@@ -1376,13 +1495,13 @@ export class StripeService implements OnModuleInit {
         removeCount: gateCount - targetPlan.maxGates,
       });
     }
-    if (userCount > targetPlan.maxUsers) {
+    if (maxUsers !== null && userCount > maxUsers) {
       violations.push({
         resource: 'users',
         label: 'user',
-        limit: targetPlan.maxUsers,
+        limit: maxUsers,
         used: userCount,
-        removeCount: userCount - targetPlan.maxUsers,
+        removeCount: userCount - maxUsers,
       });
     }
     if (vehicleCount > targetPlan.maxVehicles) {
@@ -1443,6 +1562,7 @@ export class StripeService implements OnModuleInit {
     isUpgrade: boolean;
     isScheduled: boolean;
   }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -1825,12 +1945,13 @@ export class StripeService implements OnModuleInit {
       let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
       let netAmount: number | undefined;
       let feeAmount: number | undefined;
-      
+
       if (session.payment_intent) {
         try {
-          const paymentIntentId = typeof session.payment_intent === 'string' 
-            ? session.payment_intent 
-            : session.payment_intent.id;
+          const paymentIntentId =
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent.id;
           const paymentIntent = await this.stripe.paymentIntents.retrieve(paymentIntentId, {
             expand: ['payment_method', 'latest_charge.balance_transaction'],
           });
@@ -1844,11 +1965,12 @@ export class StripeService implements OnModuleInit {
               };
             }
           }
-          
+
           // Get net amount and fees from balance transaction
           const latestCharge = paymentIntent.latest_charge as Stripe.Charge | null;
           if (latestCharge && typeof latestCharge === 'object') {
-            const balanceTransaction = latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
+            const balanceTransaction =
+              latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
             if (balanceTransaction && typeof balanceTransaction === 'object') {
               netAmount = balanceTransaction.net; // In cents
               feeAmount = balanceTransaction.fee; // In cents
@@ -1867,12 +1989,12 @@ export class StripeService implements OnModuleInit {
         currency: session.currency || 'usd',
         transactionType: TransactionType.CHARGE,
         paymentType: previousPlanId ? PaymentType.UPGRADE : PaymentType.SUBSCRIPTION,
-        stripePaymentIntentId: typeof session.payment_intent === 'string' 
-          ? session.payment_intent 
-          : session.payment_intent?.id,
-        stripeInvoiceId: typeof session.invoice === 'string' 
-          ? session.invoice 
-          : session.invoice?.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id,
+        stripeInvoiceId:
+          typeof session.invoice === 'string' ? session.invoice : session.invoice?.id,
         stripeSubscriptionId: subscriptionId || undefined,
         billingPeriodStart: tenant.subscriptionStartedAt,
         billingPeriodEnd: tenant.currentPeriodEnd,
@@ -1892,149 +2014,24 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
-   * Handle signup checkout completed - creates tenant and user
+   * Handle signup checkout completed (webhook): provisions the building and its
+   * admin through provisionPaidSignup, which is idempotent (a replayed event,
+   * or verify-payment having got there first, finds the building it already
+   * made), then records the initial payment. recordPayment de-duplicates by
+   * invoice / payment intent, so the payment is recorded once whichever path
+   * created the building.
    */
   private async handleSignupCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
-    const metadata = session.metadata!;
+    const provisioned = await this.provisionPaidSignup(session);
+    if (!provisioned) {
+      return;
+    }
 
-    // Extract signup data from metadata
-    const firstName = metadata.firstName;
-    const lastName = metadata.lastName;
-    const email = metadata.email;
-    const passwordHash = metadata.passwordHash;
-    const phone = metadata.phone || '';
-    const buildingName = metadata.buildingName;
-    const buildingAddress = metadata.buildingAddress || '';
-    const planId = metadata.planId;
+    const { tenant, plan } = provisioned;
+    const metadata = session.metadata ?? {};
+    const email = metadata.email ?? '';
     const billingCycle = metadata.billingCycle as BillingCycle;
-
-    // Get the plan
-    const plan = await this.planRepository.findOne({ where: { id: planId } });
-    if (!plan) {
-      this.logger.error(`Plan not found during signup checkout: ${planId}`);
-      return;
-    }
-
-    // Double-check email doesn't exist (race condition protection)
-    const existingUser = await this.userRepository.findOne({
-      where: { email: email.toLowerCase() },
-    });
-    if (existingUser) {
-      this.logger.warn(`Email already exists during signup checkout: ${email}`);
-      return;
-    }
-
-    // Generate slug from building name
-    const slug =
-      buildingName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '') +
-      '-' +
-      Date.now().toString(36);
-
-    // Fetch subscription to get period end dates
     const subscriptionId = this.extractSubscriptionId(session.subscription);
-    let currentPeriodEnd: Date | undefined;
-    if (subscriptionId) {
-      try {
-        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
-        currentPeriodEnd = new Date(subscription.current_period_end * 1000);
-      } catch (err) {
-        this.logger.warn(`Could not retrieve subscription ${subscriptionId}: ${err}`);
-      }
-    }
-
-    // Create tenant
-    const tenant = this.tenantRepository.create({
-      name: buildingName,
-      slug,
-      contactEmail: email.toLowerCase(),
-      contactPhone: phone,
-      address: buildingAddress,
-      status: TenantStatus.ACTIVE, // Paid - so ACTIVE
-      subscriptionPlanId: plan.id,
-      billingCycle: billingCycle || BillingCycle.MONTHLY,
-      stripeCustomerId: session.customer as string,
-      stripeSubscriptionId: subscriptionId!,
-      subscriptionStatus: SubscriptionStatus.ACTIVE,
-      subscriptionStartedAt: new Date(),
-      subscriptionExpiresAt: currentPeriodEnd,
-      currentPeriodEnd: currentPeriodEnd,
-      cancelAtPeriodEnd: false,
-      settings: {
-        signupDate: new Date().toISOString(),
-        paidOnSignup: true,
-      },
-    });
-
-    const savedTenant = await this.tenantRepository.save(tenant);
-
-    // Generate QR code for the building admin
-    const qrCode = `GR-${uuidv4()}`;
-
-    // Create user (building admin)
-    const user = this.userRepository.create({
-      email: email.toLowerCase(),
-      passwordHash,
-      firstName,
-      lastName,
-      phone,
-      role: UserRole.BUILDING_ADMIN,
-      status: UserStatus.ACTIVE,
-      tenantId: savedTenant.id,
-      qrCode,
-    });
-
-    const savedUser = await this.userRepository.save(user);
-
-    this.logger.log(
-      `Signup completed via Stripe: ${email} - Tenant: ${buildingName} - Plan: ${plan.name}`,
-    );
-
-    // Calculate effective price with discount for email display
-    const basePrice = billingCycle === BillingCycle.YEARLY
-      ? Number(plan.yearlyPrice)
-      : Number(plan.monthlyPrice);
-    const effectivePrice = this.calculateEffectivePrice(
-      basePrice,
-      Number(plan.discountPercent),
-      plan.discountValidUntil,
-    );
-
-    // Send welcome email with subscription info (don't fail signup if email fails)
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
-    this.emailService
-      .sendWelcomeEmail(
-        savedUser.email,
-        `${savedUser.firstName} ${savedUser.lastName}`,
-        savedTenant.name,
-        `${frontendUrl}/dashboard`,
-        {
-          type: 'subscription',
-          planName: plan.name,
-          price: effectivePrice,
-          billingCycle: billingCycle === BillingCycle.YEARLY ? 'yearly' : 'monthly',
-        },
-      )
-      .catch((error) => {
-        this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
-      });
-
-    // Audit log
-    await this.logAuditEvent({
-      tenantId: savedTenant.id,
-      eventType: AuditEventType.SUBSCRIPTION_CREATED,
-      stripeSubscriptionId: subscriptionId!,
-      newStatus: SubscriptionStatus.ACTIVE,
-      newPlanId: plan.id,
-      metadata: {
-        email,
-        buildingName,
-        billingCycle,
-        paidOnSignup: true,
-      },
-    });
 
     // Record initial payment from checkout
     if (session.amount_total && session.amount_total > 0) {
@@ -2042,12 +2039,13 @@ export class StripeService implements OnModuleInit {
       let paymentMethodInfo: { type?: string; last4?: string; brand?: string } = {};
       let netAmount: number | undefined;
       let feeAmount: number | undefined;
-      
+
       if (session.payment_intent) {
         try {
-          const paymentIntentId = typeof session.payment_intent === 'string' 
-            ? session.payment_intent 
-            : session.payment_intent.id;
+          const paymentIntentId =
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent.id;
           const paymentIntent = await this.stripe.paymentIntents.retrieve(paymentIntentId, {
             expand: ['payment_method', 'latest_charge.balance_transaction'],
           });
@@ -2061,11 +2059,12 @@ export class StripeService implements OnModuleInit {
               };
             }
           }
-          
+
           // Get net amount and fees from balance transaction
           const latestCharge = paymentIntent.latest_charge as Stripe.Charge | null;
           if (latestCharge && typeof latestCharge === 'object') {
-            const balanceTransaction = latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
+            const balanceTransaction =
+              latestCharge.balance_transaction as Stripe.BalanceTransaction | null;
             if (balanceTransaction && typeof balanceTransaction === 'object') {
               netAmount = balanceTransaction.net; // In cents
               feeAmount = balanceTransaction.fee; // In cents
@@ -2077,27 +2076,27 @@ export class StripeService implements OnModuleInit {
       }
 
       await this.recordPayment({
-        tenantId: savedTenant.id,
+        tenantId: tenant.id,
         amount: session.amount_total,
         netAmount,
         feeAmount,
         currency: session.currency || 'usd',
         transactionType: TransactionType.CHARGE,
         paymentType: PaymentType.SUBSCRIPTION,
-        stripePaymentIntentId: typeof session.payment_intent === 'string' 
-          ? session.payment_intent 
-          : session.payment_intent?.id,
-        stripeInvoiceId: typeof session.invoice === 'string' 
-          ? session.invoice 
-          : session.invoice?.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id,
+        stripeInvoiceId:
+          typeof session.invoice === 'string' ? session.invoice : session.invoice?.id,
         stripeSubscriptionId: subscriptionId || undefined,
-        billingPeriodStart: new Date(),
-        billingPeriodEnd: currentPeriodEnd,
+        billingPeriodStart: tenant.subscriptionStartedAt ?? new Date(),
+        billingPeriodEnd: tenant.currentPeriodEnd,
         billingCycle: billingCycle,
         paymentMethodType: paymentMethodInfo.type,
         paymentMethodLast4: paymentMethodInfo.last4,
         paymentMethodBrand: paymentMethodInfo.brand,
-        description: `Initial subscription payment - ${plan.name}`,
+        description: `Initial subscription payment - ${plan?.name ?? 'subscription'}`,
         metadata: {
           sessionId: session.id,
           signupPayment: true,
@@ -2105,8 +2104,371 @@ export class StripeService implements OnModuleInit {
       });
       this.logger.log(`Recorded initial payment of $${session.amount_total / 100} for ${email}`);
     }
+  }
 
-    this.eventEmitter.emit('signup.completed', { tenant: savedTenant, user: savedUser, plan });
+  /**
+   * Creates the building a paid signup checkout paid for, and makes its buyer
+   * the building admin. Shared by the webhook (handleSignupCheckoutCompleted)
+   * and the verify-payment fallback (verifyCheckoutSession), which can both
+   * arrive for the same session, in either order or at the same time.
+   *
+   * Idempotent:
+   *   - a building already carrying this Stripe subscription (or, without one,
+   *     this checkout session id) is returned as it is, created: false;
+   *   - otherwise one transaction takes a per-session advisory lock and checks
+   *     again under it, so two concurrent calls create one building; a unique
+   *     violation (the other call won with the same building name) is answered
+   *     with the winner's building as well.
+   *
+   * Inside the transaction:
+   *   - a NEW email gets a person row with the password chosen at checkout
+   *     (MembershipLifecycleService.insertPerson: QR code, active, no building
+   *     on the legacy columns), recorded as tenants.settings.signupCreatedUserId
+   *     so verify-payment may sign exactly this person in (L9);
+   *   - an EXISTING account (checkout refuses them, so only a race or an old
+   *     session gets here) keeps its password untouched and is added as
+   *     building admin, with the "added to <building>" email; it is never
+   *     signed in by verify-payment;
+   *   - the tenant, ACTIVE and paid, and the BUILDING_ADMIN membership
+   *     (MembershipsService.add, which re-mirrors the legacy columns).
+   *
+   * Money is never dropped: when an existing account cannot be attached (it is
+   * banned, or already belongs to another building while
+   * GATE_MEMBERSHIP_CONTEXT is off) the building is still created, without an
+   * admin, marked in settings.signupAdminPending and logged as an error for
+   * support. The old code logged a warning and created nothing.
+   *
+   * Returns null when the session does not describe a signup it can act on
+   * (missing metadata, unknown plan); that is logged.
+   */
+  async provisionPaidSignup(
+    session: Stripe.Checkout.Session,
+  ): Promise<PaidSignupProvisioning | null> {
+    const metadata = session.metadata ?? {};
+    const email = (metadata.email ?? '').trim().toLowerCase();
+    const buildingName = metadata.buildingName;
+    const planId = metadata.planId;
+    const subscriptionId = this.extractSubscriptionId(session.subscription);
+
+    if (!email || !buildingName || !planId) {
+      this.logger.error(
+        `Signup checkout ${session.id} is missing email, building or plan metadata`,
+      );
+      return null;
+    }
+
+    const plan = await this.planRepository.findOne({ where: { id: planId } });
+
+    const earlier = await this.findPaidSignupTenant(subscriptionId, session.id);
+    if (earlier) {
+      return this.replayedSignup(earlier, plan);
+    }
+
+    if (!plan) {
+      this.logger.error(`Plan not found during signup checkout: ${planId}`);
+      return null;
+    }
+
+    // Fetch subscription to get period end dates (outside the transaction: a
+    // network call must not hold row locks)
+    let currentPeriodEnd: Date | undefined;
+    if (subscriptionId) {
+      try {
+        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+        currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+      } catch (err) {
+        this.logger.warn(`Could not retrieve subscription ${subscriptionId}: ${err}`);
+      }
+    }
+
+    const billingCycle = (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY;
+    const phone = metadata.phone || '';
+    const customerId =
+      typeof session.customer === 'string' ? session.customer : (session.customer?.id ?? null);
+
+    // Generate slug from building name
+    const slug =
+      buildingName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '') +
+      '-' +
+      Date.now().toString(36);
+
+    type Outcome = {
+      tenant: Tenant;
+      created: boolean;
+      admin: User | null;
+      createdPerson: boolean;
+      adminPending: string | null;
+    };
+
+    let outcome: Outcome;
+    try {
+      outcome = await this.tenantRepository.manager.transaction(async (m): Promise<Outcome> => {
+        await this.lockPaidSignup(m, session.id);
+        const raced = await this.findPaidSignupTenant(subscriptionId, session.id, m);
+        if (raced) {
+          return {
+            tenant: raced,
+            created: false,
+            admin: null,
+            createdPerson: false,
+            adminPending: null,
+          };
+        }
+
+        // The admin first (a new person row is the only other insert), then the
+        // building, then the membership that joins them.
+        let person = await this.membershipLifecycleService.findPersonByEmail(email, m, {
+          lock: true,
+        });
+        let createdPerson = false;
+        let adminPending: string | null = null;
+
+        if (!person) {
+          person = await this.membershipLifecycleService.insertPerson(m, {
+            email,
+            firstName: metadata.firstName ?? '',
+            lastName: metadata.lastName ?? '',
+            phone: phone || null,
+            // A local account: the buyer signs in with the password from checkout.
+            userId: null,
+            passwordHash: metadata.passwordHash || undefined,
+            mustChangePassword: false,
+          });
+          createdPerson = true;
+        } else {
+          if (person.deletedAt) {
+            // Restoring ends any leftover membership and keeps the status.
+            await this.membershipLifecycleService.restoreDeletedPerson(person.id, m);
+          }
+          adminPending = await this.paidSignupAdminProblem(person, m);
+        }
+
+        const tenant = await m.save(
+          m.create(Tenant, {
+            name: buildingName,
+            slug,
+            contactEmail: email,
+            contactPhone: phone,
+            address: metadata.buildingAddress || '',
+            status: TenantStatus.ACTIVE, // Paid - so ACTIVE
+            subscriptionPlanId: plan.id,
+            billingCycle,
+            stripeCustomerId: customerId as string,
+            stripeSubscriptionId: subscriptionId as string,
+            subscriptionStatus: SubscriptionStatus.ACTIVE,
+            subscriptionStartedAt: new Date(),
+            subscriptionExpiresAt: currentPeriodEnd,
+            currentPeriodEnd: currentPeriodEnd,
+            cancelAtPeriodEnd: false,
+            settings: {
+              signupDate: new Date().toISOString(),
+              paidOnSignup: true,
+              [SIGNUP_SETTINGS.sessionId]: session.id,
+              ...(createdPerson ? { [SIGNUP_SETTINGS.createdUserId]: person.id } : {}),
+              ...(adminPending
+                ? { [SIGNUP_SETTINGS.adminPending]: { email, reason: adminPending } }
+                : {}),
+            },
+          }),
+        );
+
+        if (adminPending) {
+          return { tenant, created: true, admin: null, createdPerson: false, adminPending };
+        }
+
+        await this.membershipsService.add(
+          { userId: person.id, tenantId: tenant.id, role: UserRole.BUILDING_ADMIN },
+          m,
+        );
+
+        return { tenant, created: true, admin: person, createdPerson, adminPending: null };
+      });
+    } catch (error) {
+      // The other delivery of this session committed first with the same
+      // building name: answer with its building.
+      if (isUniqueViolation(error)) {
+        const winner = await this.findPaidSignupTenant(subscriptionId, session.id);
+        if (winner) {
+          return this.replayedSignup(winner, plan);
+        }
+      }
+      throw error;
+    }
+
+    if (!outcome.created) {
+      return this.replayedSignup(outcome.tenant, plan);
+    }
+
+    await this.afterPaidSignupCreated(session, outcome, plan, billingCycle);
+
+    return {
+      tenant: outcome.tenant,
+      created: true,
+      signupCreatedUserId: outcome.createdPerson && outcome.admin ? outcome.admin.id : null,
+      admin: outcome.admin,
+      plan,
+    };
+  }
+
+  /**
+   * The building an earlier call made for this checkout, deleted ones included:
+   * the one that recorded this session id, or the one holding its subscription.
+   * The session id is ALWAYS checked: a tenant's subscription id does not stay
+   * put (a cancellation clears it, a re-subscription replaces it), and a
+   * replayed session must still find its building instead of paying for a
+   * second one.
+   */
+  protected async findPaidSignupTenant(
+    subscriptionId: string | null,
+    sessionId: string,
+    manager: EntityManager = this.tenantRepository.manager,
+  ): Promise<Tenant | null> {
+    const query = manager
+      .createQueryBuilder(Tenant, 'tenant')
+      .withDeleted()
+      .where(`tenant.settings ->> '${SIGNUP_SETTINGS.sessionId}' = :sessionId`, { sessionId });
+    if (subscriptionId) {
+      query.orWhere('tenant.stripeSubscriptionId = :subscriptionId', { subscriptionId });
+    }
+
+    return query.orderBy('tenant.createdAt', 'ASC').addOrderBy('tenant.id', 'ASC').getOne();
+  }
+
+  /**
+   * Serialises every provisioning of ONE checkout session (the webhook and
+   * verify-payment) until the transaction ends. Distinct sessions never wait
+   * on each other.
+   */
+  protected async lockPaidSignup(m: EntityManager, sessionId: string): Promise<void> {
+    await m.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`paid-signup:${sessionId}`]);
+  }
+
+  /**
+   * Why an existing account cannot be made the admin of the paid building, or
+   * null. The same refusals MembershipLifecycleService applies when an admin
+   * adds a person, checked up front so the building is still created.
+   */
+  private async paidSignupAdminProblem(person: User, m: EntityManager): Promise<string | null> {
+    if (person.status !== UserStatus.ACTIVE) {
+      return 'ACCOUNT_SUSPENDED';
+    }
+    if (!isMembershipContextEnabled()) {
+      const live = await this.membershipsService.listLiveForUser(person.id, m);
+      if (live.length > 0) {
+        return 'MULTI_MEMBERSHIP_DISABLED';
+      }
+    }
+    return null;
+  }
+
+  private replayedSignup(tenant: Tenant, plan: SubscriptionPlan | null): PaidSignupProvisioning {
+    return {
+      tenant,
+      created: false,
+      signupCreatedUserId: signupCreatedUserIdOf(tenant),
+      admin: null,
+      plan,
+    };
+  }
+
+  /** After commit, once per building: emails, audit log, event. Never fatal. */
+  private async afterPaidSignupCreated(
+    session: Stripe.Checkout.Session,
+    outcome: {
+      tenant: Tenant;
+      admin: User | null;
+      createdPerson: boolean;
+      adminPending: string | null;
+    },
+    plan: SubscriptionPlan,
+    billingCycle: BillingCycle,
+  ): Promise<void> {
+    const { tenant, admin, createdPerson, adminPending } = outcome;
+    const email = tenant.contactEmail;
+    const subscriptionId = this.extractSubscriptionId(session.subscription);
+
+    this.logger.log(
+      `Signup completed via Stripe: ${email} - Tenant: ${tenant.name} - Plan: ${plan.name}` +
+        (createdPerson ? ' (new account)' : admin ? ' (existing account added as admin)' : ''),
+    );
+
+    if (adminPending) {
+      this.logger.error(
+        `Paid signup ${session.id} created tenant ${tenant.id} WITHOUT an admin: the account ` +
+          `${email} could not be attached (${adminPending}). Attach a building admin manually.`,
+      );
+    } else if (admin && createdPerson) {
+      // Calculate effective price with discount for email display
+      const basePrice =
+        billingCycle === BillingCycle.YEARLY ? Number(plan.yearlyPrice) : Number(plan.monthlyPrice);
+      const effectivePrice = this.calculateEffectivePrice(
+        basePrice,
+        Number(plan.discountPercent),
+        plan.discountValidUntil,
+      );
+
+      // Send welcome email with subscription info (don't fail signup if email fails)
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
+      this.emailService
+        .sendWelcomeEmail(
+          admin.email,
+          `${admin.firstName} ${admin.lastName}`,
+          tenant.name,
+          `${frontendUrl}/dashboard`,
+          {
+            type: 'subscription',
+            planName: plan.name,
+            price: effectivePrice,
+            billingCycle: billingCycle === BillingCycle.YEARLY ? 'yearly' : 'monthly',
+          },
+        )
+        .catch((error) => {
+          this.logger.error(`Failed to send welcome email to ${admin.email}:`, error);
+        });
+    } else if (admin) {
+      // An existing account: no credentials, just the new building.
+      const loginUrl = this.configService.get<string>(
+        'GATE_LOGIN_URL',
+        'https://yaad.global/login',
+      );
+      Promise.resolve(
+        this.emailService.sendAddedToBuildingEmail(
+          admin.email,
+          `${admin.firstName ?? ''} ${admin.lastName ?? ''}`.trim(),
+          UserRole.BUILDING_ADMIN,
+          tenant.name,
+          null,
+          loginUrl,
+        ),
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `Failed to send the added-to-building email to ${admin.email}: ` +
+            ((error as Error)?.message ?? ''),
+        );
+      });
+    }
+
+    // Audit log (logAuditEvent never throws: the building already exists)
+    await this.logAuditEvent({
+      tenantId: tenant.id,
+      eventType: AuditEventType.SUBSCRIPTION_CREATED,
+      stripeSubscriptionId: subscriptionId ?? undefined,
+      newStatus: SubscriptionStatus.ACTIVE,
+      newPlanId: plan.id,
+      metadata: {
+        email,
+        buildingName: tenant.name,
+        billingCycle,
+        paidOnSignup: true,
+        existingAccount: !createdPerson,
+        ...(adminPending ? { adminPending } : {}),
+      },
+    });
+
+    this.eventEmitter.emit('signup.completed', { tenant, user: admin, plan });
   }
 
   /**
@@ -2124,9 +2486,7 @@ export class StripeService implements OnModuleInit {
    * from the SetupIntent id, so even a replay of THIS event cannot create a
    * second subscription.
    */
-  async handleSetupIntentSucceeded(
-    setupIntent: Stripe.SetupIntent,
-  ): Promise<void> {
+  async handleSetupIntentSucceeded(setupIntent: Stripe.SetupIntent): Promise<void> {
     if (setupIntent.metadata?.source !== INAPP_SUBSCRIPTION_SOURCE) {
       return; // not one of ours — leave portal/other card saves untouched
     }
@@ -2135,8 +2495,7 @@ export class StripeService implements OnModuleInit {
     const planId = setupIntent.metadata?.planId;
     const priceId = setupIntent.metadata?.priceId;
     const billingCycle =
-      (setupIntent.metadata?.billingCycle as BillingCycle) ||
-      BillingCycle.MONTHLY;
+      (setupIntent.metadata?.billingCycle as BillingCycle) || BillingCycle.MONTHLY;
 
     if (!tenantId || !planId || !priceId) {
       this.logger.warn(
@@ -2149,9 +2508,7 @@ export class StripeService implements OnModuleInit {
       where: { id: tenantId },
     });
     if (!tenant) {
-      this.logger.warn(
-        `SetupIntent ${setupIntent.id}: tenant ${tenantId} not found; skipping`,
-      );
+      this.logger.warn(`SetupIntent ${setupIntent.id}: tenant ${tenantId} not found; skipping`);
       return;
     }
 
@@ -2178,9 +2535,7 @@ export class StripeService implements OnModuleInit {
         ? setupIntent.payment_method
         : setupIntent.payment_method?.id;
     const customerId =
-      typeof setupIntent.customer === 'string'
-        ? setupIntent.customer
-        : setupIntent.customer?.id;
+      typeof setupIntent.customer === 'string' ? setupIntent.customer : setupIntent.customer?.id;
 
     if (!paymentMethodId || !customerId) {
       this.logger.warn(
@@ -2242,6 +2597,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     setupIntentId: string,
   ): Promise<{ subscriptionId: string; status: string }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const setupIntent = await this.stripe.setupIntents.retrieve(setupIntentId);
@@ -2253,7 +2609,9 @@ export class StripeService implements OnModuleInit {
       throw new ForbiddenException('Setup intent does not belong to this tenant.');
     }
     if (setupIntent.status !== 'succeeded') {
-      throw new BadRequestException(`Setup intent is not yet confirmed (status: ${setupIntent.status}).`);
+      throw new BadRequestException(
+        `Setup intent is not yet confirmed (status: ${setupIntent.status}).`,
+      );
     }
 
     // Delegate to the same logic used by the webhook — fully idempotent.
@@ -2403,10 +2761,7 @@ export class StripeService implements OnModuleInit {
    */
   private getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | undefined {
     const inv = invoice as any;
-    const legacy =
-      typeof inv.subscription === 'string'
-        ? inv.subscription
-        : inv.subscription?.id;
+    const legacy = typeof inv.subscription === 'string' ? inv.subscription : inv.subscription?.id;
     return (
       legacy ||
       inv.parent?.subscription_details?.subscription ||
@@ -2436,9 +2791,7 @@ export class StripeService implements OnModuleInit {
     // subscription id so subsequent events match directly.
     if (!tenant && invoice.customer) {
       const customerId =
-        typeof invoice.customer === 'string'
-          ? invoice.customer
-          : invoice.customer.id;
+        typeof invoice.customer === 'string' ? invoice.customer : invoice.customer.id;
       tenant = await this.tenantRepository.findOne({
         where: { stripeCustomerId: customerId },
         relations: ['subscriptionPlan'],
@@ -2520,7 +2873,8 @@ export class StripeService implements OnModuleInit {
         }
 
         // Get net amount and fees from balance transaction
-        const balanceTransaction = chargeObj.balance_transaction as Stripe.BalanceTransaction | null;
+        const balanceTransaction =
+          chargeObj.balance_transaction as Stripe.BalanceTransaction | null;
         if (balanceTransaction && typeof balanceTransaction === 'object') {
           netAmount = balanceTransaction.net; // In cents
           feeAmount = balanceTransaction.fee; // In cents
@@ -2546,9 +2900,7 @@ export class StripeService implements OnModuleInit {
           };
         }
       } catch (e) {
-        this.logger.warn(
-          `Could not read default PM for subscription ${subscriptionId}: ${e}`,
-        );
+        this.logger.warn(`Could not read default PM for subscription ${subscriptionId}: ${e}`);
       }
     }
 
@@ -2557,10 +2909,7 @@ export class StripeService implements OnModuleInit {
     if (typeof inv.tax === 'number') {
       taxAmount = inv.tax; // In cents
     } else if (Array.isArray(inv.total_taxes)) {
-      taxAmount = inv.total_taxes.reduce(
-        (sum: number, t: any) => sum + (t.amount || 0),
-        0,
-      );
+      taxAmount = inv.total_taxes.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
     }
 
     await this.recordPayment({
@@ -2612,7 +2961,6 @@ export class StripeService implements OnModuleInit {
 
     const tenant = await this.tenantRepository.findOne({
       where: { stripeSubscriptionId: subscriptionId },
-      relations: ['users'],
     });
 
     if (!tenant) return;
@@ -2812,11 +3160,19 @@ export class StripeService implements OnModuleInit {
   /**
    * Verify a checkout session and activate the account
    * Used after successful Stripe Checkout redirect
+   *
+   * loginAllowed / adminUserId say whether POST /auth/verify-payment may sign
+   * someone in: only for a paid signup, and only as the person that signup
+   * created (tenants.settings.signupCreatedUserId). A signup by an email that
+   * already had an account, and every checkout of an existing building, return
+   * loginAllowed false: that person signs in normally.
    */
   async verifyCheckoutSession(sessionId: string): Promise<{
     success: boolean;
     tenantId?: string;
     message?: string;
+    loginAllowed?: boolean;
+    adminUserId?: string;
   }> {
     this.ensureStripe();
 
@@ -2832,139 +3188,30 @@ export class StripeService implements OnModuleInit {
 
       const checkoutType = session.metadata?.type;
 
-      // NEW SIGNUP: Find tenant by email (created by webhook)
+      // NEW SIGNUP: the building for this subscription, created by whichever of
+      // the webhook and this call got there first. provisionPaidSignup looks it
+      // up by the subscription id and creates it only when it does not exist
+      // yet (idempotent, under a per-session lock), so there is nothing to wait
+      // for and no second building can appear.
       if (checkoutType === 'signup') {
-        const email = session.metadata?.email;
-        if (!email) {
-          return { success: false, message: 'Session missing email metadata' };
+        const provisioned = await this.provisionPaidSignup(session);
+        if (!provisioned) {
+          return {
+            success: false,
+            message: 'Could not set up the building for this payment. Please contact support.',
+          };
         }
 
-        // Find the user created by webhook
-        const user = await this.userRepository.findOne({
-          where: { email: email.toLowerCase() },
-          relations: ['tenant'],
-        });
-
-        if (!user || !user.tenant) {
-          // Webhook might not have processed yet - wait and retry
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          const retryUser = await this.userRepository.findOne({
-            where: { email: email.toLowerCase() },
-            relations: ['tenant'],
-          });
-
-          if (retryUser && retryUser.tenant) {
-            return { success: true, tenantId: retryUser.tenant.id };
-          }
-
-          // Fallback: Create account directly from session metadata
-          // This handles cases where webhook is delayed or failed
-          this.logger.log(`Webhook hasn't created account yet, creating from session metadata`);
-          
-          const metadata = session.metadata!;
-          const planId = metadata.planId;
-          const plan = await this.planRepository.findOne({ where: { id: planId } });
-          
-          if (!plan) {
-            return { success: false, message: 'Plan not found' };
-          }
-
-          const buildingName = metadata.buildingName;
-          const slug = buildingName
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/(^-|-$)/g, '') + '-' + Date.now().toString(36);
-
-          // Get subscription period from Stripe
-          const subscriptionId = this.extractSubscriptionId(session.subscription);
-          let currentPeriodEnd: Date | undefined;
-          if (subscriptionId) {
-            try {
-              const stripeSubscription = await this.stripe.subscriptions.retrieve(subscriptionId);
-              currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
-            } catch (err) {
-              this.logger.warn(`Could not retrieve subscription: ${err}`);
-            }
-          }
-
-          // Create tenant
-          const tenant = this.tenantRepository.create({
-            name: buildingName,
-            slug,
-            contactEmail: email.toLowerCase(),
-            contactPhone: metadata.phone || '',
-            address: metadata.buildingAddress || '',
-            status: TenantStatus.ACTIVE,
-            subscriptionPlanId: plan.id,
-            billingCycle: (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY,
-            stripeCustomerId: session.customer as string,
-            stripeSubscriptionId: subscriptionId!,
-            subscriptionStatus: SubscriptionStatus.ACTIVE,
-            subscriptionStartedAt: new Date(),
-            subscriptionExpiresAt: currentPeriodEnd,
-            currentPeriodEnd: currentPeriodEnd,
-            cancelAtPeriodEnd: false,
-            settings: {
-              signupDate: new Date().toISOString(),
-              paidOnSignup: true,
-            },
-          });
-
-          const savedTenant = await this.tenantRepository.save(tenant);
-
-          // Generate QR code for the building admin
-          const qrCode = `GR-${uuidv4()}`;
-
-          // Create user
-          const newUser = this.userRepository.create({
-            email: email.toLowerCase(),
-            passwordHash: metadata.passwordHash,
-            firstName: metadata.firstName,
-            lastName: metadata.lastName,
-            phone: metadata.phone || '',
-            role: UserRole.BUILDING_ADMIN,
-            status: UserStatus.ACTIVE,
-            tenantId: savedTenant.id,
-            qrCode,
-          });
-
-          const savedUser = await this.userRepository.save(newUser);
-          this.logger.log(`Created account via verify-payment fallback: ${email}`);
-
-          // Calculate effective price with discount for email
-          const billingCycle = (metadata.billingCycle as BillingCycle) || BillingCycle.MONTHLY;
-          const basePrice = billingCycle === BillingCycle.YEARLY
-            ? Number(plan.yearlyPrice)
-            : Number(plan.monthlyPrice);
-          const effectivePrice = this.calculateEffectivePrice(
-            basePrice,
-            Number(plan.discountPercent),
-            plan.discountValidUntil,
-          );
-
-          // Send welcome email with subscription info
-          const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
-          this.emailService
-            .sendWelcomeEmail(
-              savedUser.email,
-              `${savedUser.firstName} ${savedUser.lastName}`,
-              savedTenant.name,
-              `${frontendUrl}/dashboard`,
-              {
-                type: 'subscription',
-                planName: plan.name,
-                price: effectivePrice,
-                billingCycle: billingCycle === BillingCycle.YEARLY ? 'yearly' : 'monthly',
-              },
-            )
-            .catch((error) => {
-              this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
-            });
-
-          return { success: true, tenantId: savedTenant.id };
-        }
-
-        return { success: true, tenantId: user.tenant.id };
+        // Only the person this signup itself created may be signed in from here
+        // (AuthService.loginAfterPaidSignup re-checks it); an account that
+        // already existed signs in the normal way.
+        const adminUserId = provisioned.signupCreatedUserId;
+        return {
+          success: true,
+          tenantId: provisioned.tenant.id,
+          loginAllowed: adminUserId !== null,
+          ...(adminUserId ? { adminUserId } : {}),
+        };
       }
 
       // EXISTING TENANT: Original flow
@@ -3009,7 +3256,9 @@ export class StripeService implements OnModuleInit {
 
       this.eventEmitter.emit('subscription.activated', { tenant, plan });
 
-      return { success: true, tenantId: tenant.id };
+      // A building that already existed has its own admins, who sign in
+      // normally: a Stripe session id must never be a way to their tokens.
+      return { success: true, tenantId: tenant.id, loginAllowed: false };
     } catch (error: any) {
       this.logger.error(`Failed to verify checkout session: ${error.message}`);
       return { success: false, message: error.message || 'Failed to verify payment' };
@@ -3023,6 +3272,7 @@ export class StripeService implements OnModuleInit {
    * Supports full refunds, partial refunds, and prorated refunds
    */
   async createRefund(tenantId: string, dto: CreateRefundDto): Promise<RefundResult> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -3148,6 +3398,7 @@ export class StripeService implements OnModuleInit {
    * Calculate prorated refund amount for early cancellation or downgrade
    */
   async calculateProratedRefund(tenantId: string): Promise<RefundCalculation> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({
@@ -3286,6 +3537,7 @@ export class StripeService implements OnModuleInit {
    * Get refund history for a tenant
    */
   async getRefundHistory(tenantId: string): Promise<RefundHistory> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
@@ -3845,7 +4097,7 @@ export class StripeService implements OnModuleInit {
     if (options.searchTerm) {
       query.andWhere(
         '(tenant.name ILIKE :search OR payment.customerEmail ILIKE :search OR payment.customerName ILIKE :search OR payment.description ILIKE :search)',
-        { search: `%${options.searchTerm}%` }
+        { search: `%${options.searchTerm}%` },
       );
     }
 
@@ -3858,7 +4110,9 @@ export class StripeService implements OnModuleInit {
     }
 
     if (options.billingCycle) {
-      query.andWhere('payment.billingCycle = :billingCycle', { billingCycle: options.billingCycle });
+      query.andWhere('payment.billingCycle = :billingCycle', {
+        billingCycle: options.billingCycle,
+      });
     }
 
     if (options.startDate) {
@@ -3947,6 +4201,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     options: { page?: number; limit?: number } = {},
   ): Promise<{ payments: Payment[]; total: number }> {
+    this.requireTenantId(tenantId);
     const page = options.page || 1;
     const limit = options.limit || 20;
     const skip = (page - 1) * limit;
@@ -3975,6 +4230,7 @@ export class StripeService implements OnModuleInit {
     tenantId: string,
     options: { limit?: number } = {},
   ): Promise<{ invoices: TenantInvoice[]; hasMore: boolean }> {
+    this.requireTenantId(tenantId);
     this.ensureStripe();
 
     const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
@@ -4179,7 +4435,9 @@ export class StripeService implements OnModuleInit {
       baseQuery.andWhere('payment.tenantId = :tenantId', { tenantId: options.tenantId });
     }
     if (options?.billingCycle) {
-      baseQuery.andWhere('payment.billingCycle = :billingCycle', { billingCycle: options.billingCycle });
+      baseQuery.andWhere('payment.billingCycle = :billingCycle', {
+        billingCycle: options.billingCycle,
+      });
     }
 
     // Get total revenue
@@ -4251,10 +4509,7 @@ export class StripeService implements OnModuleInit {
   /**
    * Get revenue by plan with lifetime stats
    */
-  async getRevenueByPlan(options?: {
-    startDate?: Date;
-    endDate?: Date;
-  }): Promise<
+  async getRevenueByPlan(options?: { startDate?: Date; endDate?: Date }): Promise<
     {
       planId: string;
       planName: string;
@@ -4388,14 +4643,18 @@ export class StripeService implements OnModuleInit {
 
     if (filters.transactionType) {
       if (Array.isArray(filters.transactionType)) {
-        query.andWhere('payment.transactionType IN (:...types)', { types: filters.transactionType });
+        query.andWhere('payment.transactionType IN (:...types)', {
+          types: filters.transactionType,
+        });
       } else {
         query.andWhere('payment.transactionType = :type', { type: filters.transactionType });
       }
     }
 
     if (filters.billingCycle) {
-      query.andWhere('payment.billingCycle = :billingCycle', { billingCycle: filters.billingCycle });
+      query.andWhere('payment.billingCycle = :billingCycle', {
+        billingCycle: filters.billingCycle,
+      });
     }
 
     if (filters.paymentType) {
@@ -4436,8 +4695,14 @@ export class StripeService implements OnModuleInit {
     // Calculate summary for filtered results
     const summaryQuery = query.clone();
     const chargeSum = await summaryQuery
-      .select('COALESCE(SUM(CASE WHEN payment.transactionType = :charge THEN payment.amount ELSE 0 END), 0)', 'charges')
-      .addSelect('COALESCE(SUM(CASE WHEN payment.transactionType = :refund THEN payment.amount ELSE 0 END), 0)', 'refunds')
+      .select(
+        'COALESCE(SUM(CASE WHEN payment.transactionType = :charge THEN payment.amount ELSE 0 END), 0)',
+        'charges',
+      )
+      .addSelect(
+        'COALESCE(SUM(CASE WHEN payment.transactionType = :refund THEN payment.amount ELSE 0 END), 0)',
+        'refunds',
+      )
       .setParameter('charge', TransactionType.CHARGE)
       .setParameter('refund', TransactionType.REFUND)
       .getRawOne();
@@ -4513,7 +4778,8 @@ export class StripeService implements OnModuleInit {
       disputed,
       total: {
         count: succeeded.count + pending.count + failed.count + refunded.count + disputed.count,
-        amount: succeeded.amount + pending.amount + failed.amount + refunded.amount + disputed.amount,
+        amount:
+          succeeded.amount + pending.amount + failed.amount + refunded.amount + disputed.amount,
       },
     };
   }

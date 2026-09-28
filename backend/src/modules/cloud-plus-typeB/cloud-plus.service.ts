@@ -4,11 +4,11 @@ import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
 
 import { DeviceConfig, DeviceStatus } from '@database/entities/device-config.entity';
-import { Gate, GateState } from '@database/entities/gate.entity';
+import { Gate } from '@database/entities/gate.entity';
 import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
-import { User, UserStatus } from '@database/entities/user.entity';
+import { User } from '@database/entities/user.entity';
 import {
   AccessEvent,
   AccessMethod,
@@ -17,6 +17,12 @@ import {
 } from '@database/entities/access-event.entity';
 import { GatewayService } from '../gateway/gateway.service';
 import { RfidRegistrationService } from '../rfid/rfid-registration.service';
+import { HolderDecision, MembershipAccessService } from '../memberships/membership-access.service';
+import {
+  CARD_HOLDER_ROLES,
+  PERSONAL_QR_ROLES,
+  VEHICLE_OWNER_ROLES,
+} from '../memberships/membership-access.constants';
 import { PendingAlarmService } from './pending-alarm.service';
 
 import {
@@ -30,6 +36,41 @@ import {
   RegisterCloudPlusDeviceDto,
 } from './dto/cloud-plus.dto';
 
+/**
+ * The denial text for a personal credential whose holder may not pass, from a
+ * MembershipAccessService decision. `holder` names who the credential belongs
+ * to ('Owner' for a vehicle, 'Card holder' for a personal card):
+ *   - no role in this building (or the person is gone) -> "... no longer in this building"
+ *   - their role here is inactive or pending            -> "... access inactive"
+ *   - banned platform-wide (membership source only)     -> "... account disabled"
+ */
+export function holderDenialReason(decision: HolderDecision, holder: string): string {
+  switch (decision.reason) {
+    case 'MEMBERSHIP_INACTIVE':
+    case 'MEMBERSHIP_PENDING':
+      return `${holder} access inactive`;
+    case 'ACCOUNT_BANNED':
+      return `${holder} account disabled`;
+    default:
+      return `${holder} no longer in this building`;
+  }
+}
+
+/**
+ * Hardware credential decisions for Cloud Plus TypeB controllers (HTTP and TCP)
+ * and the gate simulator, which all end in processSearchCardAcs.
+ *
+ * The building always comes from the device (or, for the simulator, the gate).
+ * A personal credential then opens it only if its HOLDER may be in that
+ * building right now, decided by MembershipAccessService.checkHolder:
+ *   - GATE_MEMBERSHIP_CONTEXT off: the holder's gate_users row (same building,
+ *     status active), as before memberships;
+ *   - on: the holder's ACTIVE membership in that building, plus no platform ban.
+ * So one personal QR code opens every building where its person holds an active
+ * role (A3), while a vehicle tag or a card, which belong to one building, open
+ * that building only while their holder is active there. Status is checked on
+ * every path (QR, card, vehicle tag and vehicle card), not only on QR.
+ */
 @Injectable()
 export class CloudPlusService {
   private readonly logger = new Logger(CloudPlusService.name);
@@ -52,6 +93,7 @@ export class CloudPlusService {
     private gatewayService: GatewayService,
     private rfidRegistrationService: RfidRegistrationService,
     private pendingAlarmService: PendingAlarmService,
+    private membershipAccessService: MembershipAccessService,
   ) {}
 
   /**
@@ -453,7 +495,7 @@ export class CloudPlusService {
       });
 
       if (vehicle) {
-        return this.validateVehicleAccess(vehicle, normalizedUid);
+        return await this.validateVehicleAccess(vehicle, normalizedUid);
       }
     }
 
@@ -469,10 +511,10 @@ export class CloudPlusService {
 
     if (rfidCard) {
       if (rfidCard.vehicleId && rfidCard.vehicle && (wantVehicle || searchAll)) {
-        return this.validateVehicleCardAccess(rfidCard, normalizedUid);
+        return await this.validateVehicleCardAccess(rfidCard, normalizedUid);
       }
       if (rfidCard.userId && rfidCard.user && (wantHuman || searchAll)) {
-        return this.validateRfidCardAccess(rfidCard, normalizedUid);
+        return await this.validateRfidCardAccess(rfidCard, normalizedUid);
       }
     }
 
@@ -487,15 +529,23 @@ export class CloudPlusService {
     };
   }
 
-  private validateVehicleAccess(vehicle: Vehicle, rfidUid: string): ValidationResult {
+  private async validateVehicleAccess(
+    vehicle: Vehicle,
+    rfidUid: string,
+  ): Promise<ValidationResult> {
     const now = new Date();
     const owner = vehicle.owner;
     const ownerName = owner ? `${owner.firstName} ${owner.lastName}` : 'Vehicle';
 
     // Access comes from the owner's place in the building, not from the tag
-    // alone, so a vehicle whose owner has left (or whose owner row is gone)
-    // cannot open the gate.
-    if (!owner || owner.tenantId !== vehicle.tenantId) {
+    // alone: a vehicle whose owner has left, been deactivated there, or been
+    // banned (or whose owner row is gone) cannot open the gate.
+    const holder = owner
+      ? await this.membershipAccessService.checkHolder(vehicle.ownerId, vehicle.tenantId, {
+          roles: VEHICLE_OWNER_ROLES,
+        })
+      : null;
+    if (!holder || !holder.allowed) {
       return {
         allowed: false,
         name: ownerName,
@@ -504,7 +554,9 @@ export class CloudPlusService {
         subjectId: vehicle.id,
         subjectIdentifier: rfidUid,
         residentId: vehicle.ownerId,
-        denialReason: 'Owner no longer in this building',
+        denialReason: holder
+          ? holderDenialReason(holder, 'Owner')
+          : 'Owner no longer in this building',
       };
     }
 
@@ -553,7 +605,10 @@ export class CloudPlusService {
    * (and its owner), identical to an intrinsic-tag scan so downstream logging and
    * UI treat both the same way.
    */
-  private validateVehicleCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {
+  private async validateVehicleCardAccess(
+    rfidCard: RfidCard,
+    rfidUid: string,
+  ): Promise<ValidationResult> {
     const now = new Date();
     const vehicle = rfidCard.vehicle;
     const ownerName = vehicle.owner
@@ -569,9 +624,20 @@ export class CloudPlusService {
       residentId: vehicle.ownerId,
     };
 
-    // As for the vehicle's own tag: no owner in this building, no access.
-    if (!vehicle.owner || vehicle.owner.tenantId !== vehicle.tenantId) {
-      return { ...base, allowed: false, denialReason: 'Owner no longer in this building' };
+    // As for the vehicle's own tag: no active owner in this building, no access.
+    const holder = vehicle.owner
+      ? await this.membershipAccessService.checkHolder(vehicle.ownerId, vehicle.tenantId, {
+          roles: VEHICLE_OWNER_ROLES,
+        })
+      : null;
+    if (!holder || !holder.allowed) {
+      return {
+        ...base,
+        allowed: false,
+        denialReason: holder
+          ? holderDenialReason(holder, 'Owner')
+          : 'Owner no longer in this building',
+      };
     }
     if (vehicle.status !== VehicleStatus.ACTIVE) {
       return { ...base, allowed: false, denialReason: 'Vehicle inactive' };
@@ -585,12 +651,20 @@ export class CloudPlusService {
     return { ...base, allowed: true };
   }
 
-  private validateRfidCardAccess(rfidCard: RfidCard, rfidUid: string): ValidationResult {
+  private async validateRfidCardAccess(
+    rfidCard: RfidCard,
+    rfidUid: string,
+  ): Promise<ValidationResult> {
     const now = new Date();
     const userName = `${rfidCard.user.firstName} ${rfidCard.user.lastName}`;
 
-    // The card only works for someone who still belongs to this building.
-    if (rfidCard.user.tenantId !== rfidCard.tenantId) {
+    // The card only works for someone who is still active in this building.
+    const holder = await this.membershipAccessService.checkHolder(
+      rfidCard.userId,
+      rfidCard.tenantId,
+      { roles: CARD_HOLDER_ROLES },
+    );
+    if (!holder.allowed) {
       return {
         allowed: false,
         name: userName,
@@ -599,7 +673,7 @@ export class CloudPlusService {
         subjectId: rfidCard.id,
         subjectIdentifier: rfidUid,
         residentId: rfidCard.userId,
-        denialReason: 'Card holder no longer in this building',
+        denialReason: holderDenialReason(holder, 'Card holder'),
       };
     }
 
@@ -648,15 +722,23 @@ export class CloudPlusService {
   private async validateQrCode(
     tenantId: string,
     qrToken: string,
-    gate: Gate,
+    _gate: Gate,
   ): Promise<ValidationResult> {
     // Check if it's a user QR code (starts with "GR-")
     if (qrToken.startsWith('GR-')) {
+      // The personal QR code is one per PERSON, looked up platform-wide; whether
+      // it opens THIS building is decided by the person's role here (A3).
       const user = await this.userRepository.findOne({
         where: { qrCode: qrToken },
       });
 
-      if (!user) {
+      const holder = user
+        ? await this.membershipAccessService.checkHolder(user.id, tenantId, {
+            roles: PERSONAL_QR_ROLES,
+          })
+        : null;
+
+      if (!user || !holder || holder.reason === 'PERSON_NOT_FOUND') {
         return {
           allowed: false,
           name: 'Unknown',
@@ -667,39 +749,41 @@ export class CloudPlusService {
         };
       }
 
-      // Check if user belongs to the same tenant as the gate
-      if (user.tenantId !== tenantId) {
+      const userName = `${user.firstName} ${user.lastName}`;
+      const denied = {
+        allowed: false as const,
+        name: userName,
+        subjectType: 'user' as const,
+        subjectId: user.id,
+        subjectIdentifier: qrToken,
+        residentId: user.id,
+      };
+
+      // No role in the gate's building (or none this credential accepts).
+      if (holder.reason === 'NO_MEMBERSHIP' || holder.reason === 'ROLE_NOT_ALLOWED') {
         return {
-          allowed: false,
-          name: `${user.firstName} ${user.lastName}`,
+          ...denied,
           info: 'Access denied - wrong building',
-          subjectType: 'user',
-          subjectId: user.id,
-          subjectIdentifier: qrToken,
-          residentId: user.id,
           denialReason: 'User does not belong to this building',
         };
       }
 
-      // Check user status
-      if (user.status !== UserStatus.ACTIVE) {
+      // Inactive or pending in this building, or banned platform-wide. The
+      // wording is the one the gate always used ("Account inactive").
+      if (!holder.allowed) {
+        const status = this.holderStatusWord(holder, user.status);
         return {
-          allowed: false,
-          name: `${user.firstName} ${user.lastName}`,
-          info: `Account ${user.status}`,
-          subjectType: 'user',
-          subjectId: user.id,
-          subjectIdentifier: qrToken,
-          residentId: user.id,
-          denialReason: `User account is ${user.status}`,
+          ...denied,
+          info: `Account ${status}`,
+          denialReason: `User account is ${status}`,
         };
       }
 
-      // User QR code is valid
+      // User QR code is valid. The greeting uses the unit held in THIS building.
       return {
         allowed: true,
-        name: `${user.firstName} ${user.lastName}`,
-        info: user.unit ? `Unit ${user.unit}` : 'Welcome',
+        name: userName,
+        info: holder.unit ? `Unit ${holder.unit}` : 'Welcome',
         subjectType: 'user',
         subjectId: user.id,
         subjectIdentifier: qrToken,
@@ -729,6 +813,12 @@ export class CloudPlusService {
 
     const now = new Date();
 
+    // The event belongs to the HOST: the resident a staff member registered the
+    // visitor for (residentId), else whoever created the pass. The host's
+    // resident lens of the access log and the "report unauthorized visitor" flow
+    // both key on it.
+    const hostId = visitorPass.residentId ?? visitorPass.createdById;
+
     // Check status
     if (visitorPass.status === VisitorPassStatus.CANCELLED) {
       return {
@@ -738,7 +828,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
-        residentId: visitorPass.createdById,
+        residentId: hostId,
         denialReason: 'Pass cancelled',
       };
     }
@@ -751,7 +841,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
-        residentId: visitorPass.createdById,
+        residentId: hostId,
         denialReason: 'Pass expired',
       };
     }
@@ -765,7 +855,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
-        residentId: visitorPass.createdById,
+        residentId: hostId,
         denialReason: 'Pass not yet valid',
       };
     }
@@ -782,7 +872,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
-        residentId: visitorPass.createdById,
+        residentId: hostId,
         denialReason: 'Pass expired',
       };
     }
@@ -799,7 +889,7 @@ export class CloudPlusService {
         subjectType: 'visitor_pass',
         subjectId: visitorPass.id,
         subjectIdentifier: qrToken,
-        residentId: visitorPass.createdById,
+        residentId: hostId,
         denialReason: 'Pass already used',
       };
     }
@@ -820,17 +910,28 @@ export class CloudPlusService {
       subjectType: 'visitor_pass',
       subjectId: visitorPass.id,
       subjectIdentifier: qrToken,
-      residentId: visitorPass.createdById,
+      residentId: hostId,
     };
+  }
+
+  /**
+   * The status word of a refused holder, as the gate has always shown it:
+   * 'inactive' / 'pending' for their role in this building, or the person's own
+   * gate_users.status for a platform ban.
+   */
+  private holderStatusWord(holder: HolderDecision, personStatus: string): string {
+    if (holder.reason === 'MEMBERSHIP_INACTIVE') return 'inactive';
+    if (holder.reason === 'MEMBERSHIP_PENDING') return 'pending';
+    return personStatus;
   }
 
   /**
    * Validate password/PIN (placeholder - implement based on requirements)
    */
   private async validatePassword(
-    tenantId: string,
-    password: string,
-    gate: Gate,
+    _tenantId: string,
+    _password: string,
+    _gate: Gate,
   ): Promise<ValidationResult> {
     // TODO: Implement password/PIN validation logic
     // Could check against resident PINs, master codes, etc.
@@ -850,7 +951,7 @@ export class CloudPlusService {
   private async validateFaceId(
     tenantId: string,
     faceId: string,
-    gate: Gate,
+    _gate: Gate,
   ): Promise<ValidationResult> {
     // TODO: Implement face ID validation logic
     // Could map face IDs to residents
@@ -944,9 +1045,7 @@ export class CloudPlusService {
         source: 'cloud-plus-typeB',
         info: result.info,
         ...(origin?.deviceId ? { deviceId: origin.deviceId } : {}),
-        ...(origin?.readerChannel !== undefined
-          ? { readerChannel: origin.readerChannel }
-          : {}),
+        ...(origin?.readerChannel !== undefined ? { readerChannel: origin.readerChannel } : {}),
       },
     });
 
@@ -960,11 +1059,7 @@ export class CloudPlusService {
    * live feed updates. Also emits the legacy `access:granted`/`access:denied`
    * for any older clients still listening to those names.
    */
-  private notifyFrontend(
-    gate: Gate,
-    result: ValidationResult,
-    event: AccessEvent,
-  ): void {
+  private notifyFrontend(gate: Gate, result: ValidationResult, event: AccessEvent): void {
     const payload = {
       eventId: event.id,
       gateId: gate.id,

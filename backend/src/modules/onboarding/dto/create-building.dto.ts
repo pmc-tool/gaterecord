@@ -1,14 +1,9 @@
-import {
-  IsNotEmpty,
-  IsString,
-  IsOptional,
-  IsObject,
-  IsBoolean,
-} from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsObject, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
- * Payload for the once-only "Get Started" flow.
+ * Payload for the "Get Started" flow (a first building, or another one for a
+ * person who already has a role somewhere, within the creation policy).
  *
  * Field names are deliberately identical to the corresponding fields on SignupDto
  * (src/modules/auth/dto/login.dto.ts) so the frontend can reuse the same form model
@@ -63,15 +58,43 @@ export class CreateBuildingDto {
 
 export class OnboardingStatusDto {
   @ApiProperty({
-    description: 'True when the caller has no tenant yet and must create a building.',
+    description:
+      'True when the caller holds no membership in any live building (any status) and is ' +
+      'not a super admin, so must create or join a building.',
   })
   needsOnboarding: boolean;
 
-  @ApiProperty({ description: 'The caller\'s current tenant id, null before onboarding.' })
+  @ApiProperty({ description: 'True for a platform super admin.' })
+  isSuperAdmin: boolean;
+
+  @ApiProperty({
+    description: 'The building this request acts in, null when none is chosen.',
+    nullable: true,
+    type: String,
+  })
   tenantId: string | null;
 
-  @ApiProperty({ description: 'The caller\'s gaterecord role.' })
-  role: string;
+  @ApiProperty({
+    description:
+      'The role held in the building this request acts in (super_admin in the ' +
+      'Platform context), null when none is chosen.',
+    nullable: true,
+    type: String,
+  })
+  role: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Status of the latest join request while the caller has no building.',
+    nullable: true,
+    type: String,
+  })
+  joinRequestStatus: string | null;
+
+  @ApiPropertyOptional({
+    description: 'The building acted in: { id, name, slug, status }, or null.',
+    nullable: true,
+  })
+  tenant: { id: string; name: string; slug: string; status: string } | null;
 
   @ApiProperty({ description: 'Active subscription plans, for rendering the plan picker.' })
   plans: unknown[];

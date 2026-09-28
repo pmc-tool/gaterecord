@@ -7,16 +7,10 @@ import { Controller, Post, Get, Body, Param, UseGuards, Request } from '@nestjs/
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
 import { UserRole } from '@database/entities/user.entity';
 import { CloudPlusTcpService } from './cloud-plus-tcp.service';
-import {
-  DoorSelectDto,
-  GateControlDto,
-  OpenGateWithInfoDto,
-  SetAlarmDto,
-  SetFireDto,
-  GateAction,
-} from './dto';
+import { DoorSelectDto, GateControlDto, OpenGateWithInfoDto, SetAlarmDto, SetFireDto } from './dto';
 
 @Controller('gates')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -121,7 +115,10 @@ export class CloudPlusTcpController {
    */
   @Get(':gateId/tcp/connected')
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN, UserRole.SECURITY)
-  async isGateConnected(@Param('gateId') gateId: string) {
+  async isGateConnected(@Param('gateId') gateId: string, @Request() req: any) {
+    // The gate must belong to the caller's building: this used to answer for any
+    // gate id, leaking whether another building's controllers were online.
+    await this.tcpService.assertGateInScope(gateId, req.user);
     const connected = await this.tcpService.isGateConnected(gateId);
     return { connected };
   }
@@ -152,11 +149,12 @@ export class TcpServerController {
   @Get('controllers')
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   async getConnectedControllers(@Request() req: any) {
-    if (req.user.role === UserRole.SUPER_ADMIN) {
+    if (isPlatformContext(req.user)) {
       // Return all connected controllers
       return this.tcpService.getServerStatus().controllers;
     }
-    // Return only tenant's controllers
-    return this.tcpService.getConnectedControllersForTenant(req.user.tenantId);
+    // Return only the controllers of the building the request acts in; without
+    // a building context this is 409 MEMBERSHIP_REQUIRED, before any lookup.
+    return this.tcpService.getConnectedControllersForTenant(assertBuildingContext(req.user));
   }
 }

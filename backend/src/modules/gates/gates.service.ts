@@ -19,6 +19,7 @@ import {
 import { Tenant } from '@database/entities/tenant.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
 import { CreateGateDto, UpdateGateDto, GateHealthDto, GateQueryDto } from './dto/gate.dto';
 
 @Injectable()
@@ -37,19 +38,17 @@ export class GatesService {
   ) {}
 
   async create(dto: CreateGateDto, currentUser: User): Promise<Gate> {
-    // Determine tenant ID
+    // Determine tenant ID: the building the caller acts in, or, for a super
+    // admin in the Platform context, the one they name.
     let tenantId: string;
 
-    if (currentUser.role === UserRole.SUPER_ADMIN) {
+    if (isPlatformContext(currentUser)) {
       if (!dto.tenantId) {
         throw new ForbiddenException('Super Admin must specify tenantId');
       }
       tenantId = dto.tenantId;
     } else {
-      if (!currentUser.tenantId) {
-        throw new ForbiddenException('User must belong to a tenant');
-      }
-      tenantId = currentUser.tenantId;
+      tenantId = assertBuildingContext(currentUser);
     }
 
     // Check tenant gate limit
@@ -148,11 +147,18 @@ export class GatesService {
   ): Promise<
     (Gate & { devices?: { id: string; deviceId: string; deviceName: string; status: string }[] })[]
   > {
+    // Resolved before the query is built, so a caller without a building context
+    // is refused (409 MEMBERSHIP_REQUIRED) before any query runs. Only the
+    // Platform context lists every building (optionally narrowed by ?tenantId=).
+    const callerTenantId = isPlatformContext(currentUser)
+      ? null
+      : assertBuildingContext(currentUser);
+
     const qb = this.gateRepository.createQueryBuilder('gate');
 
     // Filter by tenant for non-super-admin users
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      qb.where('gate.tenant_id = :tenantId', { tenantId: currentUser.tenantId });
+    if (callerTenantId !== null) {
+      qb.where('gate.tenant_id = :tenantId', { tenantId: callerTenantId });
     } else if (query.tenantId) {
       // Super admin can filter by tenant
       qb.where('gate.tenant_id = :tenantId', { tenantId: query.tenantId });
@@ -264,16 +270,43 @@ export class GatesService {
   async update(id: string, dto: UpdateGateDto, currentUser: User): Promise<Gate> {
     const gate = await this.findOne(id, currentUser);
 
-    if (dto.name && dto.name !== gate.name) {
+    // tenantId in the body re-homes the gate into another building. Only a
+    // SUPER_ADMIN may do that (the admin app uses it), and only into a tenant
+    // that exists — the same rule create() enforces. For everyone else the field
+    // is dropped, so a building admin cannot move a gate out of their building.
+    // It is never Object.assign'ed blindly.
+    const { tenantId: requestedTenantId, ...changes } = dto;
+    let targetTenant: Tenant | null = null;
+    if (
+      requestedTenantId &&
+      requestedTenantId !== gate.tenantId &&
+      currentUser.role === UserRole.SUPER_ADMIN
+    ) {
+      targetTenant = await this.tenantRepository.findOne({ where: { id: requestedTenantId } });
+      if (!targetTenant) {
+        throw new NotFoundException('Tenant not found');
+      }
+    }
+    const targetTenantId = targetTenant ? targetTenant.id : gate.tenantId;
+
+    // Names are unique per building, so a move is checked against the target.
+    const nameChanged = !!changes.name && changes.name !== gate.name;
+    if (nameChanged || targetTenant) {
       const existing = await this.gateRepository.findOne({
-        where: { tenantId: gate.tenantId, name: dto.name },
+        where: { tenantId: targetTenantId, name: changes.name ?? gate.name },
       });
-      if (existing) {
+      if (existing && existing.id !== gate.id) {
         throw new ConflictException('Gate name already exists');
       }
     }
 
-    Object.assign(gate, dto);
+    Object.assign(gate, changes);
+    if (targetTenant) {
+      // Set the loaded relation too: findOne() joined `tenant`, and a stale
+      // relation object would otherwise win over the new tenant_id on save.
+      gate.tenantId = targetTenant.id;
+      gate.tenant = targetTenant;
+    }
     return this.gateRepository.save(gate);
   }
 

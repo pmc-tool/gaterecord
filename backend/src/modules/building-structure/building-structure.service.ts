@@ -6,10 +6,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
+import { isUniqueViolation } from '@database/pg-errors';
 import { BuildingFloor } from '@database/entities/building-floor.entity';
 import { BuildingFlat } from '@database/entities/building-flat.entity';
+import { Membership } from '@database/entities/membership.entity';
+import { Tenant } from '@database/entities/tenant.entity';
 import { User, UserRole } from '@database/entities/user.entity';
+import { isUuid } from '@common/context/acting-user';
+import { assertBuildingContext, isPlatformContext } from '@common/context/assert-building-context';
+import { membershipExists } from '@common/context/membership-context.errors';
+import { isMembershipContextEnabled } from '@common/context/membership-flags';
 import {
   AddFlatsDto,
   CreateFloorDto,
@@ -21,6 +28,9 @@ import {
 
 /** Sanity cap so one floor cannot be filled with thousands of rows. */
 const MAX_FLATS_PER_FLOOR = 200;
+
+/** Who may edit (and, without ?tenantId, read) the structure of the building they act in. */
+const STRUCTURE_ROLES: readonly UserRole[] = [UserRole.BUILDING_ADMIN];
 
 /**
  * The comparison form of a flat number: trimmed, inner whitespace collapsed,
@@ -45,14 +55,6 @@ function floorLabel(floor: Pick<BuildingFloor, 'floorNumber' | 'name'>): string 
 
 function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-}
-
-/** Postgres unique_violation — two concurrent saves slipped past the pre-check. */
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    error instanceof QueryFailedError &&
-    (error as QueryFailedError & { driverError?: { code?: string } }).driverError?.code === '23505'
-  );
 }
 
 export interface FlatView {
@@ -104,15 +106,22 @@ export interface BuildingStructureView {
 }
 
 /**
- * Floors and flats of the caller's OWN building.
+ * Floors and flats of the building the request ACTS IN.
  *
- * Every method takes the tenant from the authenticated user, never from the
- * request, so an admin cannot read or edit another building's structure. Rows
- * are always looked up by (id, tenantId) for the same reason.
+ * Every method takes the building from the acting context, never from the
+ * request: assertBuildingContext(user, [BUILDING_ADMIN]) returns the chosen
+ * building_admin membership's building (or, while GATE_MEMBERSHIP_CONTEXT is
+ * off, the gate_users row's tenant), and refuses a missing context with 409
+ * MEMBERSHIP_REQUIRED and any other role held in that building with 403. So an
+ * admin of Tower A and Tower D edits D only while acting in D, and nobody can
+ * read or edit a building they do not administer. Rows are always looked up by
+ * (id, tenantId) for the same reason. The one exception is a super admin in the
+ * Platform context, who may READ any building's structure with ?tenantId=.
  *
- * Deliberately does not write to `gate_users.unit`: residents keep their
- * free-text unit, and the structure only READS it to show occupancy. Renaming
- * or deleting a flat therefore never changes resident data.
+ * Deliberately does not write resident units: residents keep their free-text
+ * unit on their RESIDENT membership (gate_memberships.unit, one per building),
+ * and the structure only READS it to show occupancy. Renaming or deleting a
+ * flat therefore never changes resident data.
  */
 @Injectable()
 export class BuildingStructureService {
@@ -121,8 +130,10 @@ export class BuildingStructureService {
     private readonly floorRepository: Repository<BuildingFloor>,
     @InjectRepository(BuildingFlat)
     private readonly flatRepository: Repository<BuildingFlat>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    @InjectRepository(Membership)
+    private readonly membershipRepository: Repository<Membership>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -130,14 +141,15 @@ export class BuildingStructureService {
   // ==================== Read ====================
 
   /**
-   * `forTenantId` is honoured for SUPER_ADMIN only — they manage residents of
-   * every building and need its floor plan for the resident unit picker. Every
-   * other role always reads its own building, whatever is passed. Read-only:
-   * the write methods never take a tenant from the request.
+   * `forTenantId` is honoured for a super admin in the Platform context only —
+   * they manage residents of every building and need its floor plan for the
+   * resident unit picker. Everyone else always reads the building they act in,
+   * whatever is passed. Read-only: the write methods never take a tenant from
+   * the request.
    */
   async getStructure(user: User, forTenantId?: string): Promise<BuildingStructureView> {
     const tenantId =
-      forTenantId && user.role === UserRole.SUPER_ADMIN ? forTenantId : this.requireTenant(user);
+      forTenantId && isPlatformContext(user) ? forTenantId : this.requireTenant(user);
 
     const [floors, flats, residentUnits] = await Promise.all([
       this.floorRepository.find({ where: { tenantId }, order: { floorNumber: 'ASC' } }),
@@ -193,12 +205,39 @@ export class BuildingStructureService {
    * their flat. Names only — no resident counts, which would tell an outsider
    * which flats are occupied.
    *
-   * Same audience rule as ResidentRequestsService.searchBuildings: only callers
-   * without a building of their own may read it.
+   * Same audience rule as ResidentRequestsService.searchBuildings:
+   *   - GATE_MEMBERSHIP_CONTEXT off (one building per person): only callers
+   *     without a building of their own may read it (403 otherwise), as before;
+   *   - on: anyone who does not already hold a role in THIS building. An admin
+   *     of Tower A may browse Tower B's flats to ask to live there; someone who
+   *     already has a role in B gets 409 MEMBERSHIP_EXISTS (one role per
+   *     building).
+   * A building that does not exist (or was deleted) is 404 in both modes,
+   * rather than an empty plan.
    */
   async getJoinFloorPlan(user: User, tenantId: string): Promise<JoinFloorPlanView> {
-    if (user.tenantId) {
+    const multiMembership = isMembershipContextEnabled();
+    if (!multiMembership && user.tenantId) {
       throw new ForbiddenException('You already belong to a building.');
+    }
+
+    const building = isUuid(tenantId)
+      ? await this.tenantRepository.findOne({ where: { id: tenantId }, select: ['id'] })
+      : null;
+    if (!building) {
+      throw new NotFoundException('Building not found');
+    }
+
+    if (multiMembership) {
+      // Keyed by the person (gate_users.id), never by the acting context: the
+      // route is context-optional and the question is about B, not the
+      // building the caller happens to act in.
+      const existing = await this.membershipRepository.findOne({
+        where: { userId: user.id, tenantId: building.id },
+      });
+      if (existing) {
+        throw membershipExists(existing.role);
+      }
     }
 
     const [floors, flats] = await Promise.all([
@@ -474,13 +513,14 @@ export class BuildingStructureService {
 
   // ==================== Helpers ====================
 
+  /**
+   * The building the request acts in, as its building admin. 409
+   * MEMBERSHIP_REQUIRED without a building context (no membership chosen, the
+   * Platform context, a tenantless legacy row); 403 ROLE_NOT_ALLOWED_IN_BUILDING
+   * when the role held there is not building_admin (a resident context).
+   */
   private requireTenant(user: User): string {
-    if (!user.tenantId) {
-      throw new ConflictException(
-        'This account is not linked to a building yet. Complete onboarding first.',
-      );
-    }
-    return user.tenantId;
+    return assertBuildingContext(user, STRUCTURE_ROLES);
   }
 
   private async findFloor(tenantId: string, floorId: string): Promise<BuildingFloor> {
@@ -520,18 +560,23 @@ export class BuildingStructureService {
   }
 
   /**
-   * Residents of the building grouped by normalised unit. Soft-deleted
-   * residents are excluded by the query builder. The empty key ('') collects
-   * residents with no unit at all.
+   * Residents of the building grouped by normalised unit: live RESIDENT
+   * memberships of THIS building, by the membership's own unit, any status
+   * (as before, an inactive resident still occupies the flat). A person who is
+   * a resident of Tower B and Tower D counts once in each, with the unit they
+   * hold there. Ended memberships drop out as the main alias and removed people
+   * through the join (TypeORM adds "deleted_at IS NULL" to both). The empty key
+   * ('') collects residents with no unit at all.
    */
   private async countResidentsByUnit(tenantId: string): Promise<Map<string, number>> {
-    const rows = await this.userRepository
-      .createQueryBuilder('resident')
-      .select('resident.unit', 'unit')
+    const rows = await this.membershipRepository
+      .createQueryBuilder('membership')
+      .innerJoin('membership.user', 'person')
+      .select('membership.unit', 'unit')
       .addSelect('COUNT(*)', 'count')
-      .where('resident.tenantId = :tenantId', { tenantId })
-      .andWhere('resident.role = :role', { role: UserRole.RESIDENT })
-      .groupBy('resident.unit')
+      .where('membership.tenantId = :tenantId', { tenantId })
+      .andWhere('membership.role = :role', { role: UserRole.RESIDENT })
+      .groupBy('membership.unit')
       .getRawMany<{ unit: string | null; count: string }>();
 
     const counts = new Map<string, number>();

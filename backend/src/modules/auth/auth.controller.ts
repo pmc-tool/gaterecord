@@ -25,6 +25,8 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Public } from '@common/decorators/public.decorator';
 import { SubscriptionExempt } from '@common/decorators/subscription-exempt.decorator';
+import { ContextOptional } from '@common/decorators/context-optional.decorator';
+import { ActingUser } from '@common/context/acting-user';
 import { User } from '@database/entities/user.entity';
 import { StripeService } from '../stripe/stripe.service';
 import { SignupCheckoutDto } from '../stripe/dto';
@@ -73,8 +75,9 @@ export class AuthController {
   @Post('logout-all')
   @UseGuards(JwtAuthGuard)
   // Session/security operation (not a business write): a suspended user must
-  // still be able to sign out everywhere.
+  // still be able to sign out everywhere, whatever building they chose (or none).
   @SubscriptionExempt()
+  @ContextOptional()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Logout from all devices' })
@@ -87,32 +90,16 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   // Reads the caller's own profile — a read that happens to use POST. Read-only
   // grace is intended to keep "log in and read your data" working while
-  // suspended, so this must not 402 on the HTTP method.
+  // suspended, so this must not 402 on the HTTP method. Context-optional: it
+  // describes whatever context the request resolved to, including none.
   @SubscriptionExempt()
+  @ContextOptional()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get current user info' })
   @ApiResponse({ status: 200, description: 'Current user info' })
-  async me(@CurrentUser() user: User) {
-    return {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      phone: user.phone,
-      role: user.role,
-      tenantId: user.tenantId,
-      profileImageUrl: user.profileImageUrl,
-      qrCode: user.qrCode,
-      unit: user.unit,
-      tenant: user.tenant
-        ? {
-            id: user.tenant.id,
-            name: user.tenant.name,
-            slug: user.tenant.slug,
-          }
-        : null,
-    };
+  async me(@CurrentUser() user: ActingUser) {
+    return this.authService.describeActingUser(user);
   }
 
   @Post('signup')
@@ -144,6 +131,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify payment and activate account after Stripe Checkout' })
   @ApiResponse({ status: 200, description: 'Payment verified, account activated' })
   @ApiResponse({ status: 400, description: 'Payment verification failed' })
+  @ApiResponse({
+    status: 401,
+    description: 'Payment verified, but this account must sign in normally (Sign in to continue)',
+  })
   async verifyPayment(
     @Body() body: { sessionId: string },
     @Req() req: Request,
@@ -158,11 +149,18 @@ export class AuthController {
       throw new BadRequestException(result.message || 'Payment verification failed');
     }
 
-    // Generate tokens for the user associated with this tenant
+    // Tokens only for the person this paid signup itself created (L9); anyone
+    // else (an existing account, an existing building's checkout) gets 401 and
+    // signs in normally. loginAfterPaidSignup re-checks it against the tenant.
     const userAgent = req.headers['user-agent'];
     const ipAddress = req.ip;
 
-    return this.authService.loginByTenantId(result.tenantId, userAgent, ipAddress);
+    return this.authService.loginAfterPaidSignup(
+      result.tenantId,
+      result.loginAllowed ? (result.adminUserId ?? null) : null,
+      userAgent,
+      ipAddress,
+    );
   }
 
   @Get('plans')
@@ -179,7 +177,11 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset OTP' })
-  @ApiResponse({ status: 200, description: 'OTP sent if email exists', type: ForgotPasswordResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'OTP sent if email exists',
+    type: ForgotPasswordResponseDto,
+  })
   async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<ForgotPasswordResponseDto> {
     return this.authService.forgotPassword(dto);
   }
@@ -198,7 +200,11 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with verified token' })
-  @ApiResponse({ status: 200, description: 'Password reset successful', type: ResetPasswordResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Password reset successful',
+    type: ResetPasswordResponseDto,
+  })
   @ApiResponse({ status: 400, description: 'Invalid or expired token' })
   async resetPassword(@Body() dto: ResetPasswordDto): Promise<ResetPasswordResponseDto> {
     return this.authService.resetPassword(dto);

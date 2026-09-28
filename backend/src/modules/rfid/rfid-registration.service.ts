@@ -3,11 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
-import { User, UserRole } from '@database/entities/user.entity';
 import { Vehicle } from '@database/entities/vehicle.entity';
 import { Gate } from '@database/entities/gate.entity';
 import { DeviceConfig } from '@database/entities/device-config.entity';
 import { GatewayService } from '../gateway/gateway.service';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { CARD_ISSUE_ROLES } from '../memberships/membership-access.constants';
 
 /**
  * - 'vehicle'      -> set the vehicle's intrinsic primary tag (vehicles.rfid_uid)
@@ -47,12 +48,29 @@ interface RegistrationSession {
   targetType: RegistrationTargetType;
   targetId: string;
   tenantId: string;
+  /** gate_users.id of the admin who opened the session (audit / debug). */
+  startedById?: string;
   createdAt: Date;
   expiresAt: Date;
   /** Unset for the tenant-wide (phone NFC / typed UID) flows. */
   gateId?: string;
   deviceId?: string;
   readerChannel?: number;
+}
+
+/**
+ * Who acts on a registration session over HTTP (GATE-5): the building the
+ * request acts in, or null for a super admin in the Platform context, who may
+ * act on any building's session. A session is only visible to requests acting
+ * in ITS building; any other caller is told it does not exist, exactly as for
+ * an unknown session id, so ids cannot be probed.
+ *
+ * Hardware taps (processRegistrationScan) carry no caller: the building comes
+ * from the device, which is how they have always been matched.
+ */
+export interface RegistrationActor {
+  userId: string;
+  tenantId: string | null;
 }
 
 @Injectable()
@@ -64,8 +82,6 @@ export class RfidRegistrationService {
   constructor(
     @InjectRepository(RfidCard)
     private rfidCardRepository: Repository<RfidCard>,
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
     @InjectRepository(Vehicle)
     private vehicleRepository: Repository<Vehicle>,
     @InjectRepository(Gate)
@@ -74,19 +90,22 @@ export class RfidRegistrationService {
     private deviceConfigRepository: Repository<DeviceConfig>,
     @Inject(forwardRef(() => GatewayService))
     private gatewayService: GatewayService,
+    private membershipAccessService: MembershipAccessService,
   ) {
     // Clean up expired sessions every minute
     setInterval(() => this.cleanupExpiredSessions(), 60000);
   }
 
   /**
-   * Start a new RFID registration session
+   * Start a new RFID registration session in `tenantId` (the building the
+   * caller acts in, or the one a platform super admin named).
    */
   async startSession(
     targetType: RegistrationTargetType,
     targetId: string,
     tenantId: string,
     scope?: RegistrationScope,
+    startedById?: string,
   ): Promise<{ sessionId: string; expiresAt: Date }> {
     // Validate the scope against the CALLER's tenant before trusting it, so a
     // building admin cannot pin a session to another building's reader.
@@ -101,6 +120,7 @@ export class RfidRegistrationService {
       targetType,
       targetId,
       tenantId,
+      startedById,
       createdAt: now,
       expiresAt,
       ...validScope,
@@ -183,16 +203,38 @@ export class RfidRegistrationService {
   }
 
   private isScoped(session: RegistrationSession): boolean {
-    return Boolean(
-      session.gateId || session.deviceId || session.readerChannel !== undefined,
-    );
+    return Boolean(session.gateId || session.deviceId || session.readerChannel !== undefined);
   }
 
   /**
-   * Cancel an active registration session
+   * The session `sessionId` as `actor` may see it: undefined when it does not
+   * exist or belongs to another building than the one the actor acts in. With
+   * no actor (internal callers, hardware) every session is visible.
    */
-  cancelSession(sessionId: string): boolean {
+  private sessionFor(
+    sessionId: string,
+    actor?: RegistrationActor,
+  ): RegistrationSession | undefined {
     const session = this.activeSessions.get(sessionId);
+    if (!session) {
+      return undefined;
+    }
+    if (actor && actor.tenantId !== null && actor.tenantId !== session.tenantId) {
+      this.logger.warn(
+        `User ${actor.userId} (acting in ${actor.tenantId}) addressed session ${sessionId} of another building`,
+      );
+      return undefined;
+    }
+    return session;
+  }
+
+  /**
+   * Cancel an active registration session. With an actor, only a session of
+   * the building the actor acts in (any, for the Platform context); a foreign
+   * session is reported exactly like a missing one (false).
+   */
+  cancelSession(sessionId: string, actor?: RegistrationActor): boolean {
+    const session = this.sessionFor(sessionId, actor);
     if (!session) {
       return false;
     }
@@ -257,10 +299,7 @@ export class RfidRegistrationService {
 
       if (session.gateId && session.gateId !== ctx.gateId) continue;
       if (session.deviceId && session.deviceId !== ctx.deviceId) continue;
-      if (
-        session.readerChannel !== undefined &&
-        session.readerChannel !== ctx.readerChannel
-      ) {
+      if (session.readerChannel !== undefined && session.readerChannel !== ctx.readerChannel) {
         continue;
       }
 
@@ -360,14 +399,17 @@ export class RfidRegistrationService {
   /**
    * Manually submit a scanned UID against an open session.
    * Used by phone Web NFC scans that POST directly instead of going through
-   * a Cloud Plus controller.
+   * a Cloud Plus controller. With an actor, the session must belong to the
+   * building the actor acts in (any, for the Platform context); a foreign
+   * session is "not found".
    */
   async submitManualScan(
     sessionId: string,
     rfidUid: string,
     raw = false,
+    actor?: RegistrationActor,
   ): Promise<{ targetType: RegistrationTargetType; uid: string }> {
-    const session = this.activeSessions.get(sessionId);
+    const session = this.sessionFor(sessionId, actor);
     if (!session) {
       throw new Error('Registration session not found or already completed');
     }
@@ -450,11 +492,19 @@ export class RfidRegistrationService {
     tenantId: string,
     rfidUid: string,
   ): Promise<RfidCard> {
-    // The session may have been opened before the resident was removed from the
-    // building. A card created for them now would still open the gate, because
-    // the gate checks the card's validity window, not its holder's building.
-    const resident = await this.userRepository.findOne({ where: { id: userId } });
-    if (!resident || resident.role !== UserRole.RESIDENT || resident.tenantId !== tenantId) {
+    // Only an ACTIVE resident of THIS building may be issued a card
+    // (CARD_ISSUE_ROLES), judged by their membership here rather than their
+    // legacy gate_users row, which may name another of their buildings. The
+    // session may have been opened before the resident was removed or
+    // deactivated; the gate would refuse such a card today (it checks the
+    // holder's role in the building), but it would come back to life if they
+    // were ever re-added, so it is never created.
+    const active = await this.membershipAccessService.hasActiveMembership(
+      userId,
+      tenantId,
+      CARD_ISSUE_ROLES,
+    );
+    if (!active) {
       throw new Error('This resident is no longer in the building');
     }
 
@@ -572,14 +622,19 @@ export class RfidRegistrationService {
   }
 
   /**
-   * Debug method to get all active sessions
+   * Debug method to get the active sessions an actor may see: their building's
+   * (every building's for the Platform context, or with no actor).
    */
-  getActiveSessionsDebug(): Record<string, unknown>[] {
+  getActiveSessionsDebug(actor?: RegistrationActor): Record<string, unknown>[] {
     const sessions: Record<string, unknown>[] = [];
     this.activeSessions.forEach((session, sessionId) => {
+      if (actor && actor.tenantId !== null && actor.tenantId !== session.tenantId) {
+        return;
+      }
       sessions.push({
         sessionId,
         tenantId: session.tenantId,
+        startedById: session.startedById ?? null,
         targetType: session.targetType,
         targetId: session.targetId,
         gateId: session.gateId ?? null,

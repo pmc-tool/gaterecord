@@ -3,9 +3,12 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Response } from 'express';
 import { createReadStream } from 'fs';
 import { FirmwareService } from './firmware.service';
+import { ContextOptional } from '@common/decorators/context-optional.decorator';
 
 @ApiTags('Firmware Download')
 @Controller('firmware')
+// Firmware binaries are not building data.
+@ContextOptional()
 export class FirmwareDownloadController {
   private readonly logger = new Logger(FirmwareDownloadController.name);
 

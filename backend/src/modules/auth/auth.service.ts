@@ -8,7 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { User, UserStatus, UserRole } from '@database/entities/user.entity';
@@ -17,7 +17,19 @@ import { PasswordResetToken } from '@database/entities/password-reset-token.enti
 import { Tenant, TenantStatus, SubscriptionStatus } from '@database/entities/tenant.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
 import { LoginHistory, LoginStatus } from '@database/entities/login-history.entity';
-import { LoginDto, LoginResponseDto, SignupDto } from './dto/login.dto';
+import { ActingUser, PLATFORM_CONTEXT_ID, isUuid } from '@common/context/acting-user';
+import { isMembershipContextEnabled } from '@common/context/membership-flags';
+import { emailHasAccount } from '@common/context/membership-context.errors';
+import {
+  LEGACY_SENTINEL,
+  MembershipsService,
+  activeMembershipIdOf,
+  isSelectableMembership,
+  legacyColumnsFor,
+  toMembershipView,
+} from '../memberships/memberships.service';
+import { MembershipContextService } from '../memberships/membership-context.service';
+import { LoginDto, LoginResponseDto, SessionUser, SignupDto } from './dto/login.dto';
 import {
   ForgotPasswordDto,
   ForgotPasswordResponseDto,
@@ -28,6 +40,19 @@ import {
 } from './dto/password-reset.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { EmailService } from '../notification/email.service';
+import { PAID_SIGNUP_LOGIN_WINDOW_MINUTES, SIGNUP_SETTINGS } from '../stripe/stripe.service';
+
+/**
+ * bcrypt (cost 10) of a random value nobody holds. The signup resume compares
+ * against it when the account row has no usable hash, so every resume attempt
+ * costs exactly one bcrypt compare and its timing says nothing about the row.
+ */
+const DUMMY_PASSWORD_HASH = '$2b$10$Zqw2najQN1WExrj9ojJxfOQdgbtU4TDCgq3eN2bXkUGNa98ZBXlt2';
+
+/** The tenant summary login / refresh / me have always returned. */
+function tenantSummary(tenant: Pick<Tenant, 'id' | 'name' | 'slug'> | null | undefined) {
+  return tenant ? { id: tenant.id, name: tenant.name, slug: tenant.slug } : null;
+}
 
 @Injectable()
 export class AuthService {
@@ -49,6 +74,9 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
+    private dataSource: DataSource,
+    private membershipsService: MembershipsService,
+    private membershipContextService: MembershipContextService,
   ) {}
 
   async login(
@@ -56,10 +84,7 @@ export class AuthService {
     userAgent?: string,
     ipAddress?: string,
   ): Promise<LoginResponseDto> {
-    const user = await this.userRepository.findOne({
-      where: { email: loginDto.email.toLowerCase() },
-      relations: ['tenant'],
-    });
+    const user = await this.findByEmailWithPassword(loginDto.email);
 
     if (!user) {
       throw new UnauthorizedException('No account found with this email address');
@@ -68,13 +93,25 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(loginDto.password, user.passwordHash);
     if (!isPasswordValid) {
       // Record failed login attempt
-      await this.recordLoginActivity(user.id, LoginStatus.FAILED, ipAddress, userAgent, 'Invalid password');
+      await this.recordLoginActivity(
+        user.id,
+        LoginStatus.FAILED,
+        ipAddress,
+        userAgent,
+        'Invalid password',
+      );
       throw new UnauthorizedException('Incorrect password');
     }
 
     if (user.status !== UserStatus.ACTIVE) {
       // Record failed login attempt
-      await this.recordLoginActivity(user.id, LoginStatus.FAILED, ipAddress, userAgent, 'Account not active');
+      await this.recordLoginActivity(
+        user.id,
+        LoginStatus.FAILED,
+        ipAddress,
+        userAgent,
+        'Account not active',
+      );
       throw new UnauthorizedException('Account is not active');
     }
 
@@ -84,27 +121,130 @@ export class AuthService {
     // Record successful login
     await this.recordLoginActivity(user.id, LoginStatus.SUCCESS, ipAddress, userAgent);
 
-    const tokens = await this.generateTokens(user, userAgent, ipAddress);
+    const sessionUser = await this.buildSessionUser(user);
+    const tokens = await this.generateTokens(user, userAgent, ipAddress, sessionUser);
+
+    return { ...tokens, user: sessionUser };
+  }
+
+  /**
+   * The person with this email, WITH passwordHash (select: false on the entity,
+   * so it must be asked for) and the legacy tenant relation. Only for code that
+   * verifies a password; never return the result as is.
+   */
+  private findByEmailWithPassword(email: string): Promise<User | null> {
+    return this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .leftJoinAndSelect('user.tenant', 'tenant')
+      .where('user.email = :email', { email: email.toLowerCase() })
+      .getOne();
+  }
+
+  /**
+   * The user block of login / refresh / signup responses, and the source of the
+   * informational role / tenantId token claims.
+   *
+   *   GATE_MEMBERSHIP_CONTEXT off  the gate_users row (role, tenantId, tenant), as
+   *                                before; `person.tenant` must be loaded.
+   *   on                           a platform admin: super_admin, no building;
+   *                                exactly one usable membership: its role and
+   *                                building; otherwise (several, or none): nulls.
+   *                                Plus every membership (the C4 list) and
+   *                                activeMembershipId ('platform', the single
+   *                                membership's id, or null).
+   *
+   * Key order matches the legacy body so flag-off responses are unchanged.
+   */
+  async buildSessionUser(person: User): Promise<SessionUser> {
+    const base = {
+      id: person.id,
+      email: person.email,
+      firstName: person.firstName,
+      lastName: person.lastName,
+    };
+    const personal = { profileImageUrl: person.profileImageUrl, qrCode: person.qrCode };
+
+    if (!isMembershipContextEnabled()) {
+      return {
+        ...base,
+        role: person.role,
+        tenantId: person.tenantId,
+        ...personal,
+        tenant: tenantSummary(person.tenant),
+      };
+    }
+
+    const [usable, memberships] = await Promise.all([
+      this.membershipsService.listActiveForPerson(person.id),
+      this.membershipsService.listForPerson(person.id),
+    ]);
+    const selectable = usable.filter(isSelectableMembership);
+
+    let context: Pick<SessionUser, 'role' | 'tenantId' | 'tenant' | 'activeMembershipId'> = {
+      role: null,
+      tenantId: null,
+      tenant: null,
+      activeMembershipId: null,
+    };
+    if (this.membershipContextService.isPlatformAdmin(person)) {
+      context = {
+        role: UserRole.SUPER_ADMIN,
+        tenantId: null,
+        tenant: null,
+        activeMembershipId: PLATFORM_CONTEXT_ID,
+      };
+    } else if (selectable.length === 1) {
+      const [only] = selectable;
+      context = {
+        role: only.role,
+        tenantId: only.tenantId,
+        tenant: tenantSummary(only.tenant),
+        activeMembershipId: only.id,
+      };
+    }
 
     return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        tenantId: user.tenantId,
-        profileImageUrl: user.profileImageUrl,
-        qrCode: user.qrCode,
-        tenant: user.tenant
-          ? {
-              id: user.tenant.id,
-              name: user.tenant.name,
-              slug: user.tenant.slug,
-            }
-          : null,
-      },
+      ...base,
+      role: context.role,
+      tenantId: context.tenantId,
+      ...personal,
+      tenant: context.tenant,
+      memberships: memberships.map(toMembershipView),
+      activeMembershipId: context.activeMembershipId,
+    };
+  }
+
+  /**
+   * POST /auth/me: the acting principal as the request resolved it (the
+   * overlay, so it follows X-Gate-Membership), in the shape the endpoint has
+   * always returned. While GATE_MEMBERSHIP_CONTEXT is on it also lists the
+   * person's memberships and names the one this request acts as.
+   */
+  async describeActingUser(user: ActingUser | User) {
+    const body = {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phone: user.phone,
+      role: user.role,
+      tenantId: user.tenantId,
+      profileImageUrl: user.profileImageUrl,
+      qrCode: user.qrCode,
+      unit: user.unit,
+      tenant: tenantSummary(user.tenant),
+    };
+
+    if (!isMembershipContextEnabled()) {
+      return body;
+    }
+
+    const memberships = await this.membershipsService.listForPerson(user.id);
+    return {
+      ...body,
+      memberships: memberships.map(toMembershipView),
+      activeMembershipId: activeMembershipIdOf(user),
     };
   }
 
@@ -118,7 +258,9 @@ export class AuthService {
       relations: ['user', 'user.tenant'],
     });
 
-    if (!tokenEntity) {
+    // A token whose person was soft-deleted loads with user = null; refuse it
+    // instead of failing on the property reads below.
+    if (!tokenEntity || !tokenEntity.user) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -130,28 +272,10 @@ export class AuthService {
     // Revoke old token
     await this.refreshTokenRepository.update(tokenEntity.id, { isRevoked: true });
 
-    const tokens = await this.generateTokens(tokenEntity.user, userAgent, ipAddress);
+    const sessionUser = await this.buildSessionUser(tokenEntity.user);
+    const tokens = await this.generateTokens(tokenEntity.user, userAgent, ipAddress, sessionUser);
 
-    return {
-      ...tokens,
-      user: {
-        id: tokenEntity.user.id,
-        email: tokenEntity.user.email,
-        firstName: tokenEntity.user.firstName,
-        lastName: tokenEntity.user.lastName,
-        role: tokenEntity.user.role,
-        tenantId: tokenEntity.user.tenantId,
-        profileImageUrl: tokenEntity.user.profileImageUrl,
-        qrCode: tokenEntity.user.qrCode,
-        tenant: tokenEntity.user.tenant
-          ? {
-              id: tokenEntity.user.tenant.id,
-              name: tokenEntity.user.tenant.name,
-              slug: tokenEntity.user.tenant.slug,
-            }
-          : null,
-      },
-    };
+    return { ...tokens, user: sessionUser };
   }
 
   async logout(refreshToken: string): Promise<void> {
@@ -162,16 +286,25 @@ export class AuthService {
     await this.refreshTokenRepository.update({ userId, isRevoked: false }, { isRevoked: true });
   }
 
+  /**
+   * Signs the HS256 access token and stores a refresh token.
+   *
+   * The claims keep the shape the legacy SPA reads, {sub, email, role, tenantId},
+   * but only `sub` authenticates; role and tenantId are informational and come
+   * from the session user (null when the person has several buildings or none).
+   * Without a session user they are the gate_users row's.
+   */
   private async generateTokens(
     user: User,
     userAgent?: string,
     ipAddress?: string,
+    session?: Pick<SessionUser, 'role' | 'tenantId'>,
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
-      role: user.role,
-      tenantId: user.tenantId,
+      role: session ? session.role : user.role,
+      tenantId: session ? session.tenantId : user.tenantId,
     };
 
     const accessToken = this.jwtService.sign(payload);
@@ -235,45 +368,10 @@ export class AuthService {
     ipAddress?: string,
   ): Promise<LoginResponseDto> {
     // Check if email already exists
-    const existingUser = await this.userRepository.findOne({
-      where: { email: signupDto.email.toLowerCase() },
-      relations: ['tenant'],
-    });
+    const existingUser = await this.findByEmailWithPassword(signupDto.email);
 
     if (existingUser) {
-      // If user exists but tenant is PENDING_PAYMENT, allow re-signup (resume checkout)
-      if (existingUser.tenant?.status === TenantStatus.PENDING_PAYMENT) {
-        this.logger.log(`Resuming signup for pending account: ${signupDto.email}`);
-
-        // Update password in case they changed it
-        const passwordHash = await bcrypt.hash(signupDto.password, 10);
-        await this.userRepository.update(existingUser.id, { passwordHash });
-
-        // Generate tokens and return (they can proceed to Stripe Checkout)
-        const tokens = await this.generateTokens(existingUser, userAgent, ipAddress);
-        return {
-          ...tokens,
-          user: {
-            id: existingUser.id,
-            email: existingUser.email,
-            firstName: existingUser.firstName,
-            lastName: existingUser.lastName,
-            role: existingUser.role,
-            tenantId: existingUser.tenantId,
-            profileImageUrl: existingUser.profileImageUrl,
-            qrCode: existingUser.qrCode,
-            tenant: existingUser.tenant
-              ? {
-                  id: existingUser.tenant.id,
-                  name: existingUser.tenant.name,
-                  slug: existingUser.tenant.slug,
-                }
-              : null,
-          },
-        };
-      }
-
-      throw new ConflictException('Email already registered');
+      return this.resumeSignup(existingUser, signupDto, userAgent, ipAddress);
     }
 
     // Check if building name already exists
@@ -292,17 +390,13 @@ export class AuthService {
     const plans = await this.subscriptionPlanRepository.find({ where: { isActive: true } });
     const plan = plans.find((p) => p.name.toLowerCase() === signupDto.planName.toLowerCase());
 
+    // Default to the first available plan if not found
+    const selectedPlan = plan ?? plans[0];
+    if (!selectedPlan) {
+      throw new BadRequestException('No subscription plans available');
+    }
     if (!plan) {
-      // Default to the first available plan if not found
-      const defaultPlan = plans[0];
-      if (!defaultPlan) {
-        throw new BadRequestException('No subscription plans available');
-      }
-      // Use the default plan
-      console.log(`Plan "${signupDto.planName}" not found, using default: ${defaultPlan.name}`);
-      var selectedPlan = defaultPlan;
-    } else {
-      var selectedPlan = plan;
+      console.log(`Plan "${signupDto.planName}" not found, using default: ${selectedPlan.name}`);
     }
 
     // Generate slug from building name
@@ -326,53 +420,80 @@ export class AuthService {
 
     const now = new Date();
 
-    // Create tenant (building)
-    const tenant = this.tenantRepository.create({
-      name: signupDto.buildingName,
-      slug: slug + '-' + Date.now().toString(36),
-      contactEmail: signupDto.email.toLowerCase(),
-      contactPhone: signupDto.phone,
-      address: signupDto.buildingAddress,
-      status: tenantStatus,
-      subscriptionPlanId: selectedPlan.id,
-      subscriptionStartedAt: now,
-      subscriptionExpiresAt: trialExpiresAt,
-      currentPeriodEnd: trialExpiresAt,
-      subscriptionStatus: SubscriptionStatus.TRIALING,
-      settings: {
-        paymentInfo: signupDto.paymentInfo,
-        signupDate: now.toISOString(),
-        startedAsTrial: signupDto.startTrial || false,
-        trialDays: trialDays,
-        requiresPayment: signupDto.requiresPayment || false,
-      },
-    });
-
-    const savedTenant = await this.tenantRepository.save(tenant);
-
-    // Create user as building admin
+    // Hashed before the transaction so the row locks are not held across bcrypt.
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
     const qrCode = `GR-${uuidv4()}`;
 
-    const user = this.userRepository.create({
-      email: signupDto.email.toLowerCase(),
-      passwordHash,
-      firstName: signupDto.firstName,
-      lastName: signupDto.lastName,
-      phone: signupDto.phone,
-      role: UserRole.BUILDING_ADMIN,
-      status: UserStatus.ACTIVE,
-      tenantId: savedTenant.id,
-      qrCode,
-    });
+    // The building, the person and the person's building-admin membership are
+    // written in ONE transaction: a failure anywhere (a building-name race, a
+    // membership conflict) leaves no tenant without an admin and no person
+    // without a building.
+    const { savedTenant, savedUser, membership } = await this.dataSource.transaction(
+      async (manager) => {
+        // Create tenant (building)
+        const createdTenant = await manager.save(
+          manager.create(Tenant, {
+            name: signupDto.buildingName,
+            slug: slug + '-' + Date.now().toString(36),
+            contactEmail: signupDto.email.toLowerCase(),
+            contactPhone: signupDto.phone,
+            address: signupDto.buildingAddress,
+            status: tenantStatus,
+            subscriptionPlanId: selectedPlan.id,
+            subscriptionStartedAt: now,
+            subscriptionExpiresAt: trialExpiresAt,
+            currentPeriodEnd: trialExpiresAt,
+            subscriptionStatus: SubscriptionStatus.TRIALING,
+            settings: {
+              paymentInfo: signupDto.paymentInfo,
+              signupDate: now.toISOString(),
+              startedAsTrial: signupDto.startTrial || false,
+              trialDays: trialDays,
+              requiresPayment: signupDto.requiresPayment || false,
+            },
+          }),
+        );
 
-    const savedUser = await this.userRepository.save(user);
+        // Create the person with the no-building sentinel on the legacy columns;
+        // MembershipsService is their only writer and mirrors the new building
+        // onto them when it adds the membership below.
+        const createdUser = await manager.save(
+          manager.create(User, {
+            email: signupDto.email.toLowerCase(),
+            passwordHash,
+            firstName: signupDto.firstName,
+            lastName: signupDto.lastName,
+            phone: signupDto.phone,
+            role: LEGACY_SENTINEL.role,
+            tenantId: LEGACY_SENTINEL.tenantId,
+            status: UserStatus.ACTIVE,
+            qrCode,
+          }),
+        );
 
-    // Load tenant relation for token generation
+        const adminMembership = await this.membershipsService.add(
+          {
+            userId: createdUser.id,
+            tenantId: createdTenant.id,
+            role: UserRole.BUILDING_ADMIN,
+            status: UserStatus.ACTIVE,
+          },
+          manager,
+        );
+
+        return { savedTenant: createdTenant, savedUser: createdUser, membership: adminMembership };
+      },
+    );
+
+    // Bring the in-memory person in line with the committed row: the legacy
+    // columns add() mirrored, the tenant relation, and no hash.
+    Reflect.deleteProperty(savedUser, 'passwordHash');
+    Object.assign(savedUser, legacyColumnsFor(membership));
     savedUser.tenant = savedTenant;
 
     // Generate tokens and auto-login
-    const tokens = await this.generateTokens(savedUser, userAgent, ipAddress);
+    const sessionUser = await this.buildSessionUser(savedUser);
+    const tokens = await this.generateTokens(savedUser, userAgent, ipAddress, sessionUser);
 
     // Send welcome email with trial info (don't wait for it, don't fail signup if email fails)
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'https://yaad.global');
@@ -392,24 +513,69 @@ export class AuthService {
         this.logger.error(`Failed to send welcome email to ${savedUser.email}:`, error);
       });
 
-    return {
-      ...tokens,
-      user: {
-        id: savedUser.id,
-        email: savedUser.email,
-        firstName: savedUser.firstName,
-        lastName: savedUser.lastName,
-        role: savedUser.role,
-        tenantId: savedUser.tenantId,
-        profileImageUrl: savedUser.profileImageUrl,
-        qrCode: savedUser.qrCode,
-        tenant: {
-          id: savedTenant.id,
-          name: savedTenant.name,
-          slug: savedTenant.slug,
-        },
-      },
-    };
+    return { ...tokens, user: sessionUser };
+  }
+
+  /**
+   * POST /auth/signup with an email that already has an account (SEC-1).
+   *
+   * The only thing this may do is let the SAME person resume a signup whose
+   * building is still waiting for payment, so they can get back to Stripe
+   * Checkout. It never writes the password (a signup form must not be a way to
+   * reset someone's password), and it issues tokens only when the caller proves
+   * they hold the account: it is ACTIVE and the password matches.
+   *
+   *   wrong password, or account not active   409 'Email already registered'
+   *                                            (identical whatever the account's
+   *                                            state), recorded as a FAILED login
+   *   right password, no pending building      409 EMAIL_HAS_ACCOUNT: sign in and
+   *                                            add a building from Get Started
+   *   right password, pending building         tokens, nothing written
+   *
+   * The pending building is found through the person's building_admin
+   * membership in a PENDING_PAYMENT building (AUTH-11), not through the legacy
+   * gate_users.tenant_id. Exactly one bcrypt compare runs on every path.
+   */
+  private async resumeSignup(
+    existing: User,
+    signupDto: SignupDto,
+    userAgent?: string,
+    ipAddress?: string,
+  ): Promise<LoginResponseDto> {
+    const passwordMatches = await bcrypt.compare(
+      signupDto.password,
+      existing.passwordHash || DUMMY_PASSWORD_HASH,
+    );
+
+    if (!passwordMatches || existing.status !== UserStatus.ACTIVE) {
+      await this.recordLoginActivity(
+        existing.id,
+        LoginStatus.FAILED,
+        ipAddress,
+        userAgent,
+        passwordMatches
+          ? 'Signup resume refused: account not active'
+          : 'Signup resume refused: invalid password',
+      );
+      throw new ConflictException('Email already registered');
+    }
+
+    const pending = await this.membershipsService.findAdminMembership({
+      personId: existing.id,
+      status: UserStatus.ACTIVE,
+      tenantStatus: TenantStatus.PENDING_PAYMENT,
+    });
+    if (!pending) {
+      throw emailHasAccount();
+    }
+
+    this.logger.log(`Resuming signup for pending account: ${existing.email}`);
+
+    const sessionUser = await this.buildSessionUser(existing);
+    const tokens = await this.generateTokens(existing, userAgent, ipAddress, sessionUser);
+
+    // Tokens for the Stripe Checkout step; nothing about the account changed.
+    return { ...tokens, user: sessionUser };
   }
 
   async getSubscriptionPlans(): Promise<SubscriptionPlan[]> {
@@ -420,52 +586,95 @@ export class AuthService {
   }
 
   /**
-   * Login by tenant ID - used after payment verification
-   * Finds the building admin and generates tokens for them
+   * Signs in the person a paid signup just created - used after payment
+   * verification (POST /auth/verify-payment), and ONLY for that person (L9).
+   *
+   * It replaces loginByTenantId, which handed tokens for "the first active
+   * building_admin row of this tenant" to anyone holding a Stripe session id:
+   * with memberships that could be a pre-existing person who admins other
+   * buildings too. Now every condition must hold, or it answers 401 'Sign in
+   * to continue' (the person then signs in normally):
+   *   - adminUserId names a live, ACTIVE person;
+   *   - that person holds an ACTIVE building_admin membership in the tenant
+   *     (live membership in a live building, MembershipsService.findAdminMembership);
+   *   - the tenant records that its signup created exactly this person
+   *     (tenants.settings.signupCreatedUserId, written by
+   *     StripeService.provisionPaidSignup). An email that already had an
+   *     account never gets tokens from a Stripe session id;
+   *   - it is the first such login, within PAID_SIGNUP_LOGIN_WINDOW_MINUTES of
+   *     the building's creation: claimed once on the tenant row
+   *     (settings.signupLoginConsumedAt), so the session id is not a lasting
+   *     credential.
+   * Tokens and the response user come from generateTokens + buildSessionUser,
+   * like every other login.
    */
-  async loginByTenantId(
+  async loginAfterPaidSignup(
     tenantId: string,
+    adminUserId: string | null | undefined,
     userAgent?: string,
     ipAddress?: string,
   ): Promise<LoginResponseDto> {
-    const user = await this.userRepository.findOne({
-      where: {
-        tenantId,
-        role: UserRole.BUILDING_ADMIN,
-        status: UserStatus.ACTIVE,
-      },
+    const refuse = () => new UnauthorizedException('Sign in to continue');
+
+    if (!isUuid(tenantId) || !isUuid(adminUserId)) {
+      throw refuse();
+    }
+
+    const membership = await this.membershipsService.findAdminMembership({
+      tenantId,
+      personId: adminUserId,
+      status: UserStatus.ACTIVE,
+    });
+    if (
+      !membership ||
+      membership.user?.status !== UserStatus.ACTIVE ||
+      membership.tenant?.settings?.signupCreatedUserId !== membership.userId
+    ) {
+      throw refuse();
+    }
+
+    // Re-read with the legacy tenant relation, which buildSessionUser reads
+    // while GATE_MEMBERSHIP_CONTEXT is off.
+    const person = await this.userRepository.findOne({
+      where: { id: membership.userId },
       relations: ['tenant'],
     });
+    if (!person || person.status !== UserStatus.ACTIVE) {
+      throw refuse();
+    }
 
-    if (!user) {
-      throw new UnauthorizedException('No active admin found for this building');
+    // Single use, and only right after the signup: claim this login on the
+    // tenant row in ONE statement, so of two concurrent calls with the same
+    // session id only one gets tokens, and a session id replayed later (it sits
+    // in the success URL, so in browser history and logs) gets 401 however
+    // valid the checkout still is. The window counts from the building's
+    // creation, on the database clock.
+    const claimed = await this.tenantRepository
+      .createQueryBuilder()
+      .update(Tenant)
+      .set({
+        settings: () =>
+          `COALESCE("settings", '{}'::jsonb) || ` +
+          `jsonb_build_object('${SIGNUP_SETTINGS.loginConsumedAt}', now())`,
+      })
+      .where('"id" = :tenantId', { tenantId })
+      .andWhere(`"settings" ->> '${SIGNUP_SETTINGS.createdUserId}' = :personId`, {
+        personId: person.id,
+      })
+      .andWhere(`"settings" ->> '${SIGNUP_SETTINGS.loginConsumedAt}' IS NULL`)
+      .andWhere(`"created_at" > now() - interval '${PAID_SIGNUP_LOGIN_WINDOW_MINUTES} minutes'`)
+      .execute();
+    if (!claimed.affected) {
+      throw refuse();
     }
 
     // Update last login
-    await this.userRepository.update(user.id, { lastLoginAt: new Date() });
+    await this.userRepository.update(person.id, { lastLoginAt: new Date() });
 
-    const tokens = await this.generateTokens(user, userAgent, ipAddress);
+    const sessionUser = await this.buildSessionUser(person);
+    const tokens = await this.generateTokens(person, userAgent, ipAddress, sessionUser);
 
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        tenantId: user.tenantId,
-        profileImageUrl: user.profileImageUrl,
-        qrCode: user.qrCode,
-        tenant: user.tenant
-          ? {
-              id: user.tenant.id,
-              name: user.tenant.name,
-              slug: user.tenant.slug,
-            }
-          : null,
-      },
-    };
+    return { ...tokens, user: sessionUser };
   }
 
   // ==================== Login Activity Tracking ====================
@@ -525,12 +734,20 @@ export class AuthService {
       os = 'Linux';
     } else if (userAgent.includes('Android')) {
       os = 'Android';
-    } else if (userAgent.includes('iOS') || userAgent.includes('iPhone') || userAgent.includes('iPad')) {
+    } else if (
+      userAgent.includes('iOS') ||
+      userAgent.includes('iPhone') ||
+      userAgent.includes('iPad')
+    ) {
       os = 'iOS';
     }
 
     // Parse device
-    if (userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone')) {
+    if (
+      userAgent.includes('Mobile') ||
+      userAgent.includes('Android') ||
+      userAgent.includes('iPhone')
+    ) {
       device = 'Mobile';
     } else if (userAgent.includes('Tablet') || userAgent.includes('iPad')) {
       device = 'Tablet';
@@ -604,7 +821,9 @@ export class AuthService {
     });
 
     if (!resetToken) {
-      throw new BadRequestException('Invalid or expired verification code. Please request a new code.');
+      throw new BadRequestException(
+        'Invalid or expired verification code. Please request a new code.',
+      );
     }
 
     // Check expiration

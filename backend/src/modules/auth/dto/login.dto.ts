@@ -10,6 +10,7 @@ import {
   Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import type { MembershipView } from '../../memberships/dto/memberships-me.response';
 
 export class LoginDto {
   @ApiProperty({ example: 'user@example.com' })
@@ -24,6 +25,34 @@ export class LoginDto {
   password: string;
 }
 
+/**
+ * The user block of login / refresh / signup responses (AuthService.buildSessionUser).
+ *
+ * role, tenantId and tenant describe the session's DEFAULT context:
+ *   - GATE_MEMBERSHIP_CONTEXT off: the gate_users row, exactly as before;
+ *   - on: the person's only usable membership; 'super_admin' with nulls for a
+ *     platform admin; all three null when the person has several buildings or
+ *     none (the client then asks which one, see GET /memberships/me).
+ * memberships and activeMembershipId are present only while the flag is on.
+ */
+export interface SessionUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string | null;
+  tenantId: string | null;
+  profileImageUrl?: string;
+  qrCode?: string;
+  tenant: {
+    id: string;
+    name: string;
+    slug: string;
+  } | null;
+  memberships?: MembershipView[];
+  activeMembershipId?: string | null;
+}
+
 export class LoginResponseDto {
   @ApiProperty()
   accessToken: string;
@@ -32,21 +61,7 @@ export class LoginResponseDto {
   refreshToken: string;
 
   @ApiProperty()
-  user: {
-    id: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    role: string;
-    tenantId: string | null;
-    profileImageUrl?: string;
-    qrCode?: string;
-    tenant: {
-      id: string;
-      name: string;
-      slug: string;
-    } | null;
-  };
+  user: SessionUser;
 }
 
 export class RefreshTokenDto {
@@ -79,7 +94,9 @@ export class SignupDto {
   @Matches(/[A-Z]/, { message: 'Password must contain at least one uppercase letter' })
   @Matches(/[a-z]/, { message: 'Password must contain at least one lowercase letter' })
   @Matches(/[0-9]/, { message: 'Password must contain at least one number' })
-  @Matches(/[@$!%*?&]/, { message: 'Password must contain at least one special character (@$!%*?&)' })
+  @Matches(/[@$!%*?&]/, {
+    message: 'Password must contain at least one special character (@$!%*?&)',
+  })
   password: string;
 
   @ApiPropertyOptional({ example: '+1234567890' })

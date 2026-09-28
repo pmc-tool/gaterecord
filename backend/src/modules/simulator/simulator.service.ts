@@ -8,7 +8,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan, LessThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Gate, GateState } from '@database/entities/gate.entity';
 import {
@@ -20,8 +20,6 @@ import {
   SensorType,
   SensorHealthStatus,
 } from '@database/entities/sensor-status.entity';
-import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
-import { RfidCard, RfidCardStatus } from '@database/entities/rfid-card.entity';
 import { VisitorPass, VisitorPassStatus } from '@database/entities/visitor-pass.entity';
 import {
   AccessEvent,
@@ -29,7 +27,7 @@ import {
   AccessResult,
   AccessSubjectType,
 } from '@database/entities/access-event.entity';
-import { User, UserRole, UserStatus } from '@database/entities/user.entity';
+import { User, UserRole } from '@database/entities/user.entity';
 import {
   TriggerEventDto,
   SimulatorEvent,
@@ -40,7 +38,20 @@ import { EmailService } from '../notification/email.service';
 import { NotificationService } from '../notification/notification.service';
 import { SecurityAlertService } from '../security-alert/security-alert.service';
 import { CloudPlusService } from '../cloud-plus-typeB/cloud-plus.service';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { PERSONAL_QR_ROLES } from '../memberships/membership-access.constants';
 
+/**
+ * The gate simulator: drives a gate's state machine and replays credential
+ * scans for testing without hardware.
+ *
+ * Card and vehicle scans are replayed through CloudPlusService
+ * .processSearchCardAcs, so they take exactly the decision path real
+ * controllers take (holder checked against their role in the gate's building).
+ * The personal QR path is decided here with the same MembershipAccessService
+ * .checkHolder rule and PERSONAL_QR_ROLES, so the simulator and the hardware
+ * agree on who may pass.
+ */
 @Injectable()
 export class SimulatorService {
   private readonly logger = new Logger(SimulatorService.name);
@@ -53,16 +64,13 @@ export class SimulatorService {
     private configService: ConfigService,
     @Inject(forwardRef(() => CloudPlusService))
     private cloudPlusService: CloudPlusService,
+    private membershipAccessService: MembershipAccessService,
     @InjectRepository(Gate)
     private gateRepository: Repository<Gate>,
     @InjectRepository(GateControllerEntity)
     private controllerRepository: Repository<GateControllerEntity>,
     @InjectRepository(SensorStatus)
     private sensorRepository: Repository<SensorStatus>,
-    @InjectRepository(Vehicle)
-    private vehicleRepository: Repository<Vehicle>,
-    @InjectRepository(RfidCard)
-    private rfidCardRepository: Repository<RfidCard>,
     @InjectRepository(VisitorPass)
     private visitorPassRepository: Repository<VisitorPass>,
     @InjectRepository(AccessEvent)
@@ -95,7 +103,7 @@ export class SimulatorService {
       case SimulatorEvent.HUMAN_RFID_DETECTED:
         return this.handleCloudPlusSearchCard(gate, dto);
       case SimulatorEvent.QR_VERIFIED:
-        return this.handleQrVerified(gate, dto.qrToken!, currentUser);
+        return this.handleQrVerified(gate, dto.qrToken!);
       case SimulatorEvent.OBSTACLE_DETECTED:
         return this.handleObstacle(gate, true);
       case SimulatorEvent.OBSTACLE_CLEARED:
@@ -111,123 +119,6 @@ export class SimulatorService {
       default:
         throw new BadRequestException('Unknown event type');
     }
-  }
-
-  private async handleCarRfid(
-    gate: Gate,
-    rfidUid: string,
-    currentUser: User,
-  ): Promise<SimulatorFeedbackDto> {
-    const now = new Date();
-    const vehicle = await this.vehicleRepository.findOne({
-      where: {
-        tenantId: gate.tenantId,
-        rfidUid,
-        status: VehicleStatus.ACTIVE,
-      },
-      relations: ['owner'],
-    });
-
-    if (!vehicle) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.CAR_RFID,
-        subjectType: AccessSubjectType.UNKNOWN,
-        subjectIdentifier: rfidUid,
-        result: AccessResult.DENIED,
-        denialReason: 'Unknown vehicle RFID',
-      });
-
-      // Send RED LED feedback to hardware
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Unknown Vehicle');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.CAR_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Unknown vehicle',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    // Check validity period
-    if (vehicle.validFrom && vehicle.validFrom > now) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.CAR_RFID,
-        subjectType: AccessSubjectType.VEHICLE,
-        subjectId: vehicle.id,
-        subjectIdentifier: rfidUid,
-        subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
-        residentId: vehicle.ownerId,
-        result: AccessResult.DENIED,
-        denialReason: 'Vehicle not yet valid',
-      });
-
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Not Yet Valid');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.CAR_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Vehicle not yet valid',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    if (vehicle.validUntil && vehicle.validUntil < now) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.CAR_RFID,
-        subjectType: AccessSubjectType.VEHICLE,
-        subjectId: vehicle.id,
-        subjectIdentifier: rfidUid,
-        subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
-        residentId: vehicle.ownerId,
-        result: AccessResult.DENIED,
-        denialReason: 'Vehicle access expired',
-      });
-
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Access Expired');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.CAR_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Vehicle access expired',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    // Grant access
-    const event = await this.createAccessEvent(gate, {
-      method: AccessMethod.CAR_RFID,
-      subjectType: AccessSubjectType.VEHICLE,
-      subjectId: vehicle.id,
-      subjectIdentifier: rfidUid,
-      subjectName: `${vehicle.owner.firstName} ${vehicle.owner.lastName} - ${vehicle.licensePlate}`,
-      residentId: vehicle.ownerId,
-      result: AccessResult.ALLOWED,
-    });
-
-    // Send GREEN LED feedback and welcome message
-    await this.sendHardwareFeedback(
-      gate,
-      'SUCCESS',
-      `Welcome ${vehicle.owner.firstName}`,
-      vehicle.licensePlate,
-    );
-
-    await this.transitionState(gate, GateState.OPENING);
-
-    return {
-      gateId: gate.id,
-      action: SimulatorEvent.CAR_RFID_DETECTED,
-      success: true,
-      message: `Access granted - ${vehicle.owner.firstName} ${vehicle.owner.lastName}`,
-      gateState: GateState.OPENING,
-      eventId: event.id,
-    };
   }
 
   /**
@@ -332,135 +223,24 @@ export class SimulatorService {
     }
   }
 
-  private async handleHumanRfid(
-    gate: Gate,
-    rfidUid: string,
-    currentUser: User,
-  ): Promise<SimulatorFeedbackDto> {
-    const now = new Date();
-    const rfidCard = await this.rfidCardRepository.findOne({
-      where: {
-        tenantId: gate.tenantId,
-        uid: rfidUid,
-        status: RfidCardStatus.ACTIVE,
-      },
-      relations: ['user'],
-    });
-
-    if (!rfidCard) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.HUMAN_RFID,
-        subjectType: AccessSubjectType.UNKNOWN,
-        subjectIdentifier: rfidUid,
-        result: AccessResult.DENIED,
-        denialReason: 'Unknown RFID card',
-      });
-
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Unknown Card');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.HUMAN_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Unknown card',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    // Check validity period
-    if (rfidCard.validFrom && rfidCard.validFrom > now) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.HUMAN_RFID,
-        subjectType: AccessSubjectType.RFID_CARD,
-        subjectId: rfidCard.id,
-        subjectIdentifier: rfidUid,
-        subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
-        residentId: rfidCard.userId,
-        result: AccessResult.DENIED,
-        denialReason: 'Card not yet valid',
-      });
-
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Not Yet Valid');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.HUMAN_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Card not yet valid',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    if (rfidCard.validUntil && rfidCard.validUntil < now) {
-      const event = await this.createAccessEvent(gate, {
-        method: AccessMethod.HUMAN_RFID,
-        subjectType: AccessSubjectType.RFID_CARD,
-        subjectId: rfidCard.id,
-        subjectIdentifier: rfidUid,
-        subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
-        residentId: rfidCard.userId,
-        result: AccessResult.DENIED,
-        denialReason: 'Card expired',
-      });
-
-      await this.sendHardwareFeedback(gate, 'ERROR', 'Access Denied', 'Card Expired');
-
-      return {
-        gateId: gate.id,
-        action: SimulatorEvent.HUMAN_RFID_DETECTED,
-        success: false,
-        message: 'Access denied - Card expired',
-        gateState: gate.state,
-        eventId: event.id,
-      };
-    }
-
-    // Grant access
-    const event = await this.createAccessEvent(gate, {
-      method: AccessMethod.HUMAN_RFID,
-      subjectType: AccessSubjectType.RFID_CARD,
-      subjectId: rfidCard.id,
-      subjectIdentifier: rfidUid,
-      subjectName: `${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
-      residentId: rfidCard.userId,
-      result: AccessResult.ALLOWED,
-    });
-
-    await this.sendHardwareFeedback(
-      gate,
-      'SUCCESS',
-      `Welcome ${rfidCard.user.firstName}`,
-      'Access Granted',
-    );
-
-    await this.transitionState(gate, GateState.OPENING);
-
-    return {
-      gateId: gate.id,
-      action: SimulatorEvent.HUMAN_RFID_DETECTED,
-      success: true,
-      message: `Access granted - ${rfidCard.user.firstName} ${rfidCard.user.lastName}`,
-      gateState: GateState.OPENING,
-      eventId: event.id,
-    };
-  }
-
-  private async handleQrVerified(
-    gate: Gate,
-    qrToken: string,
-    currentUser: User,
-  ): Promise<SimulatorFeedbackDto> {
+  private async handleQrVerified(gate: Gate, qrToken: string): Promise<SimulatorFeedbackDto> {
     const now = new Date();
 
     // Check if it's a user QR code (starts with "GR-")
     if (qrToken.startsWith('GR-')) {
+      // One personal QR code per person, looked up platform-wide; whether it
+      // opens THIS gate is the person's role in the gate's building (A3), the
+      // same rule CloudPlusService applies to a real scan.
       const user = await this.userRepository.findOne({
         where: { qrCode: qrToken },
       });
+      const holder = user
+        ? await this.membershipAccessService.checkHolder(user.id, gate.tenantId, {
+            roles: PERSONAL_QR_ROLES,
+          })
+        : null;
 
-      if (!user) {
+      if (!user || !holder || holder.reason === 'PERSON_NOT_FOUND') {
         const event = await this.createAccessEvent(gate, {
           method: AccessMethod.QR,
           subjectType: AccessSubjectType.USER,
@@ -479,8 +259,8 @@ export class SimulatorService {
         };
       }
 
-      // Check if user belongs to the same tenant as the gate
-      if (user.tenantId !== gate.tenantId) {
+      // No role in the gate's building (or none this credential accepts).
+      if (holder.reason === 'NO_MEMBERSHIP' || holder.reason === 'ROLE_NOT_ALLOWED') {
         const event = await this.createAccessEvent(gate, {
           method: AccessMethod.QR,
           subjectType: AccessSubjectType.USER,
@@ -502,8 +282,14 @@ export class SimulatorService {
         };
       }
 
-      // Check user status
-      if (user.status !== UserStatus.ACTIVE) {
+      // Inactive or pending in this building, or banned platform-wide.
+      if (!holder.allowed) {
+        const status =
+          holder.reason === 'MEMBERSHIP_INACTIVE'
+            ? 'inactive'
+            : holder.reason === 'MEMBERSHIP_PENDING'
+              ? 'pending'
+              : user.status;
         const event = await this.createAccessEvent(gate, {
           method: AccessMethod.QR,
           subjectType: AccessSubjectType.USER,
@@ -512,20 +298,22 @@ export class SimulatorService {
           subjectName: `${user.firstName} ${user.lastName}`,
           residentId: user.id,
           result: AccessResult.DENIED,
-          denialReason: `User account is ${user.status}`,
+          denialReason: `User account is ${status}`,
         });
 
         return {
           gateId: gate.id,
           action: SimulatorEvent.QR_VERIFIED,
           success: false,
-          message: `Access denied - Account ${user.status}`,
+          message: `Access denied - Account ${status}`,
           gateState: gate.state,
           eventId: event.id,
         };
       }
 
-      // User QR code is valid - grant access
+      // User QR code is valid - grant access. Role and unit are the ones held
+      // in the gate's building, not the person's legacy gate_users columns.
+      const unit = holder.unit;
       const event = await this.createAccessEvent(gate, {
         method: AccessMethod.QR,
         subjectType: AccessSubjectType.USER,
@@ -537,8 +325,8 @@ export class SimulatorService {
         metadata: {
           userId: user.id,
           userEmail: user.email,
-          userRole: user.role,
-          unit: user.unit,
+          userRole: holder.role,
+          unit,
         },
       });
 
@@ -548,7 +336,7 @@ export class SimulatorService {
         gateId: gate.id,
         action: SimulatorEvent.QR_VERIFIED,
         success: true,
-        message: `Access granted - ${user.firstName} ${user.lastName}${user.unit ? ` (Unit ${user.unit})` : ''}`,
+        message: `Access granted - ${user.firstName} ${user.lastName}${unit ? ` (Unit ${unit})` : ''}`,
         gateState: GateState.OPENING,
         eventId: event.id,
       };
@@ -713,9 +501,12 @@ export class SimulatorService {
     const buildingName = pass.tenant?.name || gate.tenant?.name || 'the building';
     const residentName = `${resident.firstName} ${resident.lastName}`;
 
-    // Create in-app notification for resident (email handled separately below)
+    // Create in-app notification for resident (email handled separately below).
+    // Tagged with the GATE's building, not the resident's legacy tenant, so the
+    // bell shows it when they act in that building.
     await this.notificationService.notifyVisitorEntry(
       resident.id,
+      gate.tenantId,
       pass.visitorName,
       gate.name,
       {
@@ -826,8 +617,6 @@ export class SimulatorService {
     action: 'open' | 'close',
     currentUser: User,
   ): Promise<SimulatorFeedbackDto> {
-    const targetState = action === 'open' ? GateState.MANUAL_OVERRIDE : GateState.CLOSING;
-
     const event = await this.createAccessEvent(gate, {
       method: AccessMethod.MANUAL,
       subjectType: AccessSubjectType.USER,
@@ -864,19 +653,6 @@ export class SimulatorService {
         `>>> Gate state transition: ${gate.hardwareId}, state: ${newState} (via Cloud Plus HTTP)`,
       );
     }
-  }
-
-  // Send LED feedback to hardware
-  private async sendHardwareFeedback(
-    gate: Gate,
-    type: 'SUCCESS' | 'ERROR' | 'WARNING',
-    message1?: string,
-    _message2?: string,
-  ): Promise<void> {
-    if (!gate.hardwareId) return;
-
-    // Feedback is sent via Cloud Plus HTTP protocol response
-    this.logger.log(`>>> ${type} feedback for hardware: ${gate.hardwareId}, message: ${message1}`);
   }
 
   private scheduleAutoClose(gateId: string): void {

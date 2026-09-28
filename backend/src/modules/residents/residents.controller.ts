@@ -6,19 +6,30 @@ import {
   Delete,
   Body,
   Param,
+  ParseUUIDPipe,
   Query,
   UseGuards,
-  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ResidentsService } from './residents.service';
-import { CreateResidentDto, UpdateResidentDto, ResidentQueryDto } from './dto/resident.dto';
+import {
+  CreateResidentDto,
+  UpdateResidentDto,
+  ResidentQueryDto,
+  ResidentTargetQueryDto,
+} from './dto/resident.dto';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { User, UserRole } from '@database/entities/user.entity';
 
+/**
+ * Residents of the building the request acts in (their RESIDENT memberships).
+ * `:id` is the person; a super admin names the building with ?tenantId= when
+ * the person is a resident of several. Which building a building admin acts
+ * in is decided by the service (assertBuildingContext), not here.
+ */
 @ApiTags('Residents')
 @ApiBearerAuth()
 @Controller('residents')
@@ -36,21 +47,18 @@ export class ResidentsController {
   @Get(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @ApiOperation({ summary: 'Get resident by ID' })
-  async findOne(@Param('id') id: string, @CurrentUser() user: User) {
-    return this.residentsService.findOne(id, user);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ResidentTargetQueryDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.residentsService.findOne(id, user, { tenantId: query.tenantId });
   }
 
   @Post()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @ApiOperation({ summary: 'Create new resident' })
   async create(@Body() createDto: CreateResidentDto, @CurrentUser() user: User) {
-    // Building admin can only create residents for their own tenant
-    if (user.role !== UserRole.SUPER_ADMIN) {
-      if (!user.tenantId) {
-        throw new ForbiddenException('User must belong to a tenant');
-      }
-      createDto.tenantId = user.tenantId;
-    }
     return this.residentsService.create(createDto, user);
   }
 
@@ -58,17 +66,22 @@ export class ResidentsController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
   @ApiOperation({ summary: 'Update resident' })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateDto: UpdateResidentDto,
+    @Query() query: ResidentTargetQueryDto,
     @CurrentUser() user: User,
   ) {
-    return this.residentsService.update(id, updateDto, user);
+    return this.residentsService.update(id, updateDto, user, { tenantId: query.tenantId });
   }
 
   @Delete(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
-  @ApiOperation({ summary: 'Delete resident' })
-  async remove(@Param('id') id: string, @CurrentUser() user: User) {
-    return this.residentsService.remove(id, user);
+  @ApiOperation({ summary: 'Remove the resident from the building' })
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ResidentTargetQueryDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.residentsService.remove(id, user, { tenantId: query.tenantId });
   }
 }

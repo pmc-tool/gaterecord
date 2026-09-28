@@ -11,6 +11,8 @@ import { Vehicle, VehicleStatus } from '@database/entities/vehicle.entity';
 import { User, UserRole } from '@database/entities/user.entity';
 import { Tenant } from '@database/entities/tenant.entity';
 import { CreateVehicleDto, UpdateVehicleDto, VehicleQueryDto } from './dto/vehicle.dto';
+import { MembershipAccessService } from '../memberships/membership-access.service';
+import { VEHICLE_OWNER_ROLES } from '../memberships/membership-access.constants';
 
 @Injectable()
 export class VehiclesService {
@@ -19,9 +21,13 @@ export class VehiclesService {
     private readonly vehicleRepository: Repository<Vehicle>,
     @InjectRepository(Tenant)
     private readonly tenantRepository: Repository<Tenant>,
+    private readonly membershipAccessService: MembershipAccessService,
   ) {}
 
-  async findAll(currentUser: User, queryDto: VehicleQueryDto = {}): Promise<{ data: Vehicle[]; total: number; page: number; limit: number }> {
+  async findAll(
+    currentUser: User,
+    queryDto: VehicleQueryDto = {},
+  ): Promise<{ data: Vehicle[]; total: number; page: number; limit: number }> {
     const page = queryDto.page || 1;
     const limit = queryDto.limit || 10;
     const skip = (page - 1) * limit;
@@ -48,7 +54,7 @@ export class VehiclesService {
     if (queryDto.search) {
       qb.andWhere(
         '(LOWER(vehicle.licensePlate) LIKE LOWER(:search) OR LOWER(owner.firstName) LIKE LOWER(:search) OR LOWER(owner.lastName) LIKE LOWER(:search))',
-        { search: `%${queryDto.search}%` }
+        { search: `%${queryDto.search}%` },
       );
     }
 
@@ -201,13 +207,21 @@ export class VehiclesService {
   }
 
   /**
-   * A vehicle's owner must belong to its building. The owner picker is loaded
-   * once per page, so without this an admin could still attach a vehicle to a
-   * resident who has since left or been removed.
+   * A vehicle's owner must be ACTIVE in its building (a role there that may own
+   * a vehicle, VEHICLE_OWNER_ROLES), which is also what the gate requires when
+   * the tag is scanned. Read from memberships, so the owner's other buildings
+   * (and their legacy gate_users row, which may name one of those) do not
+   * matter. The owner picker is loaded once per page, so without this an admin
+   * could still attach a vehicle to someone who has since left, been removed or
+   * been deactivated.
    */
   private async assertOwnerInBuilding(ownerId: string, tenantId: string): Promise<void> {
-    const owner = await this.vehicleRepository.manager.findOne(User, { where: { id: ownerId } });
-    if (!owner || owner.tenantId !== tenantId) {
+    const active = await this.membershipAccessService.hasActiveMembership(
+      ownerId,
+      tenantId,
+      VEHICLE_OWNER_ROLES,
+    );
+    if (!active) {
       throw new BadRequestException('The owner must be a resident of this building');
     }
   }
