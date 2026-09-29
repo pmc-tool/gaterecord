@@ -8,6 +8,7 @@ import LoginPage from './pages/login/LoginPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import VerifyOtpPage from './pages/auth/VerifyOtpPage';
 import ResetPasswordPage from './pages/auth/ResetPasswordPage';
+import AuthCallbackPage from './pages/auth/AuthCallbackPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import GatesPage from './pages/gates/GatesPage';
 import GateSimulatorPage from './pages/gates/GateSimulatorPage';
@@ -91,6 +92,9 @@ function App() {
           path="/login"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />}
         />
+
+        {/* Return from the YAAD-account (Keycloak) sign-in */}
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
         {/* Password Reset Flow */}
         <Route

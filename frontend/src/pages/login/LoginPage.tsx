@@ -1,7 +1,9 @@
 import { useNavigate, Link } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, Alert, Space, Table, Tag } from 'antd';
+import { useState } from 'react';
+import { Form, Input, Button, Card, Typography, Alert, Space, Table, Tag, Divider } from 'antd';
 import { UserOutlined, LockOutlined, LoginOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
+import { oidcService } from '../../services/oidc.service';
 import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 
 const { Title, Text } = Typography;
@@ -41,6 +43,19 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, isLoading, error, clearError } = useAuthStore();
   const [form] = Form.useForm();
+  const [oidcError, setOidcError] = useState<string | null>(null);
+  const [oidcStarting, setOidcStarting] = useState(false);
+
+  const handleOidcLogin = async () => {
+    setOidcError(null);
+    setOidcStarting(true);
+    try {
+      await oidcService.startLogin({ email: form.getFieldValue('email') || undefined });
+    } catch (err) {
+      setOidcError(err instanceof Error ? err.message : 'Could not open the YAAD sign-in page');
+      setOidcStarting(false);
+    }
+  };
 
   const handleSubmit = async (values: { email: string; password: string }) => {
     try {
@@ -124,6 +139,36 @@ export function LoginPage() {
                 closable
                 onClose={clearError}
               />
+            )}
+
+            {oidcService.isEnabled() && (
+              <>
+                {oidcError && (
+                  <Alert
+                    message={oidcError}
+                    type="error"
+                    showIcon
+                    closable
+                    onClose={() => setOidcError(null)}
+                  />
+                )}
+                <Button
+                  type="primary"
+                  block
+                  size="large"
+                  loading={oidcStarting}
+                  onClick={handleOidcLogin}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 border-none"
+                >
+                  Sign in with YAAD account
+                </Button>
+                <Text type="secondary" className="block text-center text-xs">
+                  Added by your building admin? Use this button with the password from your email.
+                </Text>
+                <Divider plain className="!my-0">
+                  <Text type="secondary" className="text-xs">or with a gaterecord password</Text>
+                </Divider>
+              </>
             )}
 
             <Form

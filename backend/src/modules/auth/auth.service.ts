@@ -100,7 +100,13 @@ export class AuthService {
         userAgent,
         'Invalid password',
       );
-      throw new UnauthorizedException('Incorrect password');
+      // A person with an account-service identity (e.g. added by a building
+      // admin) holds their real password in Keycloak, not in this hash.
+      throw new UnauthorizedException(
+        user.userId
+          ? 'Incorrect password. If your building admin added you, use "Sign in with YAAD account" with the password from your email.'
+          : 'Incorrect password',
+      );
     }
 
     if (user.status !== UserStatus.ACTIVE) {
@@ -234,6 +240,9 @@ export class AuthService {
       qrCode: user.qrCode,
       unit: user.unit,
       tenant: tenantSummary(user.tenant),
+      // Still on the starting password an admin's add emailed them; the web
+      // shows a (dismissible) reminder to change it.
+      mustChangePassword: user.mustChangePassword === true,
     };
 
     if (!isMembershipContextEnabled()) {

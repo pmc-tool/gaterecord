@@ -17,6 +17,8 @@ import {
   CloseCircleOutlined,
 } from '@ant-design/icons';
 import { settingsService, ChangePasswordData } from '../../../services/settings.service';
+import { authService } from '../../../services/auth.service';
+import { oidcService } from '../../../services/oidc.service';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -26,7 +28,57 @@ interface PasswordRequirement {
   met: boolean;
 }
 
+/**
+ * Signed in with the YAAD account: the password lives in Keycloak, so the
+ * change happens on Keycloak's own screen (never in a gaterecord form).
+ */
+function AccountPasswordSection() {
+  const [opening, setOpening] = useState(false);
+
+  const openChangePassword = async () => {
+    setOpening(true);
+    try {
+      await oidcService.startLogin({ action: 'UPDATE_PASSWORD', returnTo: '/settings' });
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Could not open the password page');
+      setOpening(false);
+    }
+  };
+
+  return (
+    <Card className="shadow-sm">
+      <Title level={4} className="!mb-2">
+        Change Password
+      </Title>
+      <Paragraph type="secondary">
+        You sign in with your YAAD account. Your password is changed on the YAAD account page, and
+        you come straight back here afterwards.
+      </Paragraph>
+      <Button
+        type="primary"
+        size="large"
+        icon={<LockOutlined />}
+        loading={opening}
+        onClick={openChangePassword}
+        style={{
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          border: 'none',
+        }}
+      >
+        Change Password
+      </Button>
+    </Card>
+  );
+}
+
 export default function SecurityTab() {
+  if (authService.getProvider() === 'keycloak') {
+    return <AccountPasswordSection />;
+  }
+  return <LocalPasswordSection />;
+}
+
+function LocalPasswordSection() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [newPassword, setNewPassword] = useState('');

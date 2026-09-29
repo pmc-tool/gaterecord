@@ -46,6 +46,10 @@ import {
   AccountIdentityClient,
   ProvisionedIdentity,
 } from '../account-identity/account-identity.client';
+import {
+  DEFAULT_USER_PASSWORD_ENV,
+  resolveDefaultUserPassword,
+} from '../account-identity/default-user-password';
 import { LEGACY_SENTINEL, MembershipsService } from '../memberships/memberships.service';
 import { EmailService } from '../notification/email.service';
 import { assertSeatAvailable } from './seat-limit';
@@ -65,11 +69,9 @@ export interface AddPersonToTenantInput {
   firstName: string;
   lastName: string;
   phone?: string | null;
-  /**
-   * Passed through to the account service, and used only when it creates a
-   * brand-new identity. An existing account's password is never touched.
-   */
-  password?: string;
+  // No password: a brand-new identity always starts with the configured
+  // default (GATE_DEFAULT_USER_PASSWORD), and an existing account's password
+  // is never touched. Nobody adding a person gets to choose it.
   /** The building. A missing value is 400 TENANT_REQUIRED. */
   tenantId: string | null | undefined;
   /** A building role (MEMBERSHIP_ROLES); anything else is 400. */
@@ -161,6 +163,11 @@ interface AddAttempt {
   input: AddPersonToTenantInput;
   /** The account service's answer; null when the email already had a gate person. */
   identity: ProvisionedIdentity | null;
+  /**
+   * The password a brand-new identity was created with (the default, or the
+   * account service's own), to email once; null when no identity was created.
+   */
+  issuedPassword?: string | null;
   passwordHash?: string;
 }
 
@@ -311,16 +318,29 @@ export class MembershipLifecycleService {
     // with no gate person: an existing person already has their identity, and
     // calling the account service again must never reset their password.
     if (!known) {
+      const initial = resolveDefaultUserPassword(this.configService);
+      if ('reason' in initial) {
+        const why = initial.reason === 'unset' ? 'not set' : 'shorter than 8 characters';
+        this.logger.warn(
+          `${DEFAULT_USER_PASSWORD_ENV} is ${why}; ` +
+            'the account service will generate the new account password.',
+        );
+      }
       attempt.identity = await this.accountIdentityClient.provisionUser({
         email,
         first_name: input.firstName,
         last_name: input.lastName,
         phone: input.phone ?? undefined,
-        password: input.password,
+        password: initial.password,
         // gaterecord sends its own branded email below: it knows the building,
         // the role and who added the person, which the account service does not.
         sendEmail: false,
       });
+      // The account service echoes the password it set; fall back to the one we
+      // sent, so a brand-new account is never left without its credentials email.
+      attempt.issuedPassword = attempt.identity.created
+        ? (attempt.identity.password ?? initial.password ?? null)
+        : null;
       if (!attempt.identity.created) {
         this.logger.log(
           'Platform identity already existed for this email; linking the new gate person to it.',
@@ -347,9 +367,7 @@ export class MembershipLifecycleService {
       outcome = await this.dataSource.transaction((m) => this.addInTransaction(m, attempt));
     }
 
-    const newCredentials =
-      attempt.identity?.created && attempt.identity.password ? attempt.identity.password : null;
-    this.sendAddedEmail(outcome, attempt.role, newCredentials, input.actor);
+    this.sendAddedEmail(outcome, attempt.role, attempt.issuedPassword ?? null, input.actor);
 
     return {
       person: outcome.person,
@@ -752,8 +770,8 @@ export class MembershipLifecycleService {
         phone: attempt.input.phone,
         userId: attempt.identity.id,
         passwordHash: attempt.passwordHash,
-        // A temporary password is being handed out: the person should replace it.
-        mustChangePassword: Boolean(attempt.identity.created && attempt.identity.password),
+        // A starting password is being handed out: the person must replace it.
+        mustChangePassword: Boolean(attempt.issuedPassword),
       });
     }
 
@@ -861,7 +879,9 @@ export class MembershipLifecycleService {
     Promise.resolve(sending).catch((err: unknown) =>
       this.logger.warn(
         `Added ${person.email} to building ${tenant.id} but the email failed to send` +
-          (newPassword ? '; they can use "forgot password". ' : '. ') +
+          // Not "forgot password": gaterecord's reset writes the local hash,
+          // while this person signs in through the account service (Keycloak).
+          (newPassword ? '; their starting password was NOT delivered. ' : '. ') +
           ((err as Error)?.message ?? ''),
       ),
     );

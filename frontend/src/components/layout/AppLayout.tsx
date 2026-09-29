@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Avatar, Dropdown, Typography, Space, Modal, Spin, Drawer, Button } from 'antd';
+import { Layout, Menu, Avatar, Dropdown, Typography, Space, Modal, Spin, Drawer, Button, Alert } from 'antd';
 import {
   DashboardOutlined,
   GatewayOutlined,
@@ -25,6 +25,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole, User } from '../../types';
 import { socketService } from '../../services/socket.service';
+import { authService } from '../../services/auth.service';
+import { oidcService } from '../../services/oidc.service';
 import { PlansModal } from '../billing/PlansModal';
 import { NotificationBell } from './NotificationBell';
 
@@ -45,6 +47,25 @@ export function AppLayout() {
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const userWithTenant = user as UserWithTenant | null;
+  // Recommended, not forced (design.md §6.2): dismissible for this tab only.
+  const [passwordReminderDismissed, setPasswordReminderDismissed] = useState(
+    () => sessionStorage.getItem('passwordReminderDismissed') === '1',
+  );
+  const showPasswordReminder =
+    user?.mustChangePassword === true &&
+    authService.getProvider() === 'keycloak' &&
+    !passwordReminderDismissed;
+
+  const dismissPasswordReminder = () => {
+    sessionStorage.setItem('passwordReminderDismissed', '1');
+    setPasswordReminderDismissed(true);
+  };
+
+  const changeStartingPassword = () => {
+    oidcService
+      .startLogin({ action: 'UPDATE_PASSWORD', returnTo: location.pathname })
+      .catch(() => navigate('/settings'));
+  };
 
   // Handle window resize for mobile detection
   useEffect(() => {
@@ -324,6 +345,22 @@ export function AppLayout() {
         </Header>
 
         <Content className="m-2 sm:m-4 md:m-6 p-3 sm:p-4 md:p-6 bg-white rounded-lg shadow-sm min-h-[calc(100vh-140px)]">
+          {showPasswordReminder && (
+            <Alert
+              className="mb-4"
+              type="warning"
+              showIcon
+              closable
+              onClose={dismissPasswordReminder}
+              message="You are still using the password from your welcome email"
+              description="Please change it to one only you know."
+              action={
+                <Button size="small" type="primary" onClick={changeStartingPassword}>
+                  Change password
+                </Button>
+              }
+            />
+          )}
           <Outlet />
         </Content>
       </Layout>

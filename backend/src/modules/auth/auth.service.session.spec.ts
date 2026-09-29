@@ -161,6 +161,7 @@ describe('AuthService session user and token claims (AUTH-10)', () => {
         'qrCode',
         'unit',
         'tenant',
+        'mustChangePassword',
       ]);
       expect(body).toMatchObject({
         role: UserRole.BUILDING_ADMIN,

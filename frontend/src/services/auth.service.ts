@@ -24,6 +24,15 @@ export interface ResetPasswordResponse {
   success: boolean;
 }
 
+/**
+ * Who issued the stored tokens: 'local' = gaterecord's own /auth/login,
+ * 'keycloak' = the YAAD account (see oidc.service.ts). Decides how tokens are
+ * refreshed, how logout works and where the password is changed.
+ */
+export type AuthProvider = 'local' | 'keycloak';
+
+const AUTH_PROVIDER_KEY = 'authProvider';
+
 export const authService = {
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
     const response = await api.post<LoginResponse>('/auth/login', credentials);
@@ -48,9 +57,14 @@ export const authService = {
     return response.data;
   },
 
-  saveTokens(tokens: AuthTokens): void {
+  saveTokens(tokens: AuthTokens, provider: AuthProvider = 'local'): void {
     localStorage.setItem('accessToken', tokens.accessToken);
     localStorage.setItem('refreshToken', tokens.refreshToken);
+    localStorage.setItem(AUTH_PROVIDER_KEY, provider);
+  },
+
+  getProvider(): AuthProvider {
+    return localStorage.getItem(AUTH_PROVIDER_KEY) === 'keycloak' ? 'keycloak' : 'local';
   },
 
   getTokens(): AuthTokens | null {
@@ -73,6 +87,7 @@ export const authService = {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
+    localStorage.removeItem(AUTH_PROVIDER_KEY);
   },
 
   // Password Reset Methods

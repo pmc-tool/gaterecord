@@ -25,7 +25,12 @@ import {
   personFieldsReadOnly,
   tenantRequired,
 } from '@common/context/membership-context.errors';
-import { CreateUserDto, UpdateUserDto, UserQueryDto } from './dto/user.dto';
+import {
+  CreateUserDto,
+  UpdateUserDto,
+  UserEmailLookupResponseDto,
+  UserQueryDto,
+} from './dto/user.dto';
 import { AccountIdentityClient } from '../account-identity/account-identity.client';
 import { EmailService } from '../notification/email.service';
 import { ResidentRemovalService } from '../residents/resident-removal.service';
@@ -179,6 +184,21 @@ export class UsersService {
    * building' email, with no new password (existingAccount=true, A4). 409
    * MEMBERSHIP_EXISTS when they already have a role in that building.
    */
+  /**
+   * GET /users/lookup, for the Add User form. Uses the same match as the add
+   * itself (MembershipLifecycleService.findPersonByEmail, removed people
+   * included, since an add restores them), so "exists" here means exactly
+   * "POST /users keeps this person's own name". An email known only to the
+   * account service is not a person yet: the form's name is used for it.
+   */
+  async lookupByEmail(email: string): Promise<UserEmailLookupResponseDto> {
+    const person = await this.membershipLifecycle.findPersonByEmail(email);
+    if (!person) {
+      return { exists: false };
+    }
+    return { exists: true, firstName: person.firstName, lastName: person.lastName };
+  }
+
   async create(createUserDto: CreateUserDto, currentUser: User): Promise<CreatedUserRow> {
     if (createUserDto.role === UserRole.SUPER_ADMIN) {
       return this.createPlatformAdmin(createUserDto, currentUser);
@@ -211,7 +231,6 @@ export class UsersService {
       firstName: createUserDto.firstName,
       lastName: createUserDto.lastName,
       phone: createUserDto.phone,
-      password: createUserDto.password,
       tenantId,
       role: createUserDto.role,
       unit: normalizeUnit(createUserDto.unit),
@@ -598,7 +617,9 @@ export class UsersService {
       first_name: dto.firstName,
       last_name: dto.lastName,
       phone: dto.phone,
-      password: dto.password,
+      // Deliberately NOT the admin default password: a platform admin account
+      // with a shared, known starting password is too valuable a target. The
+      // account service generates a strong one, emailed below.
       sendEmail: false,
     });
     const passwordHash = await bcrypt.hash(randomUUID(), 10);
@@ -635,7 +656,7 @@ export class UsersService {
       ).catch((err: unknown) =>
         this.logger.warn(
           `Platform admin ${person.email} created but the credentials email failed to send. ` +
-            `They can use "forgot password". ${(err as Error)?.message ?? ''}`,
+            `Their starting password was NOT delivered. ${(err as Error)?.message ?? ''}`,
         ),
       );
     }

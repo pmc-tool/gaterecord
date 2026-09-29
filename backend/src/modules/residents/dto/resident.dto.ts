@@ -6,11 +6,16 @@ import {
   IsUUID,
   ValidateIf,
   IsNumber,
-  MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
+/**
+ * What POST /residents accepts. There is no password: a NEW account starts with
+ * the configured default (GATE_DEFAULT_USER_PASSWORD) and should change it; an
+ * existing account keeps its own. A password in the body is stripped by the
+ * global whitelist (forbidNonWhitelisted is off, so older clients still work).
+ */
 export class CreateResidentDto {
   @ApiProperty()
   @IsString()
@@ -20,19 +25,13 @@ export class CreateResidentDto {
   @IsString()
   lastName: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'A new email gets an account with the default starting password, emailed to them; ' +
+      'an email that already has an account keeps its password and is only added here.',
+  })
   @IsEmail()
   email: string;
-
-  @ApiPropertyOptional({
-    description:
-      'Optional. Forwarded to the account service, which enforces a minimum of 8 characters; ' +
-      'omit it and a strong password is generated and emailed to the resident.',
-  })
-  @IsString()
-  @MinLength(8)
-  @IsOptional()
-  password?: string;
 
   @ApiPropertyOptional()
   @IsString()

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { User, AuthTokens, LoginCredentials } from '../types';
 import { authService } from '../services/auth.service';
+import { oidcService } from '../services/oidc.service';
 
 interface AuthStore {
   user: User | null;
@@ -10,6 +11,8 @@ interface AuthStore {
   error: string | null;
 
   login: (credentials: LoginCredentials) => Promise<void>;
+  /** Finish a YAAD-account (Keycloak) sign-in with the tokens from /auth/callback. */
+  loginWithOidc: (tokens: AuthTokens) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   clearError: () => void;
@@ -51,8 +54,37 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
+  loginWithOidc: async (tokens: AuthTokens) => {
+    set({ isLoading: true, error: null });
+    authService.saveTokens(tokens, 'keycloak');
+    try {
+      // The first request with a Keycloak token also creates or links the
+      // person's gate_users row on the backend.
+      const user = await authService.getCurrentUser();
+      authService.saveUser(user);
+      set({ user, tokens, isAuthenticated: true, isLoading: false });
+    } catch (error) {
+      authService.clearAuth();
+      set({
+        user: null,
+        tokens: null,
+        isAuthenticated: false,
+        error: error instanceof Error ? error.message : 'Login failed',
+        isLoading: false,
+      });
+      throw error;
+    }
+  },
+
   logout: async () => {
     const { tokens } = get();
+    if (authService.getProvider() === 'keycloak') {
+      // No gaterecord session to revoke; end the Keycloak one (full redirect).
+      authService.clearAuth();
+      set({ user: null, tokens: null, isAuthenticated: false });
+      oidcService.logout();
+      return;
+    }
     try {
       if (tokens?.refreshToken) {
         await authService.logout(tokens.refreshToken);

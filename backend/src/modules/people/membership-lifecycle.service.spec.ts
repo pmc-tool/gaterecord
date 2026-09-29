@@ -1,4 +1,5 @@
-import { HttpException } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { QueryFailedError } from 'typeorm';
 import {
   BuildingJoinRequest,
@@ -176,6 +177,145 @@ describe('MembershipLifecycleService', () => {
         expect.any(String),
       );
       expect(h.sendNewUserCredentialsEmail).not.toHaveBeenCalled();
+    });
+
+    describe('starting password (GATE_DEFAULT_USER_PASSWORD)', () => {
+      const DEFAULT = 'Default#Start-2026';
+      let warn: jest.SpyInstance;
+
+      beforeEach(() => {
+        warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      });
+
+      afterEach(() => warn.mockRestore());
+
+      /** The same fake database, with the env var set (or not). */
+      const withEnv = (value: string | undefined) => {
+        h = buildLifecycle(m, { GATE_DEFAULT_USER_PASSWORD: value });
+        service = h.service;
+      };
+
+      it('new email: the account is created with the default, flagged and emailed it', async () => {
+        withEnv(DEFAULT);
+        h.provisionUser.mockImplementationOnce(
+          async (input: { email: string; password?: string }) => ({
+            id: randomUUID(),
+            email: input.email,
+            created: true,
+            emailSent: false,
+            password: input.password,
+          }),
+        );
+
+        const result = await service.addPersonToTenant(base());
+
+        expect(h.provisionUser).toHaveBeenCalledWith(
+          expect.objectContaining({ password: DEFAULT, sendEmail: false }),
+        );
+        expect(m.row(User, result.person.id)?.mustChangePassword).toBe(true);
+        expect(h.sendNewUserCredentialsEmail).toHaveBeenCalledWith(
+          'new.person@example.test',
+          'New Person',
+          UserRole.RESIDENT,
+          DEFAULT,
+          'Tower A',
+          'Ada Admin',
+          expect.any(String),
+        );
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      it('a password supplied by the caller is ignored: the default is sent instead', async () => {
+        withEnv(DEFAULT);
+
+        await service.addPersonToTenant({ ...base(), password: 'Admin@12345' } as never);
+
+        const sent = h.provisionUser.mock.calls[0][0] as { password?: string };
+        expect(sent.password).toBe(DEFAULT);
+        expect(JSON.stringify(h.provisionUser.mock.calls)).not.toContain('Admin@12345');
+      });
+
+      it('the account service not echoing the password still emails the default', async () => {
+        withEnv(DEFAULT);
+        h.provisionUser.mockResolvedValueOnce({
+          id: randomUUID(),
+          email: 'new.person@example.test',
+          created: true,
+          emailSent: false,
+        } as never);
+
+        const result = await service.addPersonToTenant(base());
+
+        expect(m.row(User, result.person.id)?.mustChangePassword).toBe(true);
+        expect(h.sendNewUserCredentialsEmail).toHaveBeenCalledWith(
+          'new.person@example.test',
+          'New Person',
+          UserRole.RESIDENT,
+          DEFAULT,
+          'Tower A',
+          'Ada Admin',
+          expect.any(String),
+        );
+      });
+
+      it('existing email (the reported bug): no provisioning and the password is untouched', async () => {
+        withEnv(DEFAULT);
+        const person = fx.person({
+          email: 'new.person@example.test',
+          passwordHash: 'their-own-hash',
+          mustChangePassword: false,
+        });
+        fx.membership(person, towerB, { role: UserRole.RESIDENT });
+        process.env.GATE_MEMBERSHIP_CONTEXT = 'on';
+
+        const result = await service.addPersonToTenant({
+          ...base(),
+          password: 'Admin@12345',
+        } as never);
+
+        expect(result.existingAccount).toBe(true);
+        expect(h.provisionUser).not.toHaveBeenCalled();
+        expect(m.row(User, person.id)).toMatchObject({
+          passwordHash: 'their-own-hash',
+          mustChangePassword: false,
+        });
+        expect(h.sendNewUserCredentialsEmail).not.toHaveBeenCalled();
+        expect(h.sendAddedToBuildingEmail).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['unset', undefined, 'not set'],
+        ['empty', '   ', 'not set'],
+        ['too short for the account service', 'Zq#7x', 'shorter than 8 characters'],
+      ])(
+        '%s: falls back to an account-generated password, with a warning',
+        async (_case, value, why) => {
+          withEnv(value);
+
+          const result = await service.addPersonToTenant(base());
+
+          const sent = h.provisionUser.mock.calls[0][0] as Record<string, unknown>;
+          expect(sent.password).toBeUndefined();
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining(`GATE_DEFAULT_USER_PASSWORD is ${why}`),
+          );
+          // The value itself is never logged.
+          if (value?.trim()) {
+            expect(JSON.stringify(warn.mock.calls)).not.toContain(value);
+          }
+          // The account service's generated password is the one handed out.
+          expect(m.row(User, result.person.id)?.mustChangePassword).toBe(true);
+          expect(h.sendNewUserCredentialsEmail).toHaveBeenCalledWith(
+            'new.person@example.test',
+            'New Person',
+            UserRole.RESIDENT,
+            'Temp#Pass-1234',
+            'Tower A',
+            'Ada Admin',
+            expect.any(String),
+          );
+        },
+      );
     });
 
     it('duplicate: 409 MEMBERSHIP_EXISTS with the role held, nothing provisioned or sent', async () => {

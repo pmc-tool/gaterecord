@@ -14,7 +14,7 @@ import {
   buildLifecycle,
   peopleFixtures,
 } from '../people/people.spec-harness';
-import { UpdateUserDto } from './dto/user.dto';
+import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import { UsersController } from './users.controller';
 import { ADMIN_ASSIGNABLE_ROLES, UsersService } from './users.service';
 import {
@@ -112,6 +112,33 @@ describe('UsersService (memberships)', () => {
     const rd = fx.membership(r, towerD, { role: UserRole.SECURITY });
     return { p, pa, pd, q, qa, r, rd };
   }
+
+  // ------------------------------------------------------------ email lookup
+
+  describe('lookupByEmail (Add User form)', () => {
+    it('an existing person: exists, with their own name and nothing else', async () => {
+      scenario();
+
+      const found = await service.lookupByEmail('  Q@Example.TEST ');
+
+      expect(found).toEqual({ exists: true, firstName: 'Quinn', lastName: expect.any(String) });
+    });
+
+    it('an unknown email: exists false and no name', async () => {
+      scenario();
+
+      await expect(service.lookupByEmail('nobody@example.test')).resolves.toEqual({
+        exists: false,
+      });
+    });
+
+    it('is open to the same roles as POST /users', () => {
+      expect(Reflect.getMetadata(ROLES_KEY, UsersController.prototype.lookupByEmail)).toEqual([
+        UserRole.SUPER_ADMIN,
+        UserRole.BUILDING_ADMIN,
+      ]);
+    });
+  });
 
   // ------------------------------------------------------------------ PPL-6
 
@@ -299,6 +326,29 @@ describe('UsersService (memberships)', () => {
       expect(m.row(User, created.id)?.qrCode).toMatch(/^GR-/);
     });
 
+    it('an admin cannot choose the password: stripped from the body, ignored by the service', async () => {
+      const pipe = new ValidationPipe({ whitelist: true, transform: true });
+      const dto = (await pipe.transform(
+        {
+          email: 'new@example.test',
+          firstName: 'New',
+          lastName: 'Guard',
+          role: UserRole.SECURITY,
+          password: 'Admin@12345',
+        },
+        { type: 'body', metatype: CreateUserDto },
+      )) as CreateUserDto & Record<string, unknown>;
+      expect(dto).not.toHaveProperty('password');
+
+      const c = fx.person({ email: 'c@example.test', tenantId: towerC.id });
+      const cc = fx.membership(c, towerC, { role: UserRole.BUILDING_ADMIN });
+      // Even if one reached the service, it is never forwarded.
+      await service.create({ ...dto, password: 'Admin@12345' } as CreateUserDto, actingIn(m, cc));
+
+      expect(h.provisionUser).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(h.provisionUser.mock.calls)).not.toContain('Admin@12345');
+    });
+
     it('a building admin cannot create a building admin, staff, or into another building', async () => {
       const c = fx.person({ email: 'c@example.test', tenantId: towerC.id });
       const cc = fx.membership(c, towerC, { role: UserRole.BUILDING_ADMIN });
@@ -348,6 +398,8 @@ describe('UsersService (memberships)', () => {
       expect(m.row(User, created.id)?.role).toBe(UserRole.SUPER_ADMIN);
       expect(liveMemberships(created.id)).toHaveLength(0);
       expect(sendNewUserCredentialsEmail).toHaveBeenCalled();
+      // A platform admin never gets the shared default: the account service generates one.
+      expect(h.provisionUser.mock.calls[0][0]).not.toHaveProperty('password');
 
       // An existing person keeps their buildings and gains the platform role.
       const p = fx.person({ email: 'p@example.test', tenantId: towerA.id });

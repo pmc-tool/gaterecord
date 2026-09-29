@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { oidcService } from './oidc.service';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://dev-api.gaterecord.com/api/v1';
 
@@ -43,11 +44,11 @@ api.interceptors.response.use(
           throw new Error('No refresh token');
         }
 
-        const response = await axios.post(`${API_URL}/auth/refresh`, {
-          refreshToken,
-        });
-
-        const { accessToken, refreshToken: newRefreshToken } = response.data;
+        // YAAD-account tokens are refreshed by Keycloak, not by gaterecord.
+        const { accessToken, refreshToken: newRefreshToken } =
+          localStorage.getItem('authProvider') === 'keycloak'
+            ? await oidcService.refresh(refreshToken)
+            : (await axios.post(`${API_URL}/auth/refresh`, { refreshToken })).data;
 
         localStorage.setItem('accessToken', accessToken);
         localStorage.setItem('refreshToken', newRefreshToken);
@@ -58,6 +59,8 @@ api.interceptors.response.use(
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
         localStorage.removeItem('user');
+        localStorage.removeItem('authProvider');
+        localStorage.removeItem('idToken');
         window.location.href = '/login';
         return Promise.reject(refreshError);
       }

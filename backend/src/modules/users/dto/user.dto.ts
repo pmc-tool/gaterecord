@@ -1,21 +1,23 @@
-import { IsEmail, IsString, IsEnum, IsOptional, MinLength, IsUUID, IsIn } from 'class-validator';
+import { IsEmail, IsString, IsEnum, IsOptional, IsUUID, IsIn } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole, UserStatus } from '@database/entities/user.entity';
 
+/**
+ * What POST /users accepts. There is no password: a NEW account starts with
+ * the configured default (GATE_DEFAULT_USER_PASSWORD) and should change it; an
+ * existing account keeps its own. A password in the body is stripped by the
+ * global whitelist (forbidNonWhitelisted is off, so older clients still work).
+ */
 export class CreateUserDto {
-  @ApiProperty({ example: 'user@example.com' })
+  @ApiProperty({
+    example: 'user@example.com',
+    description:
+      'A new email gets an account with the default starting password, emailed to them ' +
+      '(a new super_admin gets a generated one instead); an email that already has an ' +
+      'account keeps its password and is only added here.',
+  })
   @IsEmail()
   email: string;
-
-  @ApiPropertyOptional({
-    example: 'Password123!',
-    description:
-      'Used only when the email has no account yet. If not provided, a temporary password will be generated and emailed to user. An existing account keeps its password.',
-  })
-  @IsString()
-  @MinLength(8)
-  @IsOptional()
-  password?: string;
 
   @ApiProperty({ example: 'John' })
   @IsString()
@@ -118,6 +120,29 @@ export class UpdateUserDto {
  * never needs it (the request acts in their building); a platform admin passes
  * tenantId when the person belongs to several buildings.
  */
+/** GET /users/lookup: is this email already a person, before adding them? */
+export class UserEmailLookupQueryDto {
+  @ApiProperty({ example: 'user@example.com' })
+  @IsEmail()
+  email: string;
+}
+
+/**
+ * What the Add User form needs and nothing more: whether POST /users will treat
+ * the email as an existing person (who keeps their own name, so the typed one
+ * is ignored), and that name to show. No id, role, building or contact detail.
+ */
+export class UserEmailLookupResponseDto {
+  @ApiProperty()
+  exists: boolean;
+
+  @ApiPropertyOptional()
+  firstName?: string;
+
+  @ApiPropertyOptional()
+  lastName?: string;
+}
+
 export class UserTargetQueryDto {
   @ApiPropertyOptional({
     description:

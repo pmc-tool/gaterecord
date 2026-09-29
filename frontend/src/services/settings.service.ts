@@ -31,6 +31,11 @@ export const settingsService = {
     return response.data;
   },
 
+  /** After Keycloak reports the password changed: clears the temporary-password reminder. */
+  async acknowledgePasswordUpdated(): Promise<void> {
+    await api.post('/settings/password-updated');
+  },
+
   // Notifications
   async getNotificationSettings(): Promise<NotificationSettings> {
     const response = await api.get<NotificationSettings>('/settings/notifications');
