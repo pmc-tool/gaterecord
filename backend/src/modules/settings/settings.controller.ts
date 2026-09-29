@@ -47,6 +47,16 @@ export class SettingsController {
     return this.settingsService.changePassword(user.id, changePasswordDto);
   }
 
+  @Post('password-updated')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Clear the starting-password reminder after the password was changed in the YAAD account',
+  })
+  @ApiResponse({ status: 200, description: 'Reminder cleared' })
+  async acknowledgePasswordUpdated(@CurrentUser() user: User) {
+    return this.settingsService.acknowledgePasswordUpdated(user.id);
+  }
+
   // ==================== Notifications ====================
 
   @Get('notifications')

@@ -180,7 +180,6 @@ export class ResidentsService {
       firstName: createDto.firstName,
       lastName: createDto.lastName,
       phone: createDto.phone,
-      password: createDto.password,
       tenantId,
       role: UserRole.RESIDENT,
       unit: normalizeUnit(createDto.unit),

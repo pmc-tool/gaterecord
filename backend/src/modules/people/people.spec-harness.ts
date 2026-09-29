@@ -315,9 +315,13 @@ export interface LifecycleHarness {
 /**
  * A MembershipLifecycleService over the fake manager and the real
  * MembershipsService. The account service answers "created, with a password"
- * unless a spec overrides provisionUser.
+ * unless a spec overrides provisionUser. `env` is what ConfigService reads
+ * (GATE_DEFAULT_USER_PASSWORD, ...); unset keys fall back to the default.
  */
-export function buildLifecycle(m = new FakePeopleManager()): LifecycleHarness {
+export function buildLifecycle(
+  m = new FakePeopleManager(),
+  env: Record<string, string | undefined> = {},
+): LifecycleHarness {
   const dataSource = {
     manager: m,
     transaction: <T>(work: (em: EntityManager) => Promise<T>) => m.transaction(work),
@@ -334,7 +338,7 @@ export function buildLifecycle(m = new FakePeopleManager()): LifecycleHarness {
   const sendNewUserCredentialsEmail = jest.fn(async () => true);
   const sendAddedToBuildingEmail = jest.fn(async () => true);
   const config = {
-    get: (_key: string, fallback?: unknown) => fallback,
+    get: (key: string, fallback?: unknown) => env[key] ?? fallback,
   } as unknown as ConfigService;
 
   const service = new MembershipLifecycleService(

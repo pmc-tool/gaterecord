@@ -38,7 +38,11 @@ export class SettingsService {
     // Verify current password
     const isPasswordValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Current password is incorrect');
+      throw new UnauthorizedException(
+        user.userId
+          ? 'Current password is incorrect. If you sign in with your YAAD account, change the password there.'
+          : 'Current password is incorrect',
+      );
     }
 
     // Check if new passwords match
@@ -60,6 +64,17 @@ export class SettingsService {
     });
 
     return { message: 'Password changed successfully' };
+  }
+
+  /**
+   * The web calls this when Keycloak reports the password changed (its
+   * UPDATE_PASSWORD action returned kc_action_status=success). The password
+   * itself lives in Keycloak; this only clears the starting-password reminder,
+   * a UX flag (specs/002-account-identity-integration/design.md §6.2).
+   */
+  async acknowledgePasswordUpdated(userId: string): Promise<{ message: string }> {
+    await this.userRepository.update(userId, { mustChangePassword: false });
+    return { message: 'Password reminder cleared' };
   }
 
   // ==================== Notification Settings ====================

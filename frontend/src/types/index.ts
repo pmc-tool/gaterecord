@@ -30,6 +30,8 @@ export interface User {
   unit?: string;
   profileImageUrl?: string;
   qrCode?: string;
+  /** Still on the starting password a building admin's add emailed them. */
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
 }

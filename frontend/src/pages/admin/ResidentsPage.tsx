@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
+  Alert,
   Card,
   Table,
   Button,
@@ -185,8 +186,12 @@ export default function ResidentsPage() {
         await api.patch(`/residents/${editingResident.id}`, values);
         message.success('Resident updated successfully');
       } else {
+        // No password is sent: new accounts get the platform default password
+        // by email; existing accounts keep their own password.
         await api.post('/residents', values);
-        message.success('Resident created successfully');
+        message.success(
+          'Resident added. New accounts receive a default password by email and should change it after first sign-in; existing accounts keep their current password.',
+        );
       }
       setModalVisible(false);
       fetchResidents();
@@ -508,9 +513,13 @@ export default function ResidentsPage() {
           </Form.Item>
 
           {!editingResident && (
-            <Form.Item name="password" label="Password (optional, default: Resident123!)">
-              <Input.Password placeholder="Leave blank for default password" />
-            </Form.Item>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="Passwords are not set here"
+              description="If this email has no account yet, one is created with the default password, which is sent by email and should be changed after first sign-in. If the person already has an account (for example in another building), they keep their current password."
+            />
           )}
 
           <Form.Item name="phone" label="Phone">

@@ -1,4 +1,5 @@
-import { HttpException } from '@nestjs/common';
+import { HttpException, ValidationPipe } from '@nestjs/common';
+import { CreateResidentDto } from './dto/resident.dto';
 import { Membership } from '@database/entities/membership.entity';
 import { RfidCard } from '@database/entities/rfid-card.entity';
 import { SubscriptionPlan } from '@database/entities/subscription-plan.entity';
@@ -226,6 +227,58 @@ describe('ResidentsService (memberships)', () => {
 
       expect(created).toMatchObject({ existingAccount: false, status: UserStatus.INACTIVE });
       expect(m.row(User, created.id)?.qrCode).toMatch(/^GR-/);
+    });
+
+    it('an admin cannot choose the password: stripped from the body, ignored by the service', async () => {
+      const pipe = new ValidationPipe({ whitelist: true, transform: true });
+      const dto = (await pipe.transform(
+        {
+          email: 'new@example.test',
+          firstName: 'N',
+          lastName: 'R',
+          unit: '1A',
+          password: 'Admin@12345',
+        },
+        { type: 'body', metatype: CreateResidentDto },
+      )) as CreateResidentDto & Record<string, unknown>;
+      expect(dto).not.toHaveProperty('password');
+
+      const adminB = fx.person({ email: 'b@example.test' });
+      const bb = fx.membership(adminB, towerB, { role: UserRole.BUILDING_ADMIN });
+      await service.create(
+        { ...dto, password: 'Admin@12345' } as CreateResidentDto,
+        actingIn(m, bb),
+      );
+
+      expect(h.provisionUser).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(h.provisionUser.mock.calls)).not.toContain('Admin@12345');
+    });
+
+    it('adding a resident of A to B never provisions or touches their password', async () => {
+      // The reported bug: B's admin could type a new password that was then
+      // silently ignored. Now there is none to type, and the account is untouched.
+      const r = fx.person({
+        email: 'r@example.test',
+        passwordHash: 'their-own-hash',
+        mustChangePassword: false,
+      });
+      fx.membership(r, towerA, { role: UserRole.RESIDENT, unit: '1A' });
+      const adminB = fx.person({ email: 'b@example.test' });
+      const bb = fx.membership(adminB, towerB, { role: UserRole.BUILDING_ADMIN });
+
+      const created = await service.create(
+        { email: 'R@example.test', firstName: 'R', lastName: 'R', unit: '2B' },
+        actingIn(m, bb),
+      );
+
+      expect(created).toMatchObject({ id: r.id, existingAccount: true, tenantId: towerB.id });
+      expect(h.provisionUser).not.toHaveBeenCalled();
+      expect(h.sendNewUserCredentialsEmail).not.toHaveBeenCalled();
+      expect(h.sendAddedToBuildingEmail).toHaveBeenCalledTimes(1);
+      expect(m.row(User, r.id)).toMatchObject({
+        passwordHash: 'their-own-hash',
+        mustChangePassword: false,
+      });
     });
 
     it('a platform admin must name the building', async () => {

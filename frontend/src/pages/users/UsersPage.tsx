@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
+  Alert,
   Card,
   Table,
   Button,
@@ -111,10 +112,7 @@ export default function UsersPage() {
 
   const handleEdit = (user: User) => {
     setEditingUser(user);
-    form.setFieldsValue({
-      ...user,
-      password: undefined,
-    });
+    form.setFieldsValue(user);
     setModalVisible(true);
   };
 
@@ -128,13 +126,11 @@ export default function UsersPage() {
     }
   };
 
-  const handleSubmit = async (values: Partial<User> & { password?: string }) => {
+  const handleSubmit = async (values: Partial<User>) => {
     try {
-      // Clean up empty password - don't send if empty (backend will generate temporary)
-      const payload = { ...values };
-      if (!payload.password || payload.password.trim() === '') {
-        delete payload.password;
-      }
+      // Admins never set or reset passwords. New accounts get the platform
+      // default password by email; existing accounts keep their own password.
+      const payload: Partial<User> = { ...values };
 
       // For building admins, add their tenantId
       if (!isSuperAdmin && currentUser?.tenantId) {
@@ -146,9 +142,9 @@ export default function UsersPage() {
         message.success('User updated successfully');
       } else {
         await api.post('/users', payload);
-        message.success(payload.password 
-          ? 'User created successfully. Welcome email sent.' 
-          : 'User created successfully. Temporary password sent via email.');
+        message.success(
+          'User added. New accounts receive a default password by email and should change it after first sign-in; existing accounts keep their current password.',
+        );
       }
       setModalVisible(false);
       fetchUsers();
@@ -383,16 +379,15 @@ export default function UsersPage() {
             <Input placeholder="email@example.com" />
           </Form.Item>
 
-          <Form.Item
-            name="password"
-            label={editingUser ? 'New Password (leave blank to keep current)' : 'Password (optional)'}
-            rules={[
-              { min: 8, message: 'Password must be at least 8 characters' },
-            ]}
-            extra={!editingUser ? 'Leave empty to auto-generate and email a temporary password to user' : undefined}
-          >
-            <Input.Password placeholder={editingUser ? 'Leave blank to keep current' : 'Enter password or leave empty for auto-generated'} />
-          </Form.Item>
+          {!editingUser && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="Passwords are not set here"
+              description="If this email has no account yet, one is created with the default password, which is sent by email and should be changed after first sign-in. If the person already has an account (for example in another building), they keep their current password."
+            />
+          )}
 
           <Form.Item
             name="role"

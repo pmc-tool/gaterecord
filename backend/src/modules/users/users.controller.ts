@@ -30,6 +30,8 @@ import {
   UpdateProfileDto,
   UserQueryDto,
   UserTargetQueryDto,
+  UserEmailLookupQueryDto,
+  UserEmailLookupResponseDto,
 } from './dto/user.dto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -131,6 +133,17 @@ export class UsersController {
   @ApiResponse({ status: 201, description: 'User created', type: UserResponseDto })
   create(@Body() createUserDto: CreateUserDto, @CurrentUser() currentUser: User) {
     return this.usersService.create(createUserDto, currentUser);
+  }
+
+  // Declared before GET :id, which would otherwise capture 'lookup'.
+  @Get('lookup')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BUILDING_ADMIN)
+  @ApiOperation({
+    summary: 'Before adding: does this email already belong to a person, and under which name',
+  })
+  @ApiResponse({ status: 200, type: UserEmailLookupResponseDto })
+  lookupByEmail(@Query() query: UserEmailLookupQueryDto): Promise<UserEmailLookupResponseDto> {
+    return this.usersService.lookupByEmail(query.email);
   }
 
   @Get()
